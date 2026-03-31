@@ -1,0 +1,28 @@
+At their core, VS Code and Cursor look and feel exactly the same because Cursor is actually a "fork" of VS Code. If you install Cursor, all your VS Code extensions, themes, and keybindings will port over instantly.
+
+The massive difference—and the reason top-tier engineers and quantitative developers have migrated to Cursor—is how the AI is integrated. VS Code treats AI as an add-on; Cursor is built entirely around the AI.
+
+Here is the technical breakdown of why you need Cursor for building your high-frequency trading (HFT) architecture.
+
+1. Codebase-Wide Context (The Game Changer)
+VS Code (GitHub Copilot): Copilot generally only understands the single file you currently have open, plus a few adjacent tabs. If you ask it a complex question, it lacks the big picture.
+
+Cursor: Cursor indexes your entire project directory. You can press Cmd/Ctrl + Enter and ask, "Why is my Rust WebSocket connection failing to communicate with my Solidity smart contract?" Cursor will read the Rust file, the Solidity file, your .env configuration, and your JSON ABIs simultaneously to find the mismatch.
+
+2. Multi-File Editing (Cursor Composer)
+VS Code: You have to ask the AI in a chat sidebar for code, copy it, and manually paste it into the correct file.
+
+Cursor: With the "Composer" feature, you can command the AI to build a new feature (e.g., "Implement the 3-second Polymarket delay failsafe"). Cursor will automatically open your Rust execution file, your risk management file, and your constants file, writing and modifying the code across all three simultaneously. You just hit "Accept."
+
+3. Model Agnosticism (Choosing the Best Brain)
+VS Code: You are locked into Microsoft and OpenAI's ecosystem (GPT-4 / Copilot).
+
+Cursor: You have a dropdown menu where you can instantly switch between the best AI models in the world depending on the task. For your project, this is critical because Claude 3.5 Sonnet is significantly better at writing Rust and Solidity than GPT-4. You can use Claude for the heavy engine logic and switch to a different model for basic scripting.
+
+4. Inline Execution and Terminal Awareness
+VS Code: If your compiler throws a massive error in the terminal, you have to copy the error, open the chat, paste it, and ask for a fix.
+
+Cursor: The AI natively watches your terminal. If your Rust compiler panics or your Erigon node fails to boot, you simply click the "Debug with AI" button directly in the terminal. Cursor reads the error, finds the broken code in your files, and generates the exact fix inline.
+
+The Verdict for Your Project
+When building an HFT ecosystem, you are dealing with multiple languages (Rust for execution, Solidity for smart contracts, Bash for server infrastructure) that must all communicate flawlessly. VS Code will force you to manually connect the dots between these different environments. Cursor acts as a senior technical lead who already understands how your entire system is wired together.

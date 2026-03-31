@@ -1,0 +1,20 @@
+[package]
+name        = "tee-vault"
+version     = "0.1.0"
+edition     = "2021"
+description = "TEE-backed private key vault for Blink Engine — signs EIP-712 digests without exposing raw key material"
+
+[dependencies]
+anyhow   = { workspace = true }
+tracing  = { workspace = true }
+k256     = { workspace = true }
+sha3     = { workspace = true }
+zeroize  = { version = "1", features = ["derive"] }
+chrono   = { workspace = true }
+tokio    = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["memoryapi", "errhandlingapi"] }
+
+[lints.clippy]
+mem_forget = "deny"

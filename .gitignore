@@ -3,3 +3,22 @@ blink-engine/target-*/
 blink-engine/.env
 *.log
 node_modules
+
+# Secrets & credentials
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+.env.local
+.env.production
+.env.staging
+.env.*.local
+
+# Editor & OS
+.vscode/settings.json
+.idea/
+**/.DS_Store
+Thumbs.db
+*.swp
+*.swo

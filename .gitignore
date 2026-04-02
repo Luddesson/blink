@@ -1,4 +1,5 @@
 blink-engine/target/
+blink-engine/target-*/
 blink-engine/.env
 *.log
 node_modules

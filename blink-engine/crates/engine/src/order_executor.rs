@@ -57,6 +57,7 @@ pub struct OrderStatus {
 ///
 /// When `dry_run` is `true` submission calls are logged but no network
 /// request is made.  The engine always sets `dry_run = !live_trading`.
+#[derive(Clone)]
 pub struct OrderExecutor {
     client:         Client,
     base_url:       String,
@@ -271,6 +272,151 @@ impl OrderExecutor {
     }
 
     // ─── Order status ────────────────────────────────────────────────────────
+
+    /// Sends `POST /heartbeat` to keep the L2 session alive.
+    ///
+    /// Polymarket cancels open orders when the session heartbeat lapses.
+    /// Call this every 15 seconds in live mode (see [`crate::heartbeat`]).
+    pub async fn send_heartbeat(&self) -> Result<()> {
+        if self.dry_run {
+            info!("DRY-RUN: would POST /heartbeat");
+            return Ok(());
+        }
+
+        let path = "/heartbeat";
+        let url  = format!("{}{}", self.base_url, path);
+        let body = "{}";
+
+        let headers = build_auth_headers(
+            &self.api_key,
+            &self.api_secret,
+            &self.passphrase,
+            &self.maker_address,
+            "POST",
+            path,
+            body,
+        )?;
+
+        let mut req = self
+            .client
+            .post(&url)
+            .body(body)
+            .header("Content-Type", "application/json");
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+
+        let resp   = req.send().await.context("POST /heartbeat network error")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("POST /heartbeat returned {status}: {text}");
+        }
+        Ok(())
+    }
+
+    /// Cancels **all** open orders for this account.  `DELETE /orders`
+    ///
+    /// Used by the emergency-stop path to immediately clear all exchange
+    /// exposure before the operator takes over.
+    pub async fn cancel_all_orders(&self) -> Result<()> {
+        if self.dry_run {
+            info!("DRY-RUN: would DELETE /orders (cancel all open orders)");
+            return Ok(());
+        }
+
+        let path = "/orders";
+        let url  = format!("{}{}", self.base_url, path);
+
+        let headers = build_auth_headers(
+            &self.api_key,
+            &self.api_secret,
+            &self.passphrase,
+            &self.maker_address,
+            "DELETE",
+            path,
+            "",
+        )?;
+
+        let mut req = self.client.delete(&url);
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+
+        let resp   = req.send().await.context("DELETE /orders network error")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("DELETE /orders returned {status}: {text}");
+        }
+
+        info!("✅ All open orders cancelled via DELETE /orders");
+        Ok(())
+    }
+
+    /// Validates that L2 HMAC credentials are accepted by the exchange.
+    ///
+    /// Hits `GET /auth/ok` — a read-only Polymarket endpoint that returns
+    /// `{ "successful": true }` when auth headers are valid.  Should be called
+    /// at startup in live mode before any order is submitted.
+    ///
+    /// Returns `Ok(())` on success, `Err(…)` with a human-readable explanation
+    /// on auth failure so operators know exactly what to fix before going live.
+    pub async fn validate_credentials(&self) -> Result<()> {
+        if self.dry_run {
+            info!("DRY-RUN: skipping credential validation (no live keys)");
+            return Ok(());
+        }
+
+        let path  = "/auth/ok";
+        let url   = format!("{}{}", self.base_url, path);
+        let headers = build_auth_headers(
+            &self.api_key,
+            &self.api_secret,
+            &self.passphrase,
+            &self.maker_address,
+            "GET",
+            path,
+            "",
+        )?;
+
+        let mut req = self.client.get(&url);
+        for (k, v) in &headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+
+        let resp = req
+            .send()
+            .await
+            .context("GET /auth/ok network error — check connectivity")?;
+
+        let status = resp.status();
+        let body   = resp.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            anyhow::bail!(
+                "Credential validation failed (HTTP {status}): {body}\n\
+                 Check POLY_API_KEY, POLY_API_SECRET, POLY_API_PASSPHRASE, and FUNDER_ADDRESS."
+            );
+        }
+
+        // Parse the response — Polymarket returns `{"successful": true}`.
+        #[derive(serde::Deserialize)]
+        struct AuthOkResponse { successful: bool }
+
+        let parsed: AuthOkResponse =
+            serde_json::from_str(&body).context("GET /auth/ok response parse failed")?;
+
+        if !parsed.successful {
+            anyhow::bail!(
+                "Exchange reported credentials invalid despite HTTP 200.\n\
+                 Raw response: {body}"
+            );
+        }
+
+        info!("✅ L2 HMAC credentials validated — exchange confirmed auth OK");
+        Ok(())
+    }
 
     /// Fetches the current status of an order.  `GET /order/{order_id}`
     #[instrument(skip(self), fields(order_id))]

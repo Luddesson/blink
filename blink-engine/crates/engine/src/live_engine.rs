@@ -15,13 +15,14 @@ use crate::order_executor::OrderExecutor;
 use crate::order_signer::{sign_order_with_vault_policy, OrderParams, OrderSigningPolicy};
 use crate::paper_portfolio::{DRIFT_THRESHOLD, PaperPortfolio, STARTING_BALANCE_USDC};
 use crate::risk_manager::{RiskConfig, RiskManager};
+use crate::truth_reconciler::{PendingOrder, process_order_status, ReconciliationOutcome};
 use crate::types::{OrderSide, RN1Signal, TimeInForce};
 
 pub struct LiveEngine {
     pub portfolio: Arc<Mutex<PaperPortfolio>>,
     book_store: Arc<OrderBookStore>,
     activity: Option<ActivityLog>,
-    executor: OrderExecutor,
+    pub executor: OrderExecutor,
     vault: Option<Arc<tee_vault::VaultHandle>>,
     funder_addr: String,
     pub risk: Arc<std::sync::Mutex<RiskManager>>,
@@ -30,17 +31,46 @@ pub struct LiveEngine {
     accounted_closed_trades: Mutex<usize>,
     signing_policy: OrderSigningPolicy,
     nonce_counter: AtomicU64,
-    pending_orders: Mutex<HashMap<String, PendingOrderInfo>>,
+    /// Live orders submitted to the exchange that have not yet been reconciled.
+    /// Fill recording is deferred until the reconciliation worker confirms the
+    /// actual fill amounts via `GET /order/{id}`.
+    pending_orders: Mutex<HashMap<String, PendingOrder>>,
     reconcile_interval: Duration,
-    failsafe_metrics: std::sync::Mutex<FailsafeMetrics>,
+    pub failsafe_metrics: std::sync::Mutex<FailsafeMetrics>,
     canary_policy: CanaryPolicy,
     canary_state: std::sync::Mutex<CanaryState>,
 }
 
-#[derive(Debug, Clone)]
-struct PendingOrderInfo {
-    token_id: String,
-    side: OrderSide,
+/// Point-in-time snapshot of live SLO metrics for dashboards and alerting.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FailsafeMetricsSnapshot {
+    pub trigger_count: u64,
+    pub check_count: u64,
+    pub max_observed_drift_bps: u64,
+    /// Total exchange-confirmed fills recorded by the reconciliation worker.
+    pub confirmed_fills: u64,
+    /// Orders that returned no fill (rejected / cancelled / expired).
+    pub no_fills: u64,
+    /// Orders suspected stale (pending > MAX_PENDING_AGE_SECS).
+    pub stale_orders: u64,
+    /// Fill confirmation rate: confirmed / (confirmed + no_fills) × 100.
+    /// `None` when no orders have been resolved yet.
+    pub confirmation_rate_pct: Option<f64>,
+    /// Whether the heartbeat was alive at snapshot time.
+    pub heartbeat_ok_count: u64,
+    pub heartbeat_fail_count: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct FailsafeMetrics {
+    pub trigger_count: u64,
+    pub check_count: u64,
+    pub max_observed_drift_bps: u64,
+    pub confirmed_fills: u64,
+    pub no_fills: u64,
+    pub stale_orders: u64,
+    pub heartbeat_ok_count: u64,
+    pub heartbeat_fail_count: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,20 +79,6 @@ enum SignalIntent {
     AddExposure,
     HedgeOrFlatten,
     Ambiguous,
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FailsafeMetricsSnapshot {
-    pub trigger_count: u64,
-    pub check_count: u64,
-    pub max_observed_drift_bps: u64,
-}
-
-#[derive(Debug, Default)]
-struct FailsafeMetrics {
-    trigger_count: u64,
-    check_count: u64,
-    max_observed_drift_bps: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +193,16 @@ impl LiveEngine {
                 self.run_reconciliation_pass().await;
             }
         });
+    }
+
+    /// Validates L2 HMAC credentials against the Polymarket exchange before
+    /// any live order is attempted.
+    ///
+    /// **Must be called and awaited before starting live trading.**
+    /// Returns `Err` with a clear message if credentials are rejected, so the
+    /// operator can fix the issue before capital is at risk.
+    pub async fn preflight_check(&self) -> anyhow::Result<()> {
+        self.executor.validate_credentials().await
     }
 
     pub fn risk_status(&self) -> String {
@@ -376,30 +402,57 @@ impl LiveEngine {
 
         self.record_canary_accept();
 
-        // 6. Record virtual fill only when order path was accepted.
-        {
-            let mut p = self.portfolio.lock().await;
-            p.open_position(
-                signal.token_id.clone(),
-                signal.side,
-                entry_price,
-                size_usdc,
-                signal.order_id.clone(),
-            );
-        }
-
+        // 6. Fill accounting — exchange-first (SSOT) principle.
+        //
+        // For live orders with a real exchange_order_id: the fill is NOT
+        // recorded locally yet.  Instead, the order is queued in
+        // `pending_orders` and the reconciliation worker will call
+        // `process_order_status()` to confirm the actual `size_matched` from
+        // the exchange before updating portfolio and risk manager.
+        //
+        // For dry-run orders (no exchange_order_id): record the fill
+        // immediately because there is no exchange to confirm against.
         if let Some(order_id) = exchange_order_id {
             self.pending_orders.lock().await.insert(
-                order_id,
-                PendingOrderInfo {
-                    token_id: signal.token_id.clone(),
-                    side: signal.side,
-                },
+                order_id.clone(),
+                PendingOrder::new(
+                    order_id,
+                    signal.token_id.clone(),
+                    signal.side,
+                    size_usdc,
+                    entry_price,
+                ),
             );
+            info!(
+                token_id      = %signal.token_id,
+                expected_usdc = size_usdc,
+                "🕐 Fill deferred — awaiting exchange confirmation via reconciliation"
+            );
+            if let Some(ref log) = self.activity {
+                log_push(
+                    log,
+                    EntryKind::Fill,
+                    format!(
+                        "PENDING CONFIRM {} @{:.3} ${:.2}",
+                        signal.side, entry_price, size_usdc
+                    ),
+                );
+            }
+        } else {
+            // DRY-RUN / paper mode: no exchange_order_id means no real order
+            // was submitted, so record fill immediately (simulation only).
+            {
+                let mut p = self.portfolio.lock().await;
+                p.open_position(
+                    signal.token_id.clone(),
+                    signal.side,
+                    entry_price,
+                    size_usdc,
+                    signal.order_id.clone(),
+                );
+            }
+            self.risk.lock().unwrap().record_fill(size_usdc);
         }
-
-        // Update risk manager
-        self.risk.lock().unwrap().record_fill(size_usdc);
     }
 
     fn check_canary_gate(&self, signal: &RN1Signal, size_usdc: f64) -> Result<(), String> {
@@ -509,37 +562,146 @@ impl LiveEngine {
     async fn run_reconciliation_pass(&self) {
         self.sync_risk_closes_from_portfolio().await;
 
-        let pending_ids: Vec<String> = self.pending_orders.lock().await.keys().cloned().collect();
-        let mut resolved = 0usize;
+        let pending_ids: Vec<String> =
+            self.pending_orders.lock().await.keys().cloned().collect();
+
+        let mut resolved       = 0usize;
+        let mut fills_recorded = 0usize;
+
         for order_id in pending_ids {
+            // Fetch latest status from exchange.
             let status = match self.executor.get_order_status(&order_id).await {
-                Ok(s) => s,
+                Ok(s)  => s,
                 Err(e) => {
                     warn!(order_id = %order_id, error = %e, "Reconciliation status fetch failed");
                     continue;
                 }
             };
-            let state = status.status.to_ascii_lowercase();
-            let terminal = matches!(
-                state.as_str(),
-                "matched" | "filled" | "cancelled" | "canceled" | "rejected" | "expired"
-            );
-            if terminal {
-                if let Some(meta) = self.pending_orders.lock().await.remove(&order_id) {
-                    resolved += 1;
-                    info!(
+
+            // Run the SSOT reconciler to determine the outcome.
+            let outcome = {
+                let mut map = self.pending_orders.lock().await;
+                match map.get_mut(&order_id) {
+                    Some(pending) => process_order_status(pending, &status),
+                    None          => continue, // removed by concurrent path
+                }
+            };
+
+            match outcome {
+                // ── Exchange confirmed fill ────────────────────────────────
+                ReconciliationOutcome::Fill {
+                    token_id,
+                    side,
+                    actual_size_usdc,
+                    actual_size_shares: _,
+                    submitted_price,
+                    partial_fill,
+                    fill_ratio,
+                } => {
+                    // Record fill using exchange-confirmed actual amounts —
+                    // NOT the expected amounts from submission time.
+                    {
+                        let mut p = self.portfolio.lock().await;
+                        p.open_position(
+                            token_id.clone(),
+                            side,
+                            submitted_price,
+                            actual_size_usdc,
+                            order_id.clone(),
+                        );
+                    }
+                    self.risk.lock().unwrap().record_fill(actual_size_usdc);
+                    fills_recorded += 1;
+                    resolved       += 1;
+                    self.failsafe_metrics.lock().unwrap().confirmed_fills += 1;
+
+                    if partial_fill {
+                        warn!(
+                            order_id   = %order_id,
+                            fill_ratio = format!("{:.1}%", fill_ratio * 100.0),
+                            actual_usdc = actual_size_usdc,
+                            "⚠️  Partial fill recorded from exchange confirmation"
+                        );
+                        if let Some(ref log) = self.activity {
+                            log_push(
+                                log,
+                                EntryKind::Warn,
+                                format!(
+                                    "PARTIAL FILL {side} @{submitted_price:.3} ${actual_size_usdc:.2} ({:.0}%)",
+                                    fill_ratio * 100.0
+                                ),
+                            );
+                        }
+                    } else {
+                        info!(
+                            order_id    = %order_id,
+                            actual_usdc = actual_size_usdc,
+                            "✅ Fill confirmed and recorded from exchange"
+                        );
+                        if let Some(ref log) = self.activity {
+                            log_push(
+                                log,
+                                EntryKind::Fill,
+                                format!(
+                                    "CONFIRMED FILL {side} @{submitted_price:.3} ${actual_size_usdc:.2}"
+                                ),
+                            );
+                        }
+                    }
+                    self.pending_orders.lock().await.remove(&order_id);
+                }
+
+                // ── Exchange did not fill ──────────────────────────────────
+                ReconciliationOutcome::NoFill { token_id, reason } => {
+                    // The order was not filled — local state must NOT be
+                    // updated.  No position, no risk charge.
+                    warn!(
                         order_id = %order_id,
-                        token_id = %meta.token_id,
-                        side = %meta.side,
-                        status = %state,
-                        "Reconciliation resolved live order"
+                        token_id = %token_id,
+                        reason   = %reason,
+                        "Order not filled by exchange — no local state recorded"
                     );
+                    if let Some(ref log) = self.activity {
+                        log_push(
+                            log,
+                            EntryKind::Warn,
+                            format!("NO FILL {token_id}: {reason}"),
+                        );
+                    }
+                    self.bump_reject_streak();
+                    resolved += 1;
+                    self.failsafe_metrics.lock().unwrap().no_fills += 1;
+                    self.pending_orders.lock().await.remove(&order_id);
+                }
+
+                // ── Stale order alert ──────────────────────────────────────
+                ReconciliationOutcome::SuspectedStale { elapsed_secs } => {
+                    error!(
+                        order_id     = %order_id,
+                        elapsed_secs,
+                        "🚨 Stale pending order — investigate on exchange; no local state change"
+                    );
+                    if let Some(ref log) = self.activity {
+                        log_push(
+                            log,
+                            EntryKind::Warn,
+                            format!("STALE ORDER {order_id} pending {elapsed_secs}s — operator review required"),
+                        );
+                    }
+                    self.failsafe_metrics.lock().unwrap().stale_orders += 1;
+                    // Keep in pending_orders — will retry every reconcile pass.
+                }
+
+                // ── Not terminal yet ──────────────────────────────────────
+                ReconciliationOutcome::StillPending => {
+                    // Order is still live on exchange; retry next pass.
                 }
             }
         }
+
         if resolved > 0 {
             let pending = self.pending_orders.lock().await.len();
-            info!(resolved, pending, "Reconciliation pass completed");
+            info!(resolved, fills_recorded, pending, "Reconciliation pass completed");
         }
     }
 
@@ -578,11 +740,66 @@ impl LiveEngine {
 
     pub fn failsafe_metrics_snapshot(&self) -> FailsafeMetricsSnapshot {
         let m = self.failsafe_metrics.lock().unwrap();
+        let total_resolved = m.confirmed_fills + m.no_fills;
+        let confirmation_rate_pct = if total_resolved > 0 {
+            Some(m.confirmed_fills as f64 / total_resolved as f64 * 100.0)
+        } else {
+            None
+        };
         FailsafeMetricsSnapshot {
-            trigger_count: m.trigger_count,
-            check_count: m.check_count,
+            trigger_count:          m.trigger_count,
+            check_count:            m.check_count,
             max_observed_drift_bps: m.max_observed_drift_bps,
+            confirmed_fills:        m.confirmed_fills,
+            no_fills:               m.no_fills,
+            stale_orders:           m.stale_orders,
+            confirmation_rate_pct,
+            heartbeat_ok_count:     m.heartbeat_ok_count,
+            heartbeat_fail_count:   m.heartbeat_fail_count,
         }
+    }
+
+    /// Emergency stop: trips circuit breaker, cancels all open exchange orders,
+    /// runs a final reconciliation pass, and writes an incident flag file.
+    ///
+    /// Call this when drift, auth failures, or any critical anomaly is detected.
+    /// Trading will remain halted until the operator resets the circuit breaker.
+    pub async fn emergency_stop(&self, reason: &str) {
+        error!("🚨 EMERGENCY STOP triggered: {reason}");
+
+        // 1. Trip circuit breaker — blocks all new orders immediately.
+        self.risk.lock().unwrap().trip_circuit_breaker(reason);
+
+        // 2. Cancel all open orders on the exchange.
+        match self.executor.cancel_all_orders().await {
+            Ok(())  => info!("Emergency stop: exchange cancel-all succeeded"),
+            Err(e)  => error!("Emergency stop: cancel_all_orders failed: {e}"),
+        }
+
+        // 3. Run reconciliation to sync any fills that arrived before cancel.
+        self.run_reconciliation_pass().await;
+
+        // 4. Write persistent incident flag for operator review.
+        let pending = self.pending_orders.lock().await.len();
+        let flag_content = format!(
+            "reason={reason}\ntimestamp={}\npending_orders_after_cancel={pending}\n",
+            chrono::Utc::now()
+        );
+        let _ = std::fs::write("logs\\EMERGENCY_STOP.flag", &flag_content);
+
+        if let Some(ref log) = self.activity {
+            log_push(
+                log,
+                EntryKind::Warn,
+                format!("🚨 EMERGENCY STOP: {reason} — circuit breaker tripped, all orders cancelled"),
+            );
+        }
+
+        error!(
+            reason,
+            pending_after_cancel = pending,
+            "🚨 EMERGENCY STOP complete — trading halted. See logs/EMERGENCY_STOP.flag"
+        );
     }
 }
 

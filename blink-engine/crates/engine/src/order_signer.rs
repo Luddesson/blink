@@ -291,17 +291,40 @@ fn domain_separator() -> [u8; 32] {
 
 // ─── Amount calculation ──────────────────────────────────────────────────────
 
+/// Compute `(maker_amount, taker_amount, side_byte)` for an order.
+///
+/// Both amounts are in USDC.e / share **base units** (×1 000 000, matching
+/// Polygon's 6-decimal ERC-20 convention).
+///
+/// # Unit model
+///
+/// | Side | `maker_amount` | `taker_amount` |
+/// |------|----------------|----------------|
+/// | BUY  | USDC paid ×1e6 | shares received ×1e6 |
+/// | SELL | shares sold ×1e6 | USDC received ×1e6 |
+///
+/// `price` is stored **×1 000** (e.g. `0.65` → `650`), so conversions divide
+/// or multiply by 1 000 as needed to keep amounts in 1e6 base units.
 fn compute_amounts(params: &OrderParams) -> Result<(u64, u64, u8)> {
     match params.side {
         OrderSide::Buy => {
+            // maker_amount = USDC spent, scaled ×1e6.
             let maker_amount = (params.size * 1_000_000.0).floor() as u64;
             anyhow::ensure!(params.price > 0, "BUY order price cannot be zero");
-            let taker_amount = (maker_amount as u128 * 1_000 / params.price as u128) as u64;
+            // taker_amount = shares received = USDC_base × 1_000 / price_scaled
+            let taker_amount =
+                (maker_amount as u128 * 1_000 / params.price as u128) as u64;
             Ok((maker_amount, taker_amount, 0u8))
         }
         OrderSide::Sell => {
-            let maker_amount = params.size as u64;
-            let taker_amount = (maker_amount as u128 * params.price as u128 * 1_000) as u64;
+            // maker_amount = shares sold, scaled ×1e6.
+            // Using `.floor()` rather than `as u64` to avoid lossy truncation
+            // of fractional share sizes (e.g. 10.5 → 10_500_000, not 10).
+            let maker_amount = (params.size * 1_000_000.0).floor() as u64;
+            anyhow::ensure!(params.price > 0, "SELL order price cannot be zero");
+            // taker_amount = USDC received = shares_base × price_scaled / 1_000
+            let taker_amount =
+                (maker_amount as u128 * params.price as u128 / 1_000) as u64;
             Ok((maker_amount, taker_amount, 1u8))
         }
     }
@@ -443,11 +466,44 @@ mod tests {
 
     #[test]
     fn sell_amounts_correct() {
+        // 10 whole shares at $0.65 → maker = 10_000_000 (shares ×1e6), taker = 6_500_000 (USDC ×1e6)
         let p = make_params(OrderSide::Sell, 650, 10.0);
         let (ma, ta, side) = compute_amounts(&p).unwrap();
-        assert_eq!(ma, 10);          // 10 shares
-        assert_eq!(ta, 6_500_000);   // USDC = 10 × 0.65 × 1e6
+        assert_eq!(ma, 10_000_000); // 10 shares in 6-dec base units
+        assert_eq!(ta, 6_500_000);  // $6.50 USDC in 6-dec base units
         assert_eq!(side, 1u8);
+    }
+
+    #[test]
+    fn sell_fractional_shares_no_truncation() {
+        // Previously: 10.5 as u64 == 10  →  0.5 shares silently lost
+        // Fixed:      10.5 × 1e6       == 10_500_000
+        let p = make_params(OrderSide::Sell, 650, 10.5);
+        let (ma, ta, side) = compute_amounts(&p).unwrap();
+        assert_eq!(ma, 10_500_000); // 10.5 shares × 1e6 — no truncation
+        assert_eq!(ta, 6_825_000);  // 10.5 × $0.65 = $6.825 USDC × 1e6
+        assert_eq!(side, 1u8);
+    }
+
+    #[test]
+    fn buy_sell_round_trip_amounts() {
+        // Buy $10 at 0.65 → receive taker_amount shares.
+        // Selling those same shares back should return ≈ $10 USDC (within 1 base unit).
+        let buy = make_params(OrderSide::Buy, 650, 10.0);
+        let (buy_ma, buy_ta, _) = compute_amounts(&buy).unwrap();
+
+        // buy_ta is shares in base units; convert back to float for Sell params.
+        let shares_float = buy_ta as f64 / 1_000_000.0;
+        let sell = make_params(OrderSide::Sell, 650, shares_float);
+        let (sell_ma, sell_ta, _) = compute_amounts(&sell).unwrap();
+
+        // Maker amount of SELL must equal taker amount of BUY (same share count).
+        assert_eq!(sell_ma, buy_ta, "SELL maker_amount must equal BUY taker_amount");
+        // USDC recovered must equal USDC spent (within 1 base unit of rounding).
+        assert!(
+            (sell_ta as i64 - buy_ma as i64).abs() <= 1,
+            "round-trip USDC mismatch: spent={buy_ma} recovered={sell_ta}"
+        );
     }
 
     #[test]

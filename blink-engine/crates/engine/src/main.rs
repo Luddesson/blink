@@ -60,7 +60,8 @@ async fn main() -> Result<()> {
             .and_then(|p| args.get(p + 1).cloned());
         return run_backtest(csv_path, output_path.as_deref());
     }
-    let preflight_live = args.iter().any(|a| a == "--preflight-live");
+    let preflight_live    = args.iter().any(|a| a == "--preflight-live");
+    let emergency_stop    = args.iter().any(|a| a == "--emergency-stop");
 
     // ── Feature flags ────────────────────────────────────────────────────
     let paper_mode = env_flag("PAPER_TRADING");
@@ -124,7 +125,12 @@ async fn main() -> Result<()> {
 
     if preflight_live {
         run_preflight_live(&config).await?;
-        println!("✅ preflight-live passed");
+        return Ok(());
+    }
+
+    // ── Emergency stop (--emergency-stop) ────────────────────────────────
+    if emergency_stop {
+        run_emergency_stop(&config).await?;
         return Ok(());
     }
 
@@ -521,6 +527,30 @@ async fn main() -> Result<()> {
             Some(activity.clone()),
         ));
         Arc::clone(&live).spawn_reconciliation_worker();
+
+        // Spawn heartbeat — keeps the Polymarket session alive every 29s.
+        {
+            let hb_executor = live.executor.clone();
+            let hb_metrics = engine::heartbeat::spawn_heartbeat_worker(hb_executor, None);
+            let l = Arc::clone(&live);
+            tokio::spawn(async move {
+                let mut t = tokio::time::interval(Duration::from_secs(30));
+                t.tick().await;
+                loop {
+                    t.tick().await;
+                    let ok  = hb_metrics.ok_count.load(std::sync::atomic::Ordering::Relaxed);
+                    let err = hb_metrics.fail_count.load(std::sync::atomic::Ordering::Relaxed);
+                    {
+                        let mut m = l.failsafe_metrics.lock().unwrap();
+                        m.heartbeat_ok_count   = ok;
+                        m.heartbeat_fail_count = err;
+                    }
+                    if err > 0 {
+                        tracing::warn!(heartbeat_ok = ok, heartbeat_fail = err, "Heartbeat failures detected");
+                    }
+                }
+            });
+        }
         {
             let hm = Arc::clone(&ws_health_metrics);
             let l = Arc::clone(&live);
@@ -538,6 +568,12 @@ async fn main() -> Result<()> {
                         failsafe_checks = fs.check_count,
                         failsafe_triggers = fs.trigger_count,
                         failsafe_max_drift_bps = fs.max_observed_drift_bps,
+                        confirmed_fills = fs.confirmed_fills,
+                        no_fills = fs.no_fills,
+                        stale_orders = fs.stale_orders,
+                        confirmation_rate_pct = fs.confirmation_rate_pct,
+                        heartbeat_ok = fs.heartbeat_ok_count,
+                        heartbeat_fail = fs.heartbeat_fail_count,
                         "Live SLO heartbeat"
                     );
                 }
@@ -808,6 +844,7 @@ async fn run_preflight_live(config: &Config) -> Result<()> {
     anyhow::ensure!(config.live_trading, "--preflight-live requires LIVE_TRADING=true");
     config.validate_live_profile_contract()?;
 
+    // ── Check 1: market data reachable ───────────────────────────────────
     let clob = ClobClient::new(&config.clob_host);
     let token = &config.markets[0];
     let buy_price = clob
@@ -833,15 +870,56 @@ async fn run_preflight_live(config: &Config) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("preflight failed: midpoint parse error for token {token}: {e}"))?;
 
     println!(
-        "preflight-live ok: token={} buy={} sell={} mid={} signature_type={} nonce={} expiration={}",
-        token,
-        buy_price,
-        sell_price,
-        mid,
+        "✅ preflight-live [1/4] market data: token={} buy={} sell={} mid={}",
+        token, buy_price, sell_price, mid,
+    );
+
+    // ── Check 2: auth credentials valid ──────────────────────────────────
+    let executor = engine::order_executor::OrderExecutor::from_config(config);
+    executor
+        .validate_credentials()
+        .await
+        .map_err(|e| anyhow::anyhow!("preflight failed: auth check: {e}"))?;
+    println!("✅ preflight-live [2/4] auth credentials valid (GET /auth/ok)");
+
+    // ── Check 3: signature fields present ────────────────────────────────
+    println!(
+        "✅ preflight-live [3/4] order config: signature_type={} nonce={} expiration={}",
         config.polymarket_signature_type,
         config.polymarket_order_nonce,
-        config.polymarket_order_expiration
+        config.polymarket_order_expiration,
     );
+
+    // ── Check 4: risk config non-zero ─────────────────────────────────────
+    let risk_cfg = engine::risk_manager::RiskConfig::from_env();
+    anyhow::ensure!(
+        risk_cfg.max_single_order_usdc > 0.0,
+        "preflight failed: MAX_SINGLE_ORDER_USDC must be > 0"
+    );
+    println!(
+        "✅ preflight-live [4/4] risk limits: max_single_order_usdc={} max_daily_loss_pct={}",
+        risk_cfg.max_single_order_usdc, risk_cfg.max_daily_loss_pct,
+    );
+
+    println!("\n🟢  ALL PREFLIGHT CHECKS PASSED — safe to go live");
+    Ok(())
+}
+
+/// Operator-initiated emergency stop: cancels all open exchange orders and
+/// writes logs/EMERGENCY_STOP.flag.
+async fn run_emergency_stop(config: &Config) -> Result<()> {
+    eprintln!("🚨 --emergency-stop requested by operator");
+    let executor = engine::order_executor::OrderExecutor::from_config(config);
+    match executor.cancel_all_orders().await {
+        Ok(())  => eprintln!("✅ cancel_all_orders succeeded"),
+        Err(e)  => eprintln!("⚠️  cancel_all_orders error (may be no open orders): {e}"),
+    }
+    std::fs::create_dir_all("logs")?;
+    std::fs::write(
+        "logs\\EMERGENCY_STOP.flag",
+        format!("reason=operator_cli\ntimestamp={}\n", chrono::Utc::now()),
+    )?;
+    eprintln!("📄 Wrote logs/EMERGENCY_STOP.flag");
     Ok(())
 }
 

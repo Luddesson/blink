@@ -1,0 +1,49 @@
+[workspace]
+members = [
+    "crates/engine",
+    "crates/market-scanner",
+    "crates/tee-vault",
+    "crates/bpf-probes",
+]
+resolver = "2"
+
+[workspace.dependencies]
+tokio              = { version = "1", features = ["full"] }
+tokio-tungstenite  = { version = "0.26", features = ["native-tls"] }
+futures-util       = "0.3"
+k256               = { version = "0.13", features = ["ecdsa"] }
+sha3               = "0.10"
+reqwest            = { version = "0.12", features = ["json", "native-tls"] }
+serde              = { version = "1", features = ["derive"] }
+serde_json         = "1"
+simd-json          = "0.14"
+clickhouse         = "0.13"
+dashmap            = "6"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender   = "0.2"
+thiserror          = "2"
+anyhow             = "1"
+dotenvy            = "0.15"
+crossbeam-channel  = "0.5"
+ratatui            = "0.29"
+crossterm          = { version = "0.28", features = ["event-stream"] }
+chrono             = "0.4"
+rand               = "0.8"
+hmac               = "0.12"
+sha2               = "0.10"
+base64             = "0.22"
+zeroize            = { version = "1", features = ["derive"] }
+proptest           = "1"
+tee-vault          = { path = "crates/tee-vault" }
+bpf-probes         = { path = "crates/bpf-probes" }
+
+[profile.release]
+opt-level     = 3
+lto           = "fat"
+codegen-units = 1
+panic         = "abort"
+strip         = "symbols"
+
+[profile.dev]
+opt-level = 1

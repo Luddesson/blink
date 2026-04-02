@@ -132,7 +132,7 @@ async fn main() -> Result<()> {
     let markets    = config.markets.clone();
     let config     = Arc::new(config);
     let book_store = Arc::new(OrderBookStore::new());
-    let _clob      = Arc::new(ClobClient::new(&config.clob_host));
+    let clob       = Arc::new(ClobClient::new(&config.clob_host));
 
     // ── Shared state ──────────────────────────────────────────────────────
     let ws_live        = Arc::new(AtomicBool::new(false));
@@ -381,6 +381,38 @@ async fn main() -> Result<()> {
                         let status = p_status.risk_status();
                         *rs_update.lock().unwrap() = status;
                         tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                });
+            }
+
+            // ── Task: REST-based midpoint price updater for held positions ──
+            // Fetches CLOB midpoints every ~10s so equity curve stays live
+            // even when WS is down.
+            {
+                let clob_for_marks = Arc::clone(&clob);
+                let portfolio_for_marks = Arc::clone(&paper.portfolio);
+                let sd_marks = Arc::clone(&shutdown);
+                tokio::spawn(async move {
+                    loop {
+                        if sd_marks.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let token_ids: Vec<String> = {
+                            let p = portfolio_for_marks.lock().await;
+                            p.positions.iter().map(|pos| pos.token_id.clone()).collect()
+                        };
+                        for token_id in &token_ids {
+                            match clob_for_marks.get_midpoint(token_id).await {
+                                Ok(mid_str) => {
+                                    if let Ok(price) = mid_str.parse::<f64>() {
+                                        let mut p = portfolio_for_marks.lock().await;
+                                        p.update_price(token_id, price);
+                                    }
+                                }
+                                Err(_) => {} // Silently skip — WS/order-book still primary
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_secs(10)).await;
                     }
                 });
             }

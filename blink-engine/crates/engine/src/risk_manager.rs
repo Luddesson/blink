@@ -246,12 +246,36 @@ impl RiskManager {
             return Err(RiskViolation::KillSwitchOff);
         }
 
-        // 2. Circuit breaker
+        // 2. Circuit breaker — auto-reset if the VaR-based trip has expired.
         if let Some(tripped_at) = self.circuit_breaker_tripped_at {
-            return Err(RiskViolation::CircuitBreakerTripped {
-                reason: self.circuit_breaker_reason.clone(),
-                tripped_at,
-            });
+            if self.circuit_breaker_reason.starts_with("VaR breached") {
+                let now = Instant::now();
+                self.evict_expired_exposure(now);
+                let rolling_sum: f64 =
+                    self.rolling_exposure.iter().map(|e| e.amount_usdc).sum();
+                let threshold_usdc = starting_nav * self.config.var_threshold_pct;
+                if rolling_sum + size_usdc <= threshold_usdc {
+                    // Exposure decayed below threshold — auto-reset.
+                    self.circuit_breaker_tripped_at = None;
+                    self.circuit_breaker_reason.clear();
+                    tracing::info!(
+                        rolling_usdc = %format!("{rolling_sum:.2}"),
+                        threshold_usdc = %format!("{threshold_usdc:.2}"),
+                        "🟢 VaR circuit breaker auto-reset — exposure decayed"
+                    );
+                    // Fall through to normal checks below.
+                } else {
+                    return Err(RiskViolation::CircuitBreakerTripped {
+                        reason: self.circuit_breaker_reason.clone(),
+                        tripped_at,
+                    });
+                }
+            } else {
+                return Err(RiskViolation::CircuitBreakerTripped {
+                    reason: self.circuit_breaker_reason.clone(),
+                    tripped_at,
+                });
+            }
         }
 
         // 3. Daily loss limit
@@ -622,6 +646,34 @@ mod tests {
         let exposure = rm.rolling_exposure_usdc();
         assert!((exposure - 5.0).abs() < 1e-9);
     }
+
+    #[test]
+    fn var_circuit_breaker_auto_resets_after_window() {
+        let mut rm = RiskManager::new(RiskConfig {
+            trading_enabled: true,
+            var_threshold_pct: 0.05,
+            var_window: Duration::from_millis(50),
+            max_orders_per_second: 100,
+            ..RiskConfig::default()
+        });
+        // Fill $4.5 → under threshold
+        assert!(rm.check_pre_order(4.5, 0, 100.0, 100.0).is_ok());
+        rm.record_fill(4.5);
+        // Next $1.0 → total $5.5 > $5.0 → trips breaker
+        let err = rm.check_pre_order(1.0, 0, 100.0, 100.0).unwrap_err();
+        assert!(matches!(err, RiskViolation::VarBreached { .. }));
+        assert!(rm.is_circuit_breaker_tripped());
+
+        // Immediately: breaker is still tripped (exposure not decayed)
+        assert!(rm.check_pre_order(1.0, 0, 100.0, 100.0).is_err());
+
+        // Wait for the window to expire → exposure decays to 0
+        std::thread::sleep(Duration::from_millis(60));
+
+        // Now the breaker should auto-reset (rolling exposure decayed)
+        assert!(rm.check_pre_order(1.0, 0, 100.0, 100.0).is_ok());
+        assert!(!rm.is_circuit_breaker_tripped());
+    }
 }
 
 // ─── Property-based risk manager verification (proptest, 10 000 iterations) ──
@@ -770,15 +822,8 @@ mod proptest_risk_verification {
 
             let threshold_usdc = nav * threshold_pct;
             let mut total_exposure = 0.0;
-            let mut breaker_tripped = false;
 
             for fill in &fills {
-                if breaker_tripped {
-                    let result = rm.check_pre_order(*fill, 0, nav, nav);
-                    prop_assert!(result.is_err(), "orders must be blocked after VaR breach");
-                    continue;
-                }
-
                 let result = rm.check_pre_order(*fill, 0, nav, nav);
                 match result {
                     Ok(()) => {
@@ -791,9 +836,17 @@ mod proptest_risk_verification {
                             total_exposure, threshold_usdc
                         );
                     }
-                    Err(RiskViolation::VarBreached { .. }) |
+                    Err(RiskViolation::VarBreached { exposure_usdc, .. }) => {
+                        // VaR correctly rejected — pending exposure exceeds threshold.
+                        prop_assert!(
+                            exposure_usdc > threshold_usdc - 1e-6,
+                            "VaR rejected at ${:.2} but threshold is ${:.2}",
+                            exposure_usdc, threshold_usdc
+                        );
+                    }
                     Err(RiskViolation::CircuitBreakerTripped { .. }) => {
-                        breaker_tripped = true;
+                        // Auto-reset may or may not fire depending on rolling_sum;
+                        // either way the order was blocked — valid.
                     }
                     Err(_) => {}
                 }

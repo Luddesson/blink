@@ -606,6 +606,9 @@ impl PaperEngine {
                 variant,
             )
         };
+        // Record fill in risk manager for VaR tracking.
+        self.risk.lock().unwrap().record_fill(size_usdc);
+
         self.shadow_comparator.lock().await.observations.push(ShadowFillObservation {
             token_id: signal.token_id.clone(),
             order_id: signal.order_id.clone(),

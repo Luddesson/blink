@@ -1,0 +1,19 @@
+[package]
+name        = "bpf-probes"
+version     = "0.1.0"
+edition     = "2021"
+description = "eBPF kernel telemetry probes for Blink HFT engine — TCP RTT, scheduler jitter, syscall profiling"
+
+[features]
+default = []
+ebpf-telemetry = ["dep:aya", "dep:aya-log"]
+
+[dependencies]
+tracing   = { workspace = true }
+thiserror = { workspace = true }
+tokio     = { workspace = true }
+anyhow    = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aya     = { version = "0.12", optional = true }
+aya-log = { version = "0.2", optional = true }

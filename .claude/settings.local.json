@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -lhS /e/Blink/blink-engine/crates/engine/src/*.rs)",
+      "Read(//e/Blink/**)",
+      "Bash(cargo check:*)",
+      "Bash(/c/Users/ludvi/.cargo/bin/cargo check:*)",
+      "Bash(where cargo:*)",
+      "Read(//c/Users/ludvi/.rustup/**)",
+      "Read(//c/Users/**)",
+      "Bash(cmd.exe /c \"where cargo\")",
+      "Read(//e/Blink/blink-engine/$USERPROFILE/.cargo/bin/**)",
+      "Read(//e/Blink/blink-engine/$HOME/.cargo/bin/**)"
+    ]
+  }
+}

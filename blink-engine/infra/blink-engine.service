@@ -1,0 +1,62 @@
+# ============================================================================
+# Blink HFT Engine — systemd Service Unit
+# Owner: AURA-1 (Lead Systems Architect)
+#
+# Install:
+#   cp blink-engine.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable blink-engine
+#   systemctl start blink-engine
+# ============================================================================
+
+[Unit]
+Description=Blink HFT Trading Engine (Polymarket CLOB)
+Documentation=https://github.com/your-org/blink-engine
+After=network.target clickhouse-server.service
+Wants=clickhouse-server.service
+
+[Service]
+Type=simple
+User=blink
+Group=blink
+WorkingDirectory=/opt/blink/blink-engine
+
+# Load environment variables from protected env file
+EnvironmentFile=/etc/blink-engine.env
+
+# Pin to NUMA node 0 (CPU + memory) for deterministic latency
+ExecStart=/usr/bin/numactl --cpunodebind=0 --membind=0 \
+    /opt/blink/blink-engine/target/release/engine
+
+# ── Restart policy ─────────────────────────────────────────
+Restart=always
+RestartSec=5
+# Give the engine 30s to shut down gracefully
+TimeoutStopSec=30
+
+# ── CPU Affinity ───────────────────────────────────────────
+# Pin to physical cores 0-7 (isolated via GRUB isolcpus)
+CPUAffinity=0 1 2 3 4 5 6 7
+
+# ── Resource Limits ────────────────────────────────────────
+# 1 million file descriptors for WebSocket + io_uring
+LimitNOFILE=1000000
+# Unlimited locked memory (huge pages, mmap)
+LimitMEMLOCK=infinity
+# Unlimited core dump size for post-mortem debugging
+LimitCORE=infinity
+
+# ── Security Hardening ─────────────────────────────────────
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/blink /mnt/nvme /dev/shm
+PrivateTmp=true
+
+# ── Logging ────────────────────────────────────────────────
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=blink-engine
+
+[Install]
+WantedBy=multi-user.target

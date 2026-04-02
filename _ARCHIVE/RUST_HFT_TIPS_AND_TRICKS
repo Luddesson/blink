@@ -1,0 +1,431 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║            BLINK HFT — RUST HFT TIPS & TRICKS                              ║
+║     Patterns, pitfalls, and micro-optimizations for ultra-low latency       ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+This document is the practical companion to TECH_STACK_BIBLE. It contains
+proven patterns for writing sub-millisecond Rust trading systems.
+
+═══════════════════════════════════════════════════════════════
+1. MEMORY MANAGEMENT — KILL THE ALLOCATOR ON HOT PATH
+═══════════════════════════════════════════════════════════════
+
+Every heap allocation (Box, Vec::push, String) on the hot path is a potential
+microsecond-scale delay. Pre-allocate everything at startup.
+
+BAD (allocates on every message):
+  fn process_order(msg: &str) {
+      let parsed: OrderMsg = serde_json::from_str(msg).unwrap();
+      let orders: Vec<Order> = vec![];
+      // ...
+  }
+
+GOOD (pre-allocated, reused buffers):
+  struct Engine {
+      parse_buf: Vec<u8>,         // reused buffer for simd-json
+      order_pool: Vec<Order>,     // pre-allocated order pool
+  }
+
+  impl Engine {
+      fn new() -> Self {
+          Self {
+              parse_buf: Vec::with_capacity(65536),  // 64KB
+              order_pool: Vec::with_capacity(100),
+          }
+      }
+  }
+
+Use jemalloc as global allocator:
+  use jemallocator::Jemalloc;
+  #[global_allocator]
+  static GLOBAL: Jemalloc = Jemalloc;
+
+═══════════════════════════════════════════════════════════════
+2. LOCK-FREE MESSAGE PASSING BETWEEN THREADS
+═══════════════════════════════════════════════════════════════
+
+Never use Mutex<T> on the hot trading path. A mutex contention = thread park
+= kernel syscall = microseconds of delay.
+
+Architecture: two dedicated threads, zero locks between them.
+  Thread 1 (WebSocket Ingestion) → Ring Buffer → Thread 2 (Execution)
+
+use crossbeam::queue::ArrayQueue;
+use std::sync::Arc;
+
+// Bounded, lock-free SPSC queue
+let queue: Arc<ArrayQueue<OrderEvent>> = Arc::new(ArrayQueue::new(1024));
+
+// Thread 1: WebSocket ingestion
+let q_producer = Arc::clone(&queue);
+tokio::spawn(async move {
+    while let Some(msg) = ws_stream.next().await {
+        let event = parse_fast(&msg);
+        // push never blocks — if full, oldest data is dropped
+        let _ = q_producer.push(event);
+    }
+});
+
+// Thread 2: Execution engine
+let q_consumer = Arc::clone(&queue);
+tokio::spawn(async move {
+    loop {
+        while let Some(event) = q_consumer.pop() {
+            process_event(event).await;
+        }
+        tokio::task::yield_now().await;  // yield briefly when queue empty
+    }
+});
+
+═══════════════════════════════════════════════════════════════
+3. ORDER BOOK DATA STRUCTURE — CACHE-FRIENDLY DESIGN
+═══════════════════════════════════════════════════════════════
+
+The order book is accessed millions of times per second. It must live in
+L1 CPU cache (~32KB). Design it around cache lines (64 bytes each).
+
+// Price as u64 (multiply by 1000 to avoid float) — 8 bytes
+// Size as u64 — 8 bytes
+// = 16 bytes per level, 4 levels per cache line
+
+#[repr(C, align(64))]    // align to cache line boundary
+struct PriceLevel {
+    price: u64,          // price × 1000 (e.g. 0.65 → 650)
+    size:  u64,          // total size at this level
+}
+
+struct OrderBook {
+    // BTreeMap gives O(log n) updates and O(1) best-bid/best-ask
+    bids: std::collections::BTreeMap<u64, u64>,   // price → size
+    asks: std::collections::BTreeMap<u64, u64>,
+    token_id: String,
+}
+
+impl OrderBook {
+    fn best_bid(&self) -> Option<(u64, u64)> {
+        self.bids.iter().next_back().map(|(&p, &s)| (p, s))
+    }
+    fn best_ask(&self) -> Option<(u64, u64)> {
+        self.asks.iter().next().map(|(&p, &s)| (p, s))
+    }
+    fn spread_bps(&self) -> Option<u64> {
+        let (bid, _) = self.best_bid()?;
+        let (ask, _) = self.best_ask()?;
+        Some((ask - bid) * 10000 / bid)  // spread in basis points
+    }
+    // Apply WebSocket delta update
+    fn apply_delta(&mut self, side: Side, price: u64, size: u64) {
+        let book = match side {
+            Side::Buy  => &mut self.bids,
+            Side::Sell => &mut self.asks,
+        };
+        if size == 0 {
+            book.remove(&price);  // level removed
+        } else {
+            book.insert(price, size);
+        }
+    }
+}
+
+═══════════════════════════════════════════════════════════════
+4. FAST JSON PARSING WITH simd-json
+═══════════════════════════════════════════════════════════════
+
+simd-json is 20-40% faster than serde_json on AVX2 hardware.
+Key requirement: it needs a mutable byte slice (it modifies the buffer in-place).
+
+use simd_json::BorrowedValue;
+
+fn parse_ws_message(buf: &mut Vec<u8>, raw: &[u8]) -> Option<MarketEvent> {
+    buf.clear();
+    buf.extend_from_slice(raw);
+
+    // simd_json::to_borrowed_value operates in-place on the buffer
+    match simd_json::to_borrowed_value(buf.as_mut_slice()) {
+        Ok(BorrowedValue::Object(obj)) => {
+            let event_type = obj.get("event_type")?.as_str()?;
+            match event_type {
+                "book"  => parse_book_delta(&obj),
+                "order" => parse_order_event(&obj),
+                _       => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+Profile your actual workload — if messages are small (<1KB), standard serde_json
+may be fast enough and easier to work with. Benchmark both.
+
+═══════════════════════════════════════════════════════════════
+5. TOKIO ASYNC RUNTIME TUNING
+═══════════════════════════════════════════════════════════════
+
+// Bind the tokio runtime to specific CPU cores (avoid context switching)
+// Use on production server ONLY — not needed in dev
+
+let runtime = tokio::runtime::Builder::new_multi_thread()
+    .worker_threads(4)                        // match number of isolated cores
+    .thread_name("hft-worker")
+    .on_thread_start(|| {
+        // Pin this thread to specific CPU core on Linux
+        // Use libc::sched_setaffinity here if needed
+    })
+    .enable_all()
+    .build()
+    .unwrap();
+
+// In tokio tasks, avoid blocking operations AT ALL COSTS:
+// BAD:
+tokio::spawn(async {
+    std::thread::sleep(Duration::from_millis(1));  // blocks the thread!
+});
+// GOOD:
+tokio::spawn(async {
+    tokio::time::sleep(Duration::from_millis(1)).await;  // cooperative yield
+});
+
+// For CPU-intensive work (e.g., EIP-712 signing), use spawn_blocking:
+let signature = tokio::task::spawn_blocking(|| {
+    sign_order_sync(order_data)
+}).await.unwrap();
+
+═══════════════════════════════════════════════════════════════
+6. WEBSOCKET CONNECTION MANAGEMENT
+═══════════════════════════════════════════════════════════════
+
+Production WebSocket connections die. Build reconnect logic from day 1.
+
+use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio::time::{sleep, Duration};
+use futures::{SinkExt, StreamExt};
+
+async fn connect_with_retry(url: &str) -> WebSocketStream<...> {
+    let mut delay = Duration::from_millis(100);
+    loop {
+        match connect_async(url).await {
+            Ok((ws, _)) => {
+                tracing::info!("WebSocket connected: {}", url);
+                return ws;
+            }
+            Err(e) => {
+                tracing::warn!("WS connect failed: {}. Retry in {:?}", e, delay);
+                sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(30)); // backoff cap
+            }
+        }
+    }
+}
+
+// CRITICAL: Set TCP_NODELAY to disable Nagle's algorithm
+// This ensures small packets (order messages) are sent immediately, not buffered
+// tokio-tungstenite does this via connect_async_tls_with_config:
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+let config = WebSocketConfig {
+    max_message_size: Some(64 << 20),   // 64MB
+    ..Default::default()
+};
+// The disable_nagle parameter in connect_async_with_config handles TCP_NODELAY
+
+// Keep-alive heartbeat loop:
+tokio::spawn(async move {
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+    loop {
+        interval.tick().await;
+        if ws_sink.send(Message::Ping(vec![])).await.is_err() {
+            break;  // connection dead, trigger reconnect
+        }
+    }
+});
+
+═══════════════════════════════════════════════════════════════
+7. EIP-712 SIGNING WITH alloy-rs
+═══════════════════════════════════════════════════════════════
+
+// Full example of building and signing a Polymarket limit order
+
+use alloy::{
+    primitives::{Address, U256, keccak256},
+    signers::local::PrivateKeySigner,
+    sol_types::{Eip712Domain, SolStruct},
+};
+
+// Polymarket CTF Exchange EIP-712 domain
+let domain = Eip712Domain {
+    name: Some("Polymarket CTF Exchange".into()),
+    version: Some("1".into()),
+    chain_id: Some(U256::from(137u64)),
+    verifying_contract: Some("0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E".parse().unwrap()),
+    salt: None,
+};
+
+// Build the order struct matching Polymarket's type hash
+// (verify exact field names and types against their Solidity contracts)
+#[derive(SolStruct)]
+struct Order {
+    maker: Address,
+    taker: Address,
+    token_id: U256,
+    maker_amount: U256,
+    taker_amount: U256,
+    expiration: U256,
+    nonce: U256,
+    fee_rate_bps: U256,
+    side: u8,
+    signature_type: u8,
+}
+
+let signer = PrivateKeySigner::from_bytes(&private_key_bytes).unwrap();
+let order = Order { /* ... */ };
+let signature = signer.sign_typed_data(&order, &domain).await.unwrap();
+
+// PERFORMANCE TIP: Pre-compute the domain separator once at startup.
+// sign_typed_data recomputes it on every call — cache it manually if needed.
+
+═══════════════════════════════════════════════════════════════
+8. THE 3-SECOND FAILSAFE — CORRECT IMPLEMENTATION
+═══════════════════════════════════════════════════════════════
+
+This is the most critical safety mechanism. Get it wrong and you lose money.
+
+use tokio::time::{timeout, Duration, interval};
+
+async fn submit_with_failsafe(
+    order_id: String,
+    token_id: String,
+    entry_price: u64,
+    clob: Arc<ClobClient>,
+    price_feed: Arc<PriceFeed>,
+) -> Result<(), Error> {
+    // Submit the order
+    clob.post_order(&order_id).await?;
+
+    // Spawn failsafe watchdog
+    let order_id_clone = order_id.clone();
+    let clob_clone = Arc::clone(&clob);
+
+    tokio::spawn(async move {
+        let mut poll = interval(Duration::from_millis(100));
+        let deadline = timeout(Duration::from_secs(3), async {
+            loop {
+                poll.tick().await;
+
+                let current_price = price_feed.get_price(&token_id).await;
+                let drift_bps = abs_diff_bps(entry_price, current_price);
+
+                if drift_bps > 150 {  // 1.5% drift threshold
+                    tracing::warn!(
+                        "Failsafe triggered: drift {}bps, cancelling {}",
+                        drift_bps, order_id_clone
+                    );
+                    let _ = clob_clone.cancel_order(&order_id_clone).await;
+                    return;
+                }
+            }
+        });
+
+        // Regardless of outcome, watchdog exits after 3 seconds
+        let _ = deadline.await;
+    });
+
+    Ok(())
+}
+
+fn abs_diff_bps(a: u64, b: u64) -> u64 {
+    let diff = if a > b { a - b } else { b - a };
+    diff * 10000 / a
+}
+
+═══════════════════════════════════════════════════════════════
+9. ERROR HANDLING PATTERNS FOR TRADING SYSTEMS
+═══════════════════════════════════════════════════════════════
+
+Rule: NEVER panic in production. NEVER use .unwrap() outside tests.
+A panic kills the entire trading engine.
+
+// Define typed error enum — zero-cost at runtime
+#[derive(thiserror::Error, Debug)]
+enum EngineError {
+    #[error("WebSocket disconnected: {0}")]
+    WsDisconnected(String),
+    #[error("Order rejected by CLOB: {code} - {message}")]
+    OrderRejected { code: u16, message: String },
+    #[error("Signing failed: {0}")]
+    SigningFailed(String),
+    #[error("Rate limit exceeded — backing off")]
+    RateLimited,
+}
+
+// Use ? operator for propagation, match for critical paths
+async fn safe_submit(order: Order) -> Result<OrderId, EngineError> {
+    let response = clob_client
+        .post_order(&order)
+        .await
+        .map_err(|e| EngineError::WsDisconnected(e.to_string()))?;
+
+    if response.status == 429 {
+        return Err(EngineError::RateLimited);
+    }
+    Ok(response.order_id)
+}
+
+═══════════════════════════════════════════════════════════════
+10. LATENCY BENCHMARKING — MEASURE EVERYTHING
+═══════════════════════════════════════════════════════════════
+
+Add precise timestamps at every stage of the pipeline.
+Use std::time::Instant (monotonic, nanosecond resolution).
+
+struct PipelineTimer {
+    ws_received:      Instant,
+    parsed:           Option<Instant>,
+    rn1_detected:     Option<Instant>,
+    order_built:      Option<Instant>,
+    order_signed:     Option<Instant>,
+    order_submitted:  Option<Instant>,
+}
+
+impl PipelineTimer {
+    fn log_latencies(&self) {
+        if let (Some(p), Some(d), Some(b), Some(s), Some(sub)) =
+            (self.parsed, self.rn1_detected, self.order_built,
+             self.order_signed, self.order_submitted)
+        {
+            tracing::info!(
+                parse_us     = (p - self.ws_received).as_micros(),
+                detect_us    = (d - self.ws_received).as_micros(),
+                build_us     = (b - self.ws_received).as_micros(),
+                sign_us      = (s - self.ws_received).as_micros(),
+                total_us     = (sub - self.ws_received).as_micros(),
+                "pipeline latency"
+            );
+        }
+    }
+}
+
+Target latency budget:
+  WS message receive → parse:        < 50μs
+  Parse → RN1 detection:             < 10μs
+  Detection → order build:           < 100μs
+  Order build → EIP-712 sign:        < 500μs  (crypto is expensive!)
+  Sign → HTTP POST submitted:        < 2ms
+  TOTAL end-to-end:                  < 5ms
+
+═══════════════════════════════════════════════════════════════
+11. PRODUCTION CHECKLIST BEFORE GOING LIVE
+═══════════════════════════════════════════════════════════════
+
+[ ] No .unwrap() calls outside of tests
+[ ] All sensitive config loaded from env/TEE (zero hardcoded secrets)
+[ ] Circuit breakers tested: kill switch, VaR limit, max order size
+[ ] 3-second failsafe tested in staging with simulated price moves
+[ ] Pre-game order wipe tested: all orders cancelled at game start signal
+[ ] WebSocket auto-reconnect tested: kill connection manually, verify recovery
+[ ] Order book local state matches CLOB snapshot after 100 delta updates
+[ ] Log structured output to ClickHouse (all trades, all rejections, all latencies)
+[ ] eBPF probes deployed: alert if any stage exceeds 500μs threshold
+[ ] Rust binary compiled with: --release, LTO=fat, codegen-units=1, panic=abort
+[ ] NUMA pinning verified: CPU and NIC on same memory node
+[ ] TCP_NODELAY=true confirmed on all sockets
+[ ] Rate limit tested: no 429 responses under normal load
+[ ] Dry run: 24 hours of paper trading with full engine active

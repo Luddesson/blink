@@ -220,6 +220,7 @@ fn pubkey_to_address(key: &VerifyingKey) -> String {
     format!("0x{hex}")
 }
 
+#[allow(dead_code)]
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

@@ -1,0 +1,237 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║          BLINK HFT — SECURITY & RISK OPERATIONS GUIDE                      ║
+║          Capital preservation, key management, and circuit breakers         ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+OWNER: Sentinel (SENTINEL_RISK)
+PHILOSOPHY: Assume all code is broken. Assume all markets are adversarial.
+            The goal is to survive until the edge is confirmed, then scale.
+
+═══════════════════════════════════════════════════════════════
+PART 1 — PRIVATE KEY SECURITY
+═══════════════════════════════════════════════════════════════
+
+RULE: Private keys are NEVER stored in:
+  ✗ Source code
+  ✗ Git repository (even private)
+  ✗ Environment variables on the production server
+  ✗ Log files
+  ✗ RAM (outside of the TEE enclave process)
+
+APPROVED key storage:
+  ✓ AWS Nitro Enclave (primary — see INFRASTRUCTURE_SETUP_GUIDE Step 7)
+  ✓ AWS KMS (fallback for less latency-sensitive operations)
+
+Wallet architecture:
+  Funder Wallet:   Holds all USDC capital. Never used for signing.
+                   Only approve allowances from this wallet. Cold storage.
+  Signer Wallet:   The "proxy" key stored in Nitro Enclave.
+                   Signs all EIP-712 orders. Zero USDC balance itself.
+  API Key Wallet:  Derived from signer wallet. Used only for REST auth headers.
+
+If the signer key is ever compromised:
+  1. Immediately revoke allowances from funder wallet
+  2. Transfer USDC to a fresh wallet
+  3. Generate new signer key in a fresh enclave
+  This process should take < 5 minutes. Practice it in staging.
+
+═══════════════════════════════════════════════════════════════
+PART 2 — CIRCUIT BREAKERS (hard limits, non-negotiable)
+═══════════════════════════════════════════════════════════════
+
+These limits are compiled into the Rust binary. They cannot be overridden
+at runtime without a full redeploy. This is intentional.
+
+┌──────────────────────────────────┬──────────────┬──────────────────────────┐
+│ PARAMETER                        │ LIMIT        │ ACTION ON BREACH         │
+├──────────────────────────────────┼──────────────┼──────────────────────────┤
+│ Max single order size            │ $1,000 USDC  │ Silently reduce to $1,000│
+│ Max concurrent open orders       │ 10           │ Refuse new orders        │
+│ Max orders per second            │ 3            │ Queue with backpressure  │
+│ Max outstanding NAV exposure     │ 5% of NAV    │ Cancel all → disconnect  │
+│ Daily loss limit                 │ 2% of NAV    │ Kill switch, alert Slack │
+│ Single market exposure           │ 1% of NAV    │ Block further orders     │
+│ Price drift abort (3-sec window) │ 1.5% move    │ Cancel pending order     │
+│ Engine offline threshold         │ 30 seconds   │ Alert + auto-reconnect   │
+└──────────────────────────────────┴──────────────┴──────────────────────────┘
+
+Circuit breaker implementation sketch:
+
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+
+static KILL_SWITCH:   AtomicBool = AtomicBool::new(false);
+static DAILY_PNL:     AtomicI64  = AtomicI64::new(0);   // in USDC cents
+static OPEN_EXPOSURE: AtomicI64  = AtomicI64::new(0);   // in USDC cents
+
+const MAX_DAILY_LOSS_CENTS: i64 = 200_000;   // -$2,000
+const MAX_EXPOSURE_CENTS: i64   = 5_000_000; // $50,000 (5% of $1M NAV)
+
+fn check_circuit_breakers() -> Result<(), &'static str> {
+    if KILL_SWITCH.load(Ordering::Relaxed) {
+        return Err("kill switch active");
+    }
+    if DAILY_PNL.load(Ordering::Relaxed) < -MAX_DAILY_LOSS_CENTS {
+        KILL_SWITCH.store(true, Ordering::SeqCst);
+        return Err("daily loss limit breached");
+    }
+    if OPEN_EXPOSURE.load(Ordering::Relaxed) > MAX_EXPOSURE_CENTS {
+        return Err("exposure limit breached");
+    }
+    Ok(())
+}
+
+═══════════════════════════════════════════════════════════════
+PART 3 — DYNAMIC VAR (VALUE AT RISK)
+═══════════════════════════════════════════════════════════════
+
+Rolling 60-second exposure tracker:
+
+For each open order, track:
+  - token_id
+  - side (BUY/SELL)
+  - entry price (implied probability)
+  - size (USDC committed)
+  - worst-case loss (for binary outcome: if price goes to 0 → lose full size)
+
+Total VaR at any moment = sum of (size × max_adverse_move) across all positions.
+Max adverse move for sports binary = full loss (goes to 0).
+
+Therefore: VaR = sum of all open order sizes = total USDC at risk.
+
+Cap VaR at 5% of portfolio NAV. If breached:
+  1. Immediately stop accepting new copy signals
+  2. Cancel all open orders via DELETE /orders/market/{id}
+  3. Disconnect WebSocket (prevent new subscriptions)
+  4. Log VaR breach event to ClickHouse + alert
+
+═══════════════════════════════════════════════════════════════
+PART 4 — 3-SECOND IN-PLAY FAILSAFE (DETAILED)
+═══════════════════════════════════════════════════════════════
+
+This is Sentinel's primary real-time protection mechanism.
+
+Timeline of a sports order:
+  T+0ms:    RN1 places order, we detect it
+  T+5ms:    Our order submitted to CLOB
+  T+5ms:    CLOB enters 3-second delay queue (in-play game)
+  T+3005ms: CLOB attempts to match our order
+  ← Between T+5ms and T+3005ms, our failsafe is active
+
+Failsafe logic (must be EXTREMELY reliable):
+  - Poll GET /price every 100ms (30 polls in 3 seconds)
+  - Calculate: |current_price - entry_price| / entry_price > 0.015
+  - On breach: fire DELETE /order/{id} immediately
+  - Confirm cancellation: poll GET /order/{id} until status = "cancelled"
+  - If cancellation fails (network error): retry 3 times with 50ms backoff
+  - If still fails after retries: trigger full kill switch (nuclear option)
+
+Market scenarios requiring abort:
+  - Goal scored in a soccer match (odds swing 20-40% instantly)
+  - Game-ending point in CS:GO (100% move)
+  - Injury/disqualification during match
+  - Any Δprice > 1.5% in the 3-second window
+
+Pre-game order wipe handler:
+  The CLOB cancels all orders at game start. But the engine must also:
+  1. Listen for game_start_at timestamp from Gamma API event data
+  2. Set a timer: cancel own orders 10 seconds BEFORE game_start_at
+  3. At game_start_at: flush entire order cache, assume all are cancelled
+  4. Enter "in-play mode": enable 3-second failsafe for all new orders
+
+═══════════════════════════════════════════════════════════════
+PART 5 — FORMAL VERIFICATION (Foundry + Halmos)
+═══════════════════════════════════════════════════════════════
+
+Any Solidity interaction (approvals, direct contract calls) must be
+formally verified before deploying to mainnet.
+
+Tools:
+  Foundry Forge:  Fuzz testing with random inputs (unit-level)
+  Halmos:         Symbolic execution — mathematically proves invariants
+  Certora Prover: Enterprise-grade formal verification (optional)
+
+Critical invariants to prove:
+  1. approve() can never be called for more than MAX_ALLOWANCE
+  2. cancel_order() always succeeds if order is in pending state
+  3. The kill switch, once activated, cannot be deactivated by a single call
+  4. Daily loss calculation can never be negative (underflow)
+
+Foundry invariant test example:
+  // test/Invariant.t.sol
+  function invariant_exposureNeverExceedsNAV() public {
+      assertLe(
+          engine.totalOpenExposure(),
+          engine.portfolioNAV() * MAX_EXPOSURE_BPS / 10000
+      );
+  }
+
+  // Run: forge test --invariant-runs 100000
+
+═══════════════════════════════════════════════════════════════
+PART 6 — INCIDENT RESPONSE PLAYBOOK
+═══════════════════════════════════════════════════════════════
+
+SCENARIO A: Unexpected large loss in single trade
+  1. Check ClickHouse: what price did we enter vs. what did it resolve to?
+  2. Was the 3-second failsafe triggered? If not, why?
+  3. Check Polymarket trade history for RN1: did they also lose?
+  4. If RN1 profited and we lost: investigate timing — did we enter as Taker?
+  5. Adjust Sentinel thresholds if needed
+
+SCENARIO B: Engine goes offline mid-trade
+  1. systemd watchdog should auto-restart blink-engine within 5 seconds
+  2. On restart: immediately fetch all open orders from CLOB
+  3. Reconstruct local state from CLOB data, not from crashed process
+  4. Check ClickHouse for last known state before crash
+
+SCENARIO C: CLOB API returns unexpected errors
+  1. Check https://status.polymarket.com for outage
+  2. If CLOB is down: all open limit orders remain active on their side
+  3. DO NOT retry order submissions — orders may have been received
+  4. Poll GET /orders to check state before retrying
+
+SCENARIO D: RN1 wallet changes (they rotate wallets)
+  1. Daily check: compare RN1's recent trade volume to historical average
+  2. If sudden drop to zero: RN1 may have rotated
+  3. Use ClickHouse analytics to identify new high-volume wallets
+  4. Update TARGET_WALLET in config (requires redeploy for security)
+
+SCENARIO E: Maker rebates stop (fee structure change)
+  1. Check GET /are-orders-scoring for our recent orders
+  2. If scoring = false: our Post-Only strategy is being negated
+  3. Halt trading immediately — our edge is gone until we adapt
+  4. Review Polymarket fee announcements and Discord
+
+═══════════════════════════════════════════════════════════════
+PART 7 — OPERATIONAL MONITORING DASHBOARD
+═══════════════════════════════════════════════════════════════
+
+Minimum viable real-time metrics to track:
+  [ ] Engine heartbeat (last message received timestamp)
+  [ ] WebSocket connection status (connected/reconnecting)
+  [ ] Daily P&L (running total)
+  [ ] Open order count
+  [ ] Total USDC exposure
+  [ ] RN1 trade detection rate (signals/hour)
+  [ ] Our order fill rate (filled orders / submitted orders)
+  [ ] Average pipeline latency (P50, P95, P99)
+  [ ] 3-second failsafe trigger count (per day)
+  [ ] Circuit breaker status
+
+Recommended stack:
+  ClickHouse → Grafana (connect via ClickHouse data source plugin)
+  All tracing::info! logs → ClickHouse via tokio-tracing-clickhouse
+  Alerts → Slack webhook or PagerDuty
+
+Critical alerts (PagerDuty / immediate):
+  - Kill switch activated
+  - Daily loss > 1% NAV (warning at 1%, kill at 2%)
+  - Engine offline > 30 seconds
+  - P99 latency > 1ms (degraded performance warning)
+  - Any order placed as Taker (fee structure violated)
+
+Non-critical alerts (Slack daily digest):
+  - Total trades today
+  - Net P&L today
+  - RN1 trade count today
+  - Fill rate summary

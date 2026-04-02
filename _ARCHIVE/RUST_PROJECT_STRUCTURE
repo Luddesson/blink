@@ -1,0 +1,200 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║          BLINK HFT — RUST PROJECT STRUCTURE                                ║
+║          Recommended codebase layout for the Shadow Maker engine            ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+blink/
+├── Cargo.toml                    # Workspace root
+├── Cargo.lock                    # Committed to git
+├── .env.example                  # Template — NEVER commit .env
+│
+├── crates/
+│   ├── engine/                   # Main trading engine binary
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── main.rs           # Entry point — sets up tokio runtime + jemalloc
+│   │       ├── config.rs         # Load config from env/TOML
+│   │       ├── ws_client.rs      # WebSocket connection + reconnect logic
+│   │       ├── order_book.rs     # In-memory BTreeMap order book
+│   │       ├── sniffer.rs        # RN1 wallet detection logic
+│   │       ├── order_builder.rs  # Build Polymarket EIP-712 orders
+│   │       ├── signer.rs         # Interface to Nitro Enclave for signing
+│   │       ├── clob_client.rs    # REST client for CLOB API (reqwest)
+│   │       ├── risk_manager.rs   # Circuit breakers + VaR
+│   │       ├── failsafe.rs       # 3-second in-play abort handler
+│   │       ├── sports_handler.rs # Game-start events, pre-game wipe
+│   │       └── telemetry.rs      # ClickHouse logging + latency tracking
+│   │
+│   ├── signer-enclave/           # AWS Nitro Enclave signing service
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── main.rs           # vsock listener
+│   │       └── eip712.rs         # Key loading + signing (keys live here ONLY)
+│   │
+│   ├── market-scanner/           # Standalone: discover active sports markets
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       └── main.rs           # Polls Gamma API, writes to ClickHouse
+│   │
+│   └── dry-run/                  # Paper trading simulator (CI/CD testing)
+│       ├── Cargo.toml
+│       └── src/
+│           └── main.rs           # Runs full engine logic, no real orders
+│
+├── contracts/                    # Solidity contracts (if any custom logic)
+│   ├── foundry.toml
+│   ├── src/
+│   └── test/
+│       └── Invariant.t.sol       # Invariant fuzz tests
+│
+├── infra/
+│   ├── setup.sh                  # One-shot server provisioning script
+│   ├── reth_config.toml          # Reth node configuration
+│   ├── chrony.conf               # PTP time sync configuration
+│   ├── sysctl.conf               # Kernel network tuning parameters
+│   ├── ebpf/
+│   │   └── latency_probe.bt      # bpftrace latency monitoring script
+│   └── docker-compose.yml        # Local dev: ClickHouse + Reth + monitoring
+│
+├── analytics/
+│   ├── backtest.py               # Python backtester against ClickHouse data
+│   └── rn1_tracker.py            # Analyze RN1 historical trade patterns
+│
+└── .github/
+    └── workflows/
+        └── deploy.yml            # CI/CD: test → dry-run → deploy
+
+════════════════════════════════════════════════════════════
+WORKSPACE Cargo.toml
+════════════════════════════════════════════════════════════
+
+[workspace]
+members = [
+    "crates/engine",
+    "crates/signer-enclave",
+    "crates/market-scanner",
+    "crates/dry-run",
+]
+resolver = "2"
+
+[workspace.dependencies]
+tokio              = { version = "1", features = ["full"] }
+tokio-tungstenite  = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
+alloy              = { version = "0.3", features = ["full"] }
+simd-json          = "0.13"
+crossbeam          = "0.8"
+jemallocator       = "0.5"
+reqwest            = { version = "0.12", features = ["json", "rustls-tls"] }
+serde              = { version = "1", features = ["derive"] }
+serde_json         = "1"
+dashmap            = "6"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json"] }
+thiserror          = "1"
+config             = "0.14"
+dotenvy            = "0.15"
+
+[profile.release]
+opt-level       = 3
+lto             = "fat"       # Link-Time Optimization — bigger binary, faster code
+codegen-units   = 1           # Single codegen unit — better optimization
+panic           = "abort"     # No stack unwinding — faster + smaller binary
+strip           = "symbols"   # Strip debug symbols from release binary
+
+[profile.dev]
+opt-level       = 1           # Some optimization in dev for faster iteration
+
+════════════════════════════════════════════════════════════
+MAIN ENGINE ENTRY POINT (main.rs skeleton)
+════════════════════════════════════════════════════════════
+
+use jemallocator::Jemalloc;
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+async fn main() -> anyhow::Result<()> {
+    // 1. Load config
+    let config = Config::load()?;
+
+    // 2. Initialize structured logging → ClickHouse
+    init_telemetry(&config.clickhouse_url)?;
+
+    // 3. Boot circuit breaker (atomic globals)
+    let risk = Arc::new(RiskManager::new(&config));
+
+    // 4. Connect to Nitro Enclave signer
+    let signer = EnclaveSigner::connect(config.enclave_cid).await?;
+
+    // 5. Initialize CLOB REST client
+    let clob = Arc::new(ClobClient::new(&config, signer.clone()));
+
+    // 6. Initialize order book state
+    let order_book = Arc::new(OrderBookStore::new());
+
+    // 7. Start WebSocket ingestion → crossbeam channel → execution
+    let (tx, rx) = crossbeam::channel::bounded(1024);
+
+    // WebSocket ingestion task
+    let ws_config = config.clone();
+    let ob = Arc::clone(&order_book);
+    tokio::spawn(async move {
+        ws_ingestion_loop(ws_config, ob, tx).await;
+    });
+
+    // Execution task
+    let ex_config = config.clone();
+    tokio::spawn(async move {
+        execution_loop(ex_config, rx, clob, risk).await;
+    });
+
+    // Sports handler task (pre-game wipes, game-start events)
+    tokio::spawn(async move {
+        sports_event_loop(config).await;
+    });
+
+    // Block forever — let ctrl+c trigger graceful shutdown
+    tokio::signal::ctrl_c().await?;
+    tracing::info!("Shutdown signal received — cancelling all orders...");
+    clob.cancel_all().await?;
+    Ok(())
+}
+
+════════════════════════════════════════════════════════════
+ENVIRONMENT VARIABLES (.env.example)
+════════════════════════════════════════════════════════════
+
+# Polymarket CLOB
+POLYMARKET_HOST=https://clob.polymarket.com
+POLYMARKET_CHAIN_ID=137
+POLYMARKET_FUNDER_ADDRESS=0xYOUR_FUNDER_WALLET
+
+# API Credentials (derived from wallet — never the raw private key)
+POLYMARKET_API_KEY=...
+POLYMARKET_API_SECRET=...
+POLYMARKET_API_PASSPHRASE=...
+
+# Target wallet to track
+RN1_WALLET_ADDRESS=0xTARGET_WALLET_ADDRESS
+
+# AWS Nitro Enclave
+ENCLAVE_CID=16
+ENCLAVE_PORT=5000
+
+# ClickHouse
+CLICKHOUSE_URL=http://127.0.0.1:8123
+CLICKHOUSE_DB=blink
+
+# Risk parameters (override defaults)
+MAX_ORDER_SIZE_USDC=1000
+MAX_DAILY_LOSS_BPS=200        # 2%
+MAX_NAV_EXPOSURE_BPS=500      # 5%
+PRICE_DRIFT_ABORT_BPS=150     # 1.5% drift triggers failsafe
+
+# Local Reth node
+RETH_RPC_HTTP=http://127.0.0.1:8545
+RETH_RPC_WS=ws://127.0.0.1:8546
+
+# Monitoring
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+PAGERDUTY_KEY=...

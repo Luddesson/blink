@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "engine-tui",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "engine", "--manifest-path", "blink-engine/Cargo.toml"],
+      "port": null
+    },
+    {
+      "name": "market-scanner",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "market-scanner"],
+      "port": null
+    },
+    {
+      "name": "tee-vault",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "tee-vault"],
+      "port": null
+    },
+    {
+      "name": "clickhouse",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["compose", "-f", "blink-engine/docker-compose.yml", "up", "-d"],
+      "port": 8123
+    }
+  ]
+}

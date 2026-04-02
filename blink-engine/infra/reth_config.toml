@@ -1,0 +1,64 @@
+# ============================================================================
+# Reth Full Node Configuration — Polygon Mainnet (Chain ID 137)
+# Owner: AURA-1 (Lead Systems Architect)
+#
+# Start: reth node --config /opt/blink/blink-engine/infra/reth_config.toml
+# ============================================================================
+
+[chain]
+chain = "polygon"
+
+[datadir]
+path = "/mnt/nvme/reth"
+
+[db]
+# Memory-map state files for zero-copy reads from the trading engine
+log_level = "warn"
+
+[db.mdbx]
+# Grow data file in 4 GB increments
+growth_step = 4294967296
+# Maximum database size (2 TB)
+max_size = 2199023255552
+
+[stages.headers]
+downloader_max_concurrent_requests = 100
+
+[stages.bodies]
+downloader_max_concurrent_requests = 100
+
+[rpc]
+# ── HTTP JSON-RPC ──────────────────────────────────────────
+http = true
+http_addr = "127.0.0.1"
+http_port = 8545
+http_api = ["eth", "net", "web3", "debug"]
+http_corsdomain = ""
+
+# ── WebSocket RPC ──────────────────────────────────────────
+ws = true
+ws_addr = "127.0.0.1"
+ws_port = 8546
+ws_api = ["eth", "net", "web3", "debug"]
+
+# ── IPC (local Unix socket, fastest) ──────────────────────
+ipc = true
+ipc_path = "/mnt/nvme/reth/reth.ipc"
+
+# Never expose RPC to the internet
+[rpc.auth]
+addr = "127.0.0.1"
+port = 8551
+
+[network]
+# Peer-to-peer settings
+max_outbound_peers = 50
+max_inbound_peers = 50
+
+[network.discovery]
+# Enable peer discovery
+disable_discovery = false
+
+[prune]
+# Keep full state for recent blocks (required for debug namespace)
+block_interval = 0

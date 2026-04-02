@@ -35,7 +35,7 @@ impl Default for RiskConfig {
         Self {
             max_daily_loss_pct: 0.10,
             max_concurrent_positions: 5,
-            max_single_order_usdc: 20.0,
+            max_single_order_usdc: 500.0,
             max_orders_per_second: 3,
             trading_enabled: false,
             var_window: Duration::from_secs(60),
@@ -52,7 +52,7 @@ impl RiskConfig {
     /// |---------------------------|---------|
     /// | `MAX_DAILY_LOSS_PCT`      | 0.10    |
     /// | `MAX_CONCURRENT_POSITIONS`| 5       |
-    /// | `MAX_SINGLE_ORDER_USDC`   | 20.0    |
+    /// | `MAX_SINGLE_ORDER_USDC`   | 500.0   |
     /// | `MAX_ORDERS_PER_SECOND`   | 3       |
     /// | `TRADING_ENABLED`         | false   |
     pub fn from_env() -> Self {
@@ -69,7 +69,7 @@ impl RiskConfig {
         let max_single_order_usdc = std::env::var("MAX_SINGLE_ORDER_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(20.0);
+            .unwrap_or(500.0);
 
         let max_orders_per_second = std::env::var("MAX_ORDERS_PER_SECOND")
             .ok()
@@ -267,8 +267,9 @@ impl RiskManager {
             });
         }
 
-        // 4. Concurrent positions
-        if open_positions >= self.config.max_concurrent_positions {
+        // 4. Concurrent positions (0 = unlimited)
+        if self.config.max_concurrent_positions > 0
+            && open_positions >= self.config.max_concurrent_positions {
             return Err(RiskViolation::TooManyPositions {
                 current: open_positions,
                 max: self.config.max_concurrent_positions,
@@ -418,6 +419,22 @@ impl RiskManager {
         &self.config
     }
 
+    /// Returns a mutable reference to the configuration for runtime editing.
+    pub fn config_mut(&mut self) -> &mut RiskConfig {
+        &mut self.config
+    }
+
+    /// Resets (clears) the circuit breaker, allowing trading to resume.
+    pub fn reset_circuit_breaker(&mut self) {
+        self.circuit_breaker_tripped_at = None;
+        self.circuit_breaker_reason.clear();
+    }
+
+    /// Returns `true` if the circuit breaker is currently tripped.
+    pub fn is_circuit_breaker_tripped(&self) -> bool {
+        self.circuit_breaker_tripped_at.is_some()
+    }
+
     /// Returns the current daily P&L (negative = loss).
     pub fn daily_pnl(&self) -> f64 {
         self.daily_pnl
@@ -433,6 +450,7 @@ mod tests {
     fn default_rm() -> RiskManager {
         RiskManager::new(RiskConfig {
             trading_enabled: true,
+            max_single_order_usdc: 20.0,
             var_threshold_pct: 1.0, // permissive for unit tests
             ..RiskConfig::default()
         })

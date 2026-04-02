@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build release binary
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blink-engine
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: blink-engine -> target
+
+      - name: Build release binary
+        run: cargo build --release -p engine
+
+      - name: Strip binary
+        run: strip target/release/engine
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: blink-engine-${{ github.ref_name }}-linux-x86_64
+          path: blink-engine/target/release/engine
+          retention-days: 90
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: blink-engine-${{ github.ref_name }}-linux-x86_64
+          path: dist/
+
+      - name: Rename binary with version tag
+        run: mv dist/engine dist/blink-engine-${{ github.ref_name }}-linux-x86_64
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/blink-engine-${{ github.ref_name }}-linux-x86_64
+          generate_release_notes: true

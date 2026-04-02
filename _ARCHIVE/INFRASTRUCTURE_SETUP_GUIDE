@@ -1,0 +1,328 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║          BLINK HFT — INFRASTRUCTURE SETUP GUIDE                            ║
+║          From bare metal to production-ready trading server                 ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+OWNER: Aura-1 (AURA_ARCHITECT)
+
+═══════════════════════════════════════════════════════════════
+STEP 1 — SERVER PROVISIONING
+═══════════════════════════════════════════════════════════════
+
+Provider:    AWS EC2 (bare-metal) OR Equinix Metal (Frankfurt)
+Location:    AWS US-East-1 (N. Virginia) — closest to Polymarket CLOB
+             Frankfurt as backup (European time zone events)
+
+Instance:    AWS: c7i.metal-24xl or c7i.metal-48xl (Intel Xeon, bare-metal)
+             Alternative: i4i.metal for NVMe-optimized workloads
+
+Minimum specs:
+  CPU:       32 physical cores (64+ preferred)
+  RAM:       128 GB DDR5 ECC
+  Storage:   2 TB NVMe SSD (for Reth node state + ClickHouse data)
+  NIC:       AWS Elastic Network Adapter (ENA) OR Solarflare XtremeScale SFN8722
+  OS:        Ubuntu 22.04 LTS (kernel 5.15+)
+
+Cost estimate (AWS c7i.metal-24xl):
+  On-demand:    ~$5/hour = ~$3,600/month
+  1yr Reserved: ~$1,800/month
+  Spot:         ~$1.50/hour (DO NOT USE — instance can be terminated!)
+
+═══════════════════════════════════════════════════════════════
+STEP 2 — OS-LEVEL TUNING (Aura-1's kernel hardening)
+═══════════════════════════════════════════════════════════════
+
+Run as root. These settings persist across reboots via /etc/sysctl.conf
+and /etc/rc.local.
+
+2.1 DISABLE HYPERTHREADING
+Hyperthreading adds cache contention between logical cores.
+Isolate physical cores for trading — disable HT in BIOS, OR:
+  echo off > /sys/devices/system/cpu/smt/control
+
+2.2 CPU FREQUENCY SCALING — DISABLE P-STATES
+CPU power management introduces microsecond-scale frequency changes.
+  # Add to GRUB_CMDLINE_LINUX in /etc/default/grub:
+  intel_pstate=disable processor.max_cstate=1 idle=poll
+  # Then:
+  update-grub && reboot
+
+  # After reboot, set governor to performance:
+  for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+      echo performance > $cpu
+  done
+
+2.3 DISABLE C-STATES (CPU sleep states)
+C-states cause wake-up latency (100μs+ for deep states).
+  # Add to GRUB cmdline:
+  processor.max_cstate=0 intel_idle.max_cstate=0
+
+2.4 CPU ISOLATION (isolcpus)
+Dedicate cores 0-3 to trading engine. OS scheduler won't touch them.
+  # Add to GRUB cmdline:
+  isolcpus=0,1,2,3 nohz_full=0,1,2,3 rcu_nocbs=0,1,2,3
+
+  # In Rust, use taskset to pin the process:
+  taskset -c 0-3 ./blink-engine
+
+2.5 NUMA PINNING
+Ensure trading process and NIC use same memory node (avoids PCIe bridge).
+  # Check NUMA topology:
+  numactl --hardware
+
+  # Run engine on NUMA node 0:
+  numactl --cpunodebind=0 --membind=0 ./blink-engine
+
+2.6 HUGE PAGES (reduces TLB misses for large data structures)
+  echo 1024 > /proc/sys/vm/nr_hugepages
+  # Mount:
+  mkdir /mnt/hugepages
+  mount -t hugetlbfs none /mnt/hugepages
+
+2.7 NETWORK STACK TUNING
+  # /etc/sysctl.conf additions:
+  net.core.rmem_max = 134217728        # 128MB receive buffer
+  net.core.wmem_max = 134217728        # 128MB send buffer
+  net.ipv4.tcp_rmem = 4096 87380 134217728
+  net.ipv4.tcp_wmem = 4096 65536 134217728
+  net.core.netdev_max_backlog = 250000 # Prevent packet drops
+  net.ipv4.tcp_low_latency = 1         # Minimize TCP buffering
+  net.ipv4.tcp_nodelay = 1             # Disable Nagle (set per-socket too!)
+  net.core.busy_read = 50              # Busy-poll 50μs on socket
+  net.core.busy_poll = 50
+
+2.8 SOLARFLARE OPENONLOAD (kernel bypass)
+  # Install OpenOnload driver (Solarflare NIC required):
+  git clone https://github.com/Xilinx-CNS/onload
+  cd onload && scripts/onload_install
+  
+  # Run engine with OpenOnload:
+  onload ./blink-engine
+  
+  # Verify bypass active:
+  onload_stackdump | grep "kernel_bypass"
+
+═══════════════════════════════════════════════════════════════
+STEP 3 — RETH FULL NODE SETUP (Polygon)
+═══════════════════════════════════════════════════════════════
+
+Reth is the Rust Ethereum client. Faster sync, lower memory, Rust-native.
+
+  # Install Reth:
+  curl -L https://foundry.paradigm.xyz | bash
+  cargo install --git https://github.com/paradigmxyz/reth reth
+
+  # Configure Reth for Polygon (chain 137):
+  # reth.toml:
+  [chain]
+  chain = "polygon"
+
+  [db]
+  path = "/data/reth"            # Point to NVMe SSD
+  max-size = 2000GB
+
+  [rpc]
+  http = true
+  http-addr = "127.0.0.1:8545"   # Local only — never expose to internet!
+  ws = true
+  ws-addr = "127.0.0.1:8546"
+
+  # Start sync (takes 2-4 days for full Polygon sync):
+  reth node --chain polygon --datadir /data/reth --http --ws
+
+  # Monitor sync progress:
+  cast block-number --rpc-url http://127.0.0.1:8545
+
+WHY RUN YOUR OWN NODE:
+  - Read contract state with zero latency (local RPC vs. remote Alchemy/Infura)
+  - Not dependent on third-party RPC availability
+  - Required for Wraith's MEV transaction routing
+
+═══════════════════════════════════════════════════════════════
+STEP 4 — TIME SYNCHRONIZATION (PTP)
+═══════════════════════════════════════════════════════════════
+
+Standard NTP achieves ~1ms accuracy. PTP achieves ~1μs.
+Required for accurate trade attribution and latency measurement.
+
+  # Install chrony:
+  apt install chrony
+
+  # /etc/chrony.conf — use PTP hardware timestamping:
+  server time.aws.amazon.com iburst
+  hwtimestamp *                        # Enable hardware timestamps on all NICs
+  makestep 1.0 3
+  rtcsync
+
+  # Start chrony:
+  systemctl restart chrony
+  chronyc tracking                     # Verify accuracy < 1ms
+
+  # For true PTP (sub-microsecond):
+  apt install linuxptp
+  ptp4l -i eth0 -m -H                  # Hardware timestamping mode
+  phc2sys -s eth0 -c CLOCK_REALTIME -w # Sync system clock to PTP hardware clock
+
+═══════════════════════════════════════════════════════════════
+STEP 5 — CLICKHOUSE SETUP (Tick Data Warehouse)
+═══════════════════════════════════════════════════════════════
+
+  # Install ClickHouse:
+  apt install clickhouse-server clickhouse-client
+  systemctl start clickhouse-server
+
+  # Create order book tick table:
+  CREATE TABLE orderbook_ticks (
+      timestamp    DateTime64(6),       -- microsecond precision
+      token_id     String,
+      side         Enum8('bid'=0, 'ask'=1),
+      price        UInt64,              -- price × 1000
+      size         UInt64,
+      market_event String               -- 'new'|'update'|'remove'
+  ) ENGINE = MergeTree()
+  ORDER BY (token_id, timestamp)
+  PARTITION BY toYYYYMMDD(timestamp);
+
+  # Create trades table (RN1 detected trades):
+  CREATE TABLE rn1_trades (
+      detected_at  DateTime64(6),
+      token_id     String,
+      side         Enum8('buy'=0, 'sell'=1),
+      price        UInt64,
+      size         UInt64,
+      our_order_id String,
+      our_fill     UInt64,
+      pnl_usdc     Int64                -- realized P&L in USDC cents
+  ) ENGINE = MergeTree()
+  ORDER BY detected_at;
+
+═══════════════════════════════════════════════════════════════
+STEP 6 — eBPF TELEMETRY (Nexus probes)
+═══════════════════════════════════════════════════════════════
+
+eBPF lets you trace kernel events with nanosecond precision and ZERO
+overhead to the trading path (probes run in a separate kernel context).
+
+  # Install bpftrace:
+  apt install bpftrace
+
+  # Trace TCP packet latency for our WebSocket connection:
+  bpftrace -e '
+  kprobe:tcp_rcv_established {
+      @ts[pid] = nsecs;
+  }
+  kretprobe:tcp_rcv_established /@ts[pid]/ {
+      $lat = nsecs - @ts[pid];
+      if ($lat > 500000) {  // alert on >500μs
+          printf("LATENCY SPIKE: %d μs (PID %d)\n", $lat/1000, pid);
+      }
+      delete(@ts[pid]);
+  }'
+
+  # Integration with Nexus monitoring:
+  # Pipe bpftrace output to ClickHouse latency table
+  # Alert via Slack/PagerDuty when P99 latency > 500μs
+
+═══════════════════════════════════════════════════════════════
+STEP 7 — AWS NITRO ENCLAVE (Key Security)
+═══════════════════════════════════════════════════════════════
+
+  # Prerequisites: EC2 instance with Nitro support (most modern instances)
+  
+  # Enable Nitro Enclaves on the instance:
+  # In EC2 console: Actions > Instance Settings > Change Nitro Enclave > Enable
+  
+  # Install Nitro Enclaves CLI:
+  apt install aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel
+  systemctl start nitro-enclaves-allocator
+  systemctl enable nitro-enclaves-allocator
+  
+  # Build enclave image (contains key + signing logic):
+  # Create Dockerfile for the signing service:
+  # FROM rust:latest
+  # COPY ./signer /app/signer
+  # ENTRYPOINT ["/app/signer"]
+  
+  nitro-cli build-enclave \
+      --docker-uri blink-signer:latest \
+      --output-file blink-signer.eif
+  
+  # Run enclave (allocate 512MB RAM, 2 vCPUs):
+  nitro-cli run-enclave \
+      --eif-path blink-signer.eif \
+      --memory 512 \
+      --cpu-count 2 \
+      --enclave-cid 16
+  
+  # Main engine communicates with enclave via vsock:
+  # vsock address: CID=16, port=5000
+  # Send: unsigned order data
+  # Receive: EIP-712 signature bytes
+  # Private key NEVER leaves the enclave — verified by AWS attestation
+
+═══════════════════════════════════════════════════════════════
+STEP 8 — CI/CD PIPELINE (GitHub Actions)
+═══════════════════════════════════════════════════════════════
+
+.github/workflows/deploy.yml:
+
+name: Build, Test, Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release
+        run: cargo build --release
+      - name: Run unit tests
+        run: cargo test
+      - name: Run Foundry fuzz tests
+        run: forge test --fuzz-runs 10000
+      - name: Dry-run against Reth testnet fork
+        run: cargo run --bin dry_run -- --fork-url ${{ secrets.RETH_RPC }}
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to prod server
+        run: |
+          ssh prod-server "
+            cd /opt/blink &&
+            git pull &&
+            cargo build --release &&
+            systemctl restart blink-engine
+          "
+
+═══════════════════════════════════════════════════════════════
+NETWORK ARCHITECTURE DIAGRAM
+═══════════════════════════════════════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────┐
+  │           PROD SERVER (AWS US-East-1 Bare Metal)         │
+  │                                                          │
+  │  ┌─────────────┐    ┌──────────────┐    ┌───────────┐   │
+  │  │ Blink Engine │←──│  Reth Node   │    │ClickHouse │   │
+  │  │  (Rust HFT) │    │  (Polygon)   │    │ (ticks)   │   │
+  │  └──────┬──────┘    └──────────────┘    └───────────┘   │
+  │         │                                                 │
+  │  ┌──────▼──────┐    ┌──────────────┐                     │
+  │  │AWS Nitro     │    │ eBPF probes  │                     │
+  │  │Enclave(keys)│    │ (telemetry)  │                     │
+  │  └─────────────┘    └──────────────┘                     │
+  │                                                          │
+  │  NIC: Solarflare with OpenOnload (kernel bypass)         │
+  └───────────────────────────┬─────────────────────────────┘
+                              │  ~10ms to Polymarket CLOB
+                              ▼
+                   ┌─────────────────────┐
+                   │  Polymarket CLOB    │
+                   │  (off-chain engine) │
+                   │  AWS US-East-1      │
+                   └─────────────────────┘

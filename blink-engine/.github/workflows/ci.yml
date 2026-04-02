@@ -1,0 +1,73 @@
+name: Blink Engine CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build (release)
+        run: cargo build --release --workspace
+
+      - name: Run tests
+        run: cargo test --workspace --all-targets
+
+      - name: Doc tests
+        run: cargo test --workspace --doc
+
+  # Optional: Foundry fuzz tests (only if forge is available)
+  foundry:
+    name: Foundry Fuzz Tests
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        continue-on-error: true
+
+      - name: Run forge tests
+        if: success()
+        run: |
+          if command -v forge &> /dev/null; then
+            echo "Foundry detected — running fuzz tests"
+            forge test --root ./formal 2>/dev/null || echo "No Foundry project found; skipping"
+          else
+            echo "Foundry not installed; skipping fuzz tests"
+          fi

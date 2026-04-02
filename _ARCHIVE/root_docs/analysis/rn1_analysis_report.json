@@ -1,0 +1,113 @@
+{
+  "wallet": "0x2005d16a84ceefa912d4e380cd32e7ff827875ea",
+  "analyzed_at": "2026-04-01T14:08:50.366884",
+  "data_source": "api",
+  "trade_count": 150,
+  "bet_sizes": {
+    "mean": 96500.57333333333,
+    "median": 75941.5,
+    "min": 20012,
+    "max": 485871,
+    "total_volume": 14475086,
+    "trade_count": 150,
+    "quartiles": {
+      "q1": 46085.0,
+      "q2": 75941.5,
+      "q3": 127996.75
+    }
+  },
+  "market_types": {
+    "Sports": 70,
+    "Other": 16,
+    "Crypto": 21,
+    "Entertainment": 16,
+    "Politics": 27
+  },
+  "market_tags": {
+    "NFL": 18,
+    "Soccer": 26,
+    "NBA": 8
+  },
+  "top_markets": {
+    "MLB: Team A vs Team B": 12,
+    "Entertainment: Oscars winner": 10,
+    "NFL: Chiefs vs Bills": 9,
+    "Gubernatorial - Red Win": 8,
+    "NFL: Ravens vs Bengals": 7,
+    "Premier League: Arsenal vs Man City": 7,
+    "Champions League: Bayern vs PSG": 7,
+    "Entertainment: Emmy Awards winner": 6,
+    "NHL: Team A vs Team B": 6,
+    "Senate Race - Blue Win": 6
+  },
+  "timing": {
+    "peak_hours": {
+      "4": 10,
+      "14": 9,
+      "3": 9,
+      "18": 8,
+      "19": 8
+    },
+    "days_of_week": {
+      "Thursday": 17,
+      "Friday": 19,
+      "Saturday": 25,
+      "Sunday": 20,
+      "Tuesday": 22,
+      "Wednesday": 24,
+      "Monday": 23
+    },
+    "hours_distribution": {
+      "18": 8,
+      "19": 8,
+      "5": 6,
+      "21": 7,
+      "2": 7,
+      "6": 7,
+      "17": 6,
+      "1": 5,
+      "8": 6,
+      "15": 5,
+      "4": 10,
+      "22": 3,
+      "23": 6,
+      "14": 9,
+      "3": 9,
+      "10": 5,
+      "0": 6,
+      "11": 4,
+      "13": 3,
+      "12": 8,
+      "7": 8,
+      "9": 6,
+      "16": 4,
+      "20": 4
+    },
+    "avg_hours_before_event": 175.7855759259259,
+    "median_hours_before_event": 172.0940277777778
+  },
+  "win_rate": {
+    "wins": 79,
+    "losses": 35,
+    "win_rate": 0.6929824561403509,
+    "total_pnl": -596069.8397160224,
+    "avg_win": 15303.808667254098,
+    "avg_loss": -51573.449269402736
+  },
+  "holding_time": {
+    "mean_holding_seconds": 330356.2543859649,
+    "median_holding_seconds": 325694.0,
+    "min_holding_seconds": 4256,
+    "max_holding_seconds": 603331
+  },
+  "correlations": {
+    "avg_size_yes": 92048.18309859154,
+    "avg_size_no": 100502.08860759494,
+    "avg_size_won": 103044.91139240506,
+    "avg_size_lost": 95112.4857142857
+  },
+  "streaks": {
+    "max_win_streak": 8,
+    "max_loss_streak": 4
+  }
+}

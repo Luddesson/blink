@@ -22,6 +22,8 @@
 //! | [`activity_log`] | Thread-safe ring buffer of engine events for TUI display |
 //! | [`latency_tracker`] | Rolling-window latency stats (min/max/avg/p99 in µs) |
 //! | [`tick_recorder`] | ClickHouse batch writer for tick-level order events (activated via `CLICKHOUSE_URL`) |
+//! | [`clickhouse_logger`] | Extended ClickHouse data warehouse — order book snapshots, RN1 signals, trade executions, system metrics |
+//! | [`gas_oracle`] | Moving-average gas price oracle for Polygon transactions (activated via `ETHERSCAN_API_KEY`) |
 //! | [`tui_app`] | ratatui terminal dashboard (activated via `TUI=true`) |
 //! | [`game_start_watcher`] | Polls CLOB prices to detect in-play market transitions |
 //!
@@ -39,23 +41,34 @@
 //! Use [`types::format_price`] to convert back for display.
 
 pub mod activity_log;
+pub mod agent_rpc;
 pub mod backtest_engine;
+pub mod blink_twin;
+pub mod clickhouse_logger;
 pub mod tick_recorder;
+pub mod gas_oracle;
+pub mod gas_strategy;
+pub mod io_uring_net;
 pub mod latency_tracker;
 pub mod clob_client;
 pub mod config;
 pub mod game_start_watcher;
 pub mod in_play_failsafe;
 pub mod live_engine;
+pub mod market_metadata;
 pub mod mev_router;
+pub mod mev_shield;
 pub mod order_book;
 pub mod order_executor;
 pub mod order_signer;
 pub mod paper_engine;
 pub mod paper_portfolio;
+pub mod position_tracker;
 pub mod risk_manager;
+pub mod rn1_poller;
 pub mod sniffer;
 pub mod tui_app;
+pub mod tx_router;
 pub mod types;
 pub mod ws_client;
 

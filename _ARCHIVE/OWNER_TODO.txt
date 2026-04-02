@@ -1,0 +1,391 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║           BLINK HFT — OWNER ACTION LIST                                     ║
+║           Everything YOU personally must set up, provide, or decide          ║
+║           before the agents can build and deploy the system                  ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+This list is FOR YOU — the project owner. These are things that cannot be
+automated or delegated to a sub-agent. They require human decisions, accounts,
+real money, and private credentials.
+
+Priority: HIGH = blocks development  |  MEDIUM = blocks production  |  LOW = nice-to-have
+
+════════════════════════════════════════════════════════════
+SECTION 1 — POLYMARKET ACCOUNT & API CREDENTIALS
+Priority: HIGH — Q-Sigma cannot write the signing logic without this
+════════════════════════════════════════════════════════════
+
+[ ] 1.1  Create a dedicated Polymarket trading account
+         URL: https://polymarket.com
+         → Use a NEW account separate from any personal Polymarket account
+         → Connect with a dedicated EVM wallet (see Section 2 below)
+
+[ ] 1.2  Generate Polymarket L1 API Keys
+         These are derived from your wallet signature — do it ONCE and save them.
+         Method A (easiest): Use the official TypeScript client:
+           npm install @polymarket/clob-client ethers
+           node -e "const {ClobClient} = require('@polymarket/clob-client'); ..."
+         Method B: POST https://clob.polymarket.com/auth/api-key with signed payload
+         
+         You will receive THREE values — save all three in a password manager:
+           → POLY_API_KEY        (looks like a UUID)
+           → POLY_API_SECRET     (long base64 string)
+           → POLY_API_PASSPHRASE (short passphrase you set)
+
+[ ] 1.3  Confirm your trading wallet address
+         The wallet address that will be signing orders (maker address).
+         → Give this to the agents so it can be hardcoded in config (not secret).
+         → This is the address ALL maker orders will appear under on-chain.
+
+[ ] 1.4  Test API connectivity (quick sanity check)
+         curl https://clob.polymarket.com/
+         → Should return "OK"
+         → If you get blocked, you may need a VPN or the API is geo-restricted.
+
+
+════════════════════════════════════════════════════════════
+SECTION 2 — TRADING WALLET (PRIVATE KEY & FUNDING)
+Priority: HIGH — System literally cannot sign orders without this
+════════════════════════════════════════════════════════════
+
+[ ] 2.1  Create a DEDICATED EVM wallet for the bot
+         DO NOT use your personal MetaMask or any wallet with other funds.
+         Options:
+           → Generate with cast (Foundry): `cast wallet new`
+           → Generate with MetaMask (export private key from settings)
+           → Use a hardware wallet (Ledger/Trezor) — most secure
+         
+         Save:  Private Key (0x...) — NEVER share this with anyone or commit to git
+                Wallet Address (0x...) — this is public and safe to share
+
+[ ] 2.2  Fund wallet with USDC on Polygon (your trading capital)
+         Polymarket uses USDC on Polygon (chain ID 137).
+         → Bridge USDC from Ethereum to Polygon via: https://wallet.polygon.technology
+           OR buy USDC directly on Polygon via an exchange (Binance, Kraken)
+         
+         Recommended starting capital: minimum $1,000, ideal $10,000+
+         The bot is configured with a hard cap of $1,000 per single order.
+         The circuit breaker triggers at 5% of your total NAV.
+         
+         USDC address (Polygon): 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174
+
+[ ] 2.3  Fund wallet with MATIC for gas fees (Polygon)
+         Every on-chain order settlement requires gas in MATIC.
+         → ~$50–$100 worth of MATIC is enough to start
+         → Gas is cheap on Polygon but keep 1–2 MATIC always in reserve
+
+[ ] 2.4  Approve USDC spending on Polymarket CTF Exchange contract
+         Before the first trade can settle, you must sign an approval transaction.
+         The agents will handle this programmatically, but you need to be ready
+         to confirm the first approval TX from the wallet.
+         
+         CTF Exchange:      0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E
+         NegRisk Exchange:  0xC5d563A36AE78145C45a50134d48A1215220f80a
+
+
+════════════════════════════════════════════════════════════
+SECTION 3 — THE TARGET WALLET (RN1)
+Priority: HIGH — The entire system revolves around tracking this wallet
+════════════════════════════════════════════════════════════
+
+[ ] 3.1  Confirm and provide the RN1 wallet address
+         The system will filter ALL WebSocket traffic for this single address.
+         If this address is wrong, the bot will never trigger.
+         
+         → Provide: RN1_WALLET_ADDRESS = 0x???
+         → Verify it is active on Polymarket:
+           https://polymarket.com/profile/0xYOUR_RN1_ADDRESS
+         
+         NOTE: This is used as a configuration value only — it is a PUBLIC
+         blockchain address. No private info needed here.
+
+[ ] 3.2  Verify RN1 is still actively trading sports markets
+         Check their recent trade history before going to production:
+           GET https://clob.polymarket.com/trades?maker_address=0xRN1_ADDRESS
+         → If no recent trades, their strategy may have changed.
+
+
+════════════════════════════════════════════════════════════
+SECTION 4 — AWS ACCOUNT & SERVER
+Priority: MEDIUM — Needed for Phase 5 (production). Local dev works without it.
+════════════════════════════════════════════════════════════
+
+[ ] 4.1  Create AWS account (if you don't have one)
+         URL: https://aws.amazon.com
+         → Enable billing alerts immediately after creation
+         → Set budget alarm at $500/month to avoid surprise bills
+
+[ ] 4.2  Provision the bare-metal server
+         Recommended: AWS EC2 c7i.metal-24xl (US-East-1, N. Virginia)
+         Alternative: i4i.metal (if NVMe storage is priority)
+         
+         IMPORTANT: This is expensive. Know the costs before provisioning:
+           → On-demand: ~$5/hour ≈ $3,600/month
+           → 1-Year Reserved: ~$1,800/month (pay upfront for discount)
+           → DO NOT use Spot instances — they can be terminated mid-trade
+         
+         Required settings during launch:
+           → Enable Nitro Enclaves: EC2 console → Instance Settings → Nitro Enclave → Enable
+           → ENA networking enabled (should be by default on metal instances)
+           → OS: Ubuntu 22.04 LTS (Ubuntu Server AMI)
+           → Storage: at least 2TB NVMe (instance storage or EBS io2)
+
+[ ] 4.3  Create SSH key pair and connect to server
+         → Generate an SSH key: ssh-keygen -t ed25519 -C "blink-prod"
+         → Add public key to EC2 instance during launch
+         → Test: ssh -i blink-prod.pem ubuntu@YOUR_SERVER_IP
+         → Save the private key securely (you will add it to GitHub Secrets)
+
+[ ] 4.4  Set AWS IAM permissions
+         The server needs IAM permissions to use Nitro Enclaves KMS.
+         → Create IAM role: "blink-server-role"
+         → Attach policy: AmazonEC2FullAccess + NitroEnclave KMS permissions
+
+
+════════════════════════════════════════════════════════════
+SECTION 5 — MEV PROTECTION KEYS (Wraith Agent)
+Priority: MEDIUM — Needed for Phase 6 (production MEV protection)
+════════════════════════════════════════════════════════════
+
+[ ] 5.1  Register for Flashbots RPC access
+         URL: https://docs.flashbots.net/flashbots-auction/users/rpc-endpoint
+         → Flashbots is FREE — just use the RPC endpoint:
+           https://relay.flashbots.net
+         → No API key required for basic use
+         → For advanced builder access, sign up: https://flashbots.net
+
+[ ] 5.2  (Optional) Register for bloXroute API
+         bloXroute is faster than Flashbots but costs money.
+         URL: https://portal.bloxroute.com
+         → Plans start at ~$300/month for professional tier
+         → Required for sub-100ms bundle routing
+         → Provides: bdn_sendTransaction endpoint
+         
+         DECISION NEEDED: Do you want to pay for bloXroute?
+         Recommendation: Start with Flashbots (free), upgrade if needed.
+
+
+════════════════════════════════════════════════════════════
+SECTION 6 — SPORTS DATA API (Failsafe Agent)
+Priority: MEDIUM — The 3-second failsafe polls live scores during in-play
+════════════════════════════════════════════════════════════
+
+[ ] 6.1  Choose and subscribe to a live sports data provider
+         The bot needs REAL-TIME score/odds updates to trigger the failsafe.
+         Polymarket's own /price endpoint is used first, but a sports data
+         feed gives earlier signals before the CLOB reacts.
+         
+         Options (in order of recommendation):
+         
+         Option A: The Odds API
+           URL: https://the-odds-api.com
+           Price: ~$100-200/month for live odds
+           Coverage: All major sports
+           Latency: ~1-5 second update frequency
+         
+         Option B: Sportradar
+           URL: https://sportradar.com
+           Price: Custom (expensive, enterprise)
+           Coverage: Professional-grade, used by sportsbooks
+           Latency: <1 second for some sports
+         
+         Option C: Use only Polymarket /price endpoint (FREE)
+           Poll GET /price every 100ms during the 3-second window
+           Lowest cost option — may be sufficient for Phase 1
+         
+         DECISION NEEDED: Which provider do you want?
+         Recommended start: Option C (free, good enough for testing)
+         
+         → Provide: SPORTS_API_KEY (if using Option A or B)
+         → Provide: SPORTS_API_BASE_URL
+
+[ ] 6.2  Whitelist the bot server IP with the sports API provider
+         Most sports data providers require IP whitelisting for their feeds.
+         → Once server is provisioned (Section 4), provide the static IP.
+
+
+════════════════════════════════════════════════════════════
+SECTION 7 — GITHUB REPOSITORY & SECRETS
+Priority: HIGH — CI/CD pipeline (Nexus agent) requires this
+════════════════════════════════════════════════════════════
+
+[ ] 7.1  Create a GitHub repository for the project
+         URL: https://github.com/new
+         → Repository name suggestion: "blink-hft" or "blink-engine"
+         → Set to PRIVATE — this code is sensitive
+         → Do NOT push private keys, API secrets, or wallet keys to this repo
+
+[ ] 7.2  Add GitHub Actions Secrets
+         Go to: Repository → Settings → Secrets and Variables → Actions
+         Add the following secrets:
+         
+           POLY_API_KEY          → Your Polymarket API key (from Section 1.2)
+           POLY_API_SECRET       → Your Polymarket API secret
+           POLY_API_PASSPHRASE   → Your Polymarket API passphrase
+           WALLET_PRIVATE_KEY    → Your trading wallet private key (Section 2.1)
+                                   (For Nitro Enclave: only store in enclave, not here)
+           RN1_WALLET_ADDRESS    → The target wallet to track (Section 3.1)
+           PROD_SERVER_IP        → Your AWS server IP (Section 4.2)
+           PROD_SSH_KEY          → Your SSH private key for the server (Section 4.3)
+           RETH_RPC              → http://127.0.0.1:8545 (local to server)
+           SPORTS_API_KEY        → Your sports data API key (Section 6.1)
+
+[ ] 7.3  Push the existing codebase to the new GitHub repo
+         cd D:\Blink
+         git remote add origin https://github.com/YOUR_USERNAME/blink-engine.git
+         git branch -M main
+         git push -u origin main
+
+
+════════════════════════════════════════════════════════════
+SECTION 8 — LOCAL DEVELOPMENT ENVIRONMENT
+Priority: HIGH — Needed before agents can start coding and testing
+════════════════════════════════════════════════════════════
+
+[ ] 8.1  Enable WSL2 on your Windows machine
+         Open PowerShell as Administrator:
+           wsl --install
+           wsl --set-default-version 2
+         → Select Ubuntu 22.04 LTS as the distro
+         → Set up a username and password for WSL2
+
+[ ] 8.2  Configure WSL2 performance (more RAM and cores)
+         Create/edit C:\Users\YOUR_NAME\.wslconfig:
+           [wsl2]
+           memory=16GB
+           processors=8
+           swap=8GB
+         Then restart WSL2: wsl --shutdown
+
+[ ] 8.3  Install Rust inside WSL2
+         Open Ubuntu (WSL2) terminal:
+           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+           source $HOME/.cargo/env
+           rustup toolchain install stable
+           rustup toolchain install nightly
+           rustup target add x86_64-unknown-linux-gnu
+
+[ ] 8.4  Install Foundry (for smart contract testing)
+         Inside WSL2:
+           curl -L https://foundry.paradigm.xyz | bash
+           foundryup
+         → Installs: forge, cast, anvil, chisel
+
+[ ] 8.5  Install Docker Desktop (for local ClickHouse + Reth dev)
+         URL: https://docs.docker.com/desktop/windows/
+         → Enable WSL2 integration in Docker Desktop settings
+
+[ ] 8.6  Install Cursor IDE
+         URL: https://cursor.sh
+         → Install the rust-analyzer extension
+         → Open WSL2 folder from Cursor (it will use remote mode)
+         → This gives the AI full project context for coding assistance
+
+
+════════════════════════════════════════════════════════════
+SECTION 9 — FINANCIAL DECISIONS & RISK PARAMETERS
+Priority: HIGH — These config values need YOUR approval before go-live
+════════════════════════════════════════════════════════════
+
+[ ] 9.1  Set your starting trading capital
+         Default config assumes $10,000 USDC starting NAV.
+         The following circuit breakers are based on this:
+           → Max single order:         $1,000   (10% of $10k NAV)
+           → Daily loss limit:         $200     (2% of $10k NAV)
+           → VaR circuit breaker:      $500     (5% of $10k NAV)
+           → Max concurrent orders:    10
+         
+         DECISION: What is your actual starting capital?
+         → You MUST update these values in the config before going live.
+
+[ ] 9.2  Confirm the SIZE_MULTIPLIER
+         The bot copies RN1's trade size multiplied by:
+           Your_Size = RN1_Size × 0.02
+         
+         Example: RN1 bets $50,000 → your bot bets $1,000
+         This is a very conservative 2% copy ratio.
+         
+         DECISION: Do you want to adjust this? Range: 0.005 – 0.05 recommended.
+
+[ ] 9.3  Confirm the failsafe threshold
+         Current setting: Cancel if implied probability shifts >1.5% during 3s window
+         Conservative = lower threshold = more cancellations = fewer fills
+         Aggressive = higher threshold = fewer cancellations = more risk
+         
+         DECISION: 1.5% is default. Accept or change?
+
+
+════════════════════════════════════════════════════════════
+SECTION 10 — MONITORING & ALERTS
+Priority: LOW — Can be set up after initial deployment
+════════════════════════════════════════════════════════════
+
+[ ] 10.1 Set up a Slack workspace (or use existing) for bot alerts
+          The Nexus agent will push alerts here for:
+            → Latency spikes >500μs
+            → Circuit breaker triggers
+            → Successful RN1 detection + order placement
+            → Daily P&L summary
+          
+          → Create a Slack app: https://api.slack.com/apps
+          → Get webhook URL → provide as: SLACK_WEBHOOK_URL
+
+[ ] 10.2 Set up AWS billing alarm
+          AWS console → Billing → Budgets → Create Budget
+          → Alert at: $500/month (early warning)
+          → Alert at: $3,000/month (server is running full month)
+
+[ ] 10.3 Set up PagerDuty or similar for critical alerts
+          If the bot crashes or the kill switch triggers, you need to be paged.
+          URL: https://pagerduty.com (free tier available)
+          → Provide: PAGERDUTY_INTEGRATION_KEY
+
+
+════════════════════════════════════════════════════════════
+QUICK-START CHECKLIST (Minimum to start LOCAL development)
+════════════════════════════════════════════════════════════
+
+If you want agents to start coding TODAY, you need at minimum:
+
+  [✓] Section 8: Local dev environment (WSL2 + Rust + Docker)
+  [✓] Section 7.1–7.2: GitHub repo + secrets
+  [✓] Section 3.1: RN1 wallet address
+  [✓] Section 1.2–1.3: Polymarket API keys + your wallet address
+  [✓] Section 2.1: Trading wallet private key (for signing logic tests)
+
+The server (Section 4) and real capital (Section 2.2–2.3) can wait until
+the Rust engine is working correctly in local test mode.
+
+
+════════════════════════════════════════════════════════════
+TOTAL COST ESTIMATE (Monthly, once live)
+════════════════════════════════════════════════════════════
+
+  AWS Bare-Metal Server (reserved 1yr):    ~$1,800/month
+  bloXroute MEV protection (optional):       ~$300/month
+  Sports Data API (optional):                ~$200/month
+  AWS Nitro Enclaves overhead:                ~$50/month
+  ─────────────────────────────────────────────────────
+  TOTAL (with all options):               ~$2,350/month
+  TOTAL (minimal — server only):          ~$1,800/month
+
+  Starting trading capital needed:         $10,000 USDC (recommended minimum)
+  Gas float (MATIC):                          ~$100 (replenish monthly)
+
+════════════════════════════════════════════════════════════
+SECRETS MASTER LIST (fill this in and store in a password manager)
+NEVER commit this to Git or share it digitally
+════════════════════════════════════════════════════════════
+
+  POLY_API_KEY           = ________________________________
+  POLY_API_SECRET        = ________________________________
+  POLY_API_PASSPHRASE    = ________________________________
+  WALLET_ADDRESS         = ________________________________
+  WALLET_PRIVATE_KEY     = ________________________________  ← MOST SENSITIVE
+  RN1_WALLET_ADDRESS     = ________________________________
+  PROD_SERVER_IP         = ________________________________
+  AWS_ACCOUNT_ID         = ________________________________
+  SPORTS_API_KEY         = ________________________________  (if applicable)
+  SLACK_WEBHOOK_URL      = ________________________________  (if applicable)
+  FLASHBOTS_RPC          = https://relay.flashbots.net      (public, no key needed)
+  BLOXROUTE_API_KEY      = ________________________________  (if applicable)

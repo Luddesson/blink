@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "skills": {
+    "evm-swiss-knife": {
+      "source": "kukapay/crypto-skills",
+      "sourceType": "github",
+      "computedHash": "33195ee80944db9d1e55950457b0464ecc2edf53266ea1d46060ab117c8a7b59"
+    },
+    "market-sentiment": {
+      "source": "kukapay/crypto-skills",
+      "sourceType": "github",
+      "computedHash": "4e436bd8296b576a4d17b9349edd9299a5f99e8b0fd79666e6979ba91a87f3b6"
+    },
+    "trading-strategist": {
+      "source": "kukapay/crypto-skills",
+      "sourceType": "github",
+      "computedHash": "595cea6aa3298c617ed41b2eca4ac119f4ab5795a20b1a41950cf65624dcca6f"
+    }
+  }
+}

@@ -356,9 +356,10 @@ impl OrderExecutor {
 
     /// Validates that L2 HMAC credentials are accepted by the exchange.
     ///
-    /// Hits `GET /auth/ok` — a read-only Polymarket endpoint that returns
-    /// `{ "successful": true }` when auth headers are valid.  Should be called
-    /// at startup in live mode before any order is submitted.
+    /// Probes `GET /order/auth-probe` with HMAC headers.  The exchange will
+    /// return 404 (order not found) for valid credentials, or 401/403 for
+    /// invalid ones.  This avoids relying on a specific list-endpoint that
+    /// may require query parameters.
     ///
     /// Returns `Ok(())` on success, `Err(…)` with a human-readable explanation
     /// on auth failure so operators know exactly what to fix before going live.
@@ -368,8 +369,8 @@ impl OrderExecutor {
             return Ok(());
         }
 
-        let path  = "/auth/ok";
-        let url   = format!("{}{}", self.base_url, path);
+        let path = "/order/auth-probe";
+        let url  = format!("{}{}", self.base_url, path);
         let headers = build_auth_headers(
             &self.api_key,
             &self.api_secret,
@@ -388,34 +389,36 @@ impl OrderExecutor {
         let resp = req
             .send()
             .await
-            .context("GET /auth/ok network error — check connectivity")?;
+            .context("GET /order/auth-probe network error — check connectivity")?;
 
         let status = resp.status();
         let body   = resp.text().await.unwrap_or_default();
 
-        if !status.is_success() {
-            anyhow::bail!(
-                "Credential validation failed (HTTP {status}): {body}\n\
-                 Check POLY_API_KEY, POLY_API_SECRET, POLY_API_PASSPHRASE, and FUNDER_ADDRESS."
-            );
+        match status.as_u16() {
+            // 404 = auth accepted, order simply not found — credentials valid.
+            404 => {
+                info!("✅ L2 HMAC credentials validated (probe returned 404 as expected)");
+                Ok(())
+            }
+            // 200 / 2xx = unexpected but auth clearly worked.
+            200..=299 => {
+                info!("✅ L2 HMAC credentials validated (probe returned {status})");
+                Ok(())
+            }
+            // 401 / 403 = auth rejected.
+            401 | 403 => {
+                anyhow::bail!(
+                    "Credential validation failed (HTTP {status}): {body}\n\
+                     Check POLYMARKET_API_KEY, POLYMARKET_API_SECRET, POLYMARKET_API_PASSPHRASE, and POLYMARKET_FUNDER_ADDRESS."
+                )
+            }
+            other => {
+                anyhow::bail!(
+                    "Credential probe returned unexpected HTTP {other}: {body}\n\
+                     This may indicate a network issue or API change."
+                )
+            }
         }
-
-        // Parse the response — Polymarket returns `{"successful": true}`.
-        #[derive(serde::Deserialize)]
-        struct AuthOkResponse { successful: bool }
-
-        let parsed: AuthOkResponse =
-            serde_json::from_str(&body).context("GET /auth/ok response parse failed")?;
-
-        if !parsed.successful {
-            anyhow::bail!(
-                "Exchange reported credentials invalid despite HTTP 200.\n\
-                 Raw response: {body}"
-            );
-        }
-
-        info!("✅ L2 HMAC credentials validated — exchange confirmed auth OK");
-        Ok(())
     }
 
     /// Fetches the current status of an order.  `GET /order/{order_id}`

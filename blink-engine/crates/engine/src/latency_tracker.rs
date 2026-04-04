@@ -120,7 +120,7 @@ impl MsgCounter {
         self.count_current += 1;
     }
 
-    /// Returns msgs/s for the last completed window.  
+    /// Returns msgs/s for the last completed window.
     /// Resets the counter when ≥1 second has elapsed.
     pub fn per_second(&mut self) -> u64 {
         let elapsed = self.window_start.elapsed();
@@ -130,5 +130,11 @@ impl MsgCounter {
             self.window_start = Instant::now();
         }
         self.count_last_sec
+    }
+}
+
+impl Default for MsgCounter {
+    fn default() -> Self {
+        Self::new()
     }
 }

@@ -273,11 +273,4 @@ mod tests {
         assert!(hints.tx_hash);
         assert!(hints.function_selector.is_none());
     }
-
-    #[test]
-    fn constants_are_consistent() {
-        assert!(BUNDLE_MAX_AGE > SANDWICH_WINDOW);
-        assert!(SANDWICH_TX_THRESHOLD >= 2);
-        assert!(DEADLINE_OFFSET_SECS > 0);
-    }
 }

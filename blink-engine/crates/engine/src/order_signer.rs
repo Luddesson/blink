@@ -47,21 +47,11 @@ pub struct OrderParams {
     pub maker: String,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct OrderSigningPolicy {
     pub expiration: u64,
     pub nonce: u64,
     pub signature_type: u8,
-}
-
-impl Default for OrderSigningPolicy {
-    fn default() -> Self {
-        Self {
-            expiration: 0,
-            nonce: 0,
-            signature_type: 0,
-        }
-    }
 }
 
 /// A fully signed order ready for submission to the Polymarket CLOB REST API.
@@ -393,7 +383,7 @@ fn decimal_to_b32(s: &str) -> Result<[u8; 32]> {
             .to_digit(10)
             .with_context(|| format!("non-decimal char '{ch}' in '{s}'"))?;
         // result = result * 10 + digit (big-endian u256 arithmetic)
-        let mut carry = digit as u32;
+        let mut carry = digit;
         for byte in result.iter_mut().rev() {
             let prod = (*byte as u32) * 10 + carry;
             *byte = (prod & 0xff) as u8;
@@ -418,7 +408,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>> {
-    anyhow::ensure!(s.len() % 2 == 0, "odd hex length");
+    anyhow::ensure!(s.len().is_multiple_of(2), "odd hex length");
     (0..s.len())
         .step_by(2)
         .map(|i| {
@@ -436,21 +426,6 @@ mod tests {
     fn make_params(side: OrderSide, price: u64, size: f64) -> OrderParams {
         OrderParams {
             token_id: "12345".to_string(),
-            side,
-            price,
-            size,
-            maker: "0x0000000000000000000000000000000000000000".to_string(),
-        }
-    }
-
-    fn make_params_with_token(
-        token_id: &str,
-        side: OrderSide,
-        price: u64,
-        size: f64,
-    ) -> OrderParams {
-        OrderParams {
-            token_id: token_id.to_string(),
             side,
             price,
             size,
@@ -626,7 +601,6 @@ mod tests {
 #[cfg(test)]
 mod proptest_verification {
     use super::*;
-    use k256::ecdsa::signature::hazmat::PrehashVerifier;
     use k256::ecdsa::{SigningKey, VerifyingKey};
     use proptest::prelude::*;
 

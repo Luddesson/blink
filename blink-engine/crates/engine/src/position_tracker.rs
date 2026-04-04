@@ -40,7 +40,7 @@ impl PositionTracker {
         let pos = TrackedPosition {
             market_id: signal.market_id.clone(),
             token_id: signal.token_id.clone(),
-            side: signal.side.clone(),
+            side: signal.side,
             size_usdc: signal.size,
             price: signal.price,
             timestamp: chrono::Utc::now().timestamp(),
@@ -49,7 +49,7 @@ impl PositionTracker {
         let entry = self
             .positions
             .entry(signal.market_id.clone())
-            .or_insert_with(VecDeque::new);
+            .or_default();
 
         entry.push_back(pos);
 
@@ -126,6 +126,12 @@ impl PositionTracker {
             total_markets,
             total_positions,
         }
+    }
+}
+
+impl Default for PositionTracker {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

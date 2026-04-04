@@ -336,7 +336,7 @@ pub async fn run_rn1_poller(
                     d.last_content_type = err.content_type.clone();
                     d.last_body_preview = err.body_preview.clone();
                 }
-                if consecutive_errors <= 3 || consecutive_errors % 60 == 0 {
+                if consecutive_errors <= 3 || consecutive_errors.is_multiple_of(60) {
                     error!(error = %err.message, n = consecutive_errors, "RN1 poll failed");
                     if let Some(ref log) = activity {
                         log_push(
@@ -432,8 +432,7 @@ async fn poll_activity(
         body.chars()
             .take(180)
             .collect::<String>()
-            .replace('\n', " ")
-            .replace('\r', " ")
+            .replace(['\n', '\r'], " ")
     }
 
     let url = format!("{DATA_API}/activity?user={wallet}&limit={POLL_LIMIT}");

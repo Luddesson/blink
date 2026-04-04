@@ -653,7 +653,7 @@ impl PaperPortfolio {
             std::fs::create_dir_all(parent)?;
         }
         let json = serde_json::to_string_pretty(&persisted)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         std::fs::write(path, json)?;
         Ok(())
     }
@@ -661,7 +661,7 @@ impl PaperPortfolio {
     pub fn load_from_path(path: &str) -> std::io::Result<Self> {
         let data = std::fs::read_to_string(path)?;
         let persisted: PersistedPaperPortfolio = serde_json::from_str(&data)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         Ok(Self::from(persisted))
     }
 }

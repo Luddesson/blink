@@ -424,23 +424,21 @@ fn tui_loop(
         // ── Poll keyboard (non-blocking) ──────────────────────────────────
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    if handle_key(
-                        key.code,
-                        key.modifiers,
-                        &mut state,
-                        &trading_paused,
-                        &activity,
-                        &shutdown,
-                        &risk_manager,
-                        &book_store,
-                        &markets,
-                        &market_subscriptions,
-                        &ws_force_reconnect,
-                        &experiment_switches,
-                    ) {
-                        break;
-                    }
+                if key.kind == KeyEventKind::Press && handle_key(
+                    key.code,
+                    key.modifiers,
+                    &mut state,
+                    &trading_paused,
+                    &activity,
+                    &shutdown,
+                    &risk_manager,
+                    &book_store,
+                    &markets,
+                    &market_subscriptions,
+                    &ws_force_reconnect,
+                    &experiment_switches,
+                ) {
+                    break;
                 }
             }
         }
@@ -474,7 +472,7 @@ fn tui_loop(
                     .unwrap_or_else(|| "n/a".to_string());
                 let ct = rn1.last_content_type.unwrap_or_else(|| "n/a".to_string());
                 let err = rn1.last_error.unwrap_or_else(|| "unknown".to_string());
-                let preview = rn1.last_body_preview.unwrap_or_else(|| "".to_string());
+                let preview = rn1.last_body_preview.unwrap_or_default();
                 Some(format!(
                     "rn1: ERR#{} status={} ct={} err={} preview={}",
                     rn1.consecutive_errors, status, ct, err, preview
@@ -2322,7 +2320,7 @@ fn render_fill_latency_histogram(f: &mut Frame, area: Rect, samples: &[u64]) {
         return;
     }
 
-    let bin_count = inner.height.max(1).min(5) as usize;
+    let bin_count = inner.height.clamp(1, 5) as usize;
     let min = *samples.iter().min().unwrap();
     let max = *samples.iter().max().unwrap();
     let span = max.saturating_sub(min).max(1);

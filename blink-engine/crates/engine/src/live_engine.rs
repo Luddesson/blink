@@ -358,7 +358,10 @@ impl LiveEngine {
             }
             (true, None)
         } else {
-            let vault = self.vault.as_ref().unwrap();
+            let vault = match &self.vault {
+                Some(v) => v,
+                None => unreachable!("vault cannot be none in this else clause"),
+            };
             let mut policy = self.signing_policy;
             policy.nonce = self.nonce_counter.fetch_add(1, Ordering::Relaxed);
             match sign_order_with_vault_policy(vault.as_ref(), &params, policy) {

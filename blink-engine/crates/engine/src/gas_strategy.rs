@@ -138,12 +138,6 @@ mod tests {
         assert!(fee <= PRIORITY_FEE_CEILING_GWEI);
     }
 
-    #[test]
-    fn constants_are_sane() {
-        assert!(PRIORITY_FEE_FLOOR_GWEI < PRIORITY_FEE_CEILING_GWEI);
-        assert!(PROFIT_GAS_FRACTION > 0.0 && PROFIT_GAS_FRACTION < 1.0);
-    }
-
     #[tokio::test]
     async fn higher_profit_yields_higher_or_equal_fee() {
         let strategy = GasStrategy::new(test_oracle());

@@ -600,7 +600,7 @@ impl PaperEngine {
             p.positions.len()
         };
         let violation = {
-            let risk = self.risk.lock().unwrap();
+            let mut risk = self.risk.lock().unwrap();
             risk.check_pre_order(size_usdc, pos_count, current_nav, STARTING_BALANCE_USDC)
         };
         if let Err(violation) = violation {

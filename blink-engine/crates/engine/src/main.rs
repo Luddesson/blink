@@ -6,9 +6,12 @@
 //! - `TUI=true`: full ratatui terminal dashboard for paper or live mode.
 //!   Tracing is always persisted to `logs/engine.log` + per-session log files.
 
-use std::sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc, Mutex};
-use std::time::Duration;
 use std::io::{BufRead, BufReader, Write};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex,
+};
+use std::time::Duration;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -16,9 +19,10 @@ use tracing::info;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 // All modules are declared in lib.rs; we access them through the crate name.
-use engine::activity_log::{EntryKind, new_activity_log, push as log_push};
-use engine::agent_rpc::{AgentRpcState, run_agent_rpc_server};
-use engine::backtest_engine::{BacktestConfig, BacktestEngine, load_ticks_csv};
+use engine::activity_log::{new_activity_log, push as log_push, EntryKind};
+use engine::agent_rpc::{run_agent_rpc_server, AgentRpcState};
+use engine::backtest_engine::{load_ticks_csv, BacktestConfig, BacktestEngine};
+use engine::blink_twin::TwinSnapshot;
 use engine::clickhouse_logger::{ClickHouseLogger, WarehouseEvent};
 use engine::clob_client::ClobClient;
 use engine::config::Config;
@@ -26,12 +30,11 @@ use engine::gas_oracle::GasOracle;
 use engine::latency_tracker::LatencyStats;
 use engine::order_book::OrderBookStore;
 use engine::paper_engine::PaperEngine;
+use engine::rn1_poller::{run_rn1_poller, Rn1PollDiagnostics, Rn1PollDiagnosticsHandle};
 use engine::tick_recorder::{TickRecord, TickRecorder};
 use engine::tui_app::run_tui;
-use engine::blink_twin::TwinSnapshot;
 use engine::types::RN1Signal;
 use engine::ws_client::run_ws;
-use engine::rn1_poller::{run_rn1_poller, Rn1PollDiagnostics, Rn1PollDiagnosticsHandle};
 use engine::ws_client::WsHealthMetrics;
 use std::collections::HashMap;
 
@@ -60,19 +63,19 @@ async fn main() -> Result<()> {
             .and_then(|p| args.get(p + 1).cloned());
         return run_backtest(csv_path, output_path.as_deref());
     }
-    let preflight_live    = args.iter().any(|a| a == "--preflight-live");
-    let emergency_stop    = args.iter().any(|a| a == "--emergency-stop");
+    let preflight_live = args.iter().any(|a| a == "--preflight-live");
+    let emergency_stop = args.iter().any(|a| a == "--emergency-stop");
 
     // ── Feature flags ────────────────────────────────────────────────────
     let paper_mode = env_flag("PAPER_TRADING");
-    let live_mode  = env_flag("LIVE_TRADING");
-    let tui_mode   = (paper_mode || live_mode) && env_flag("TUI");
+    let live_mode = env_flag("LIVE_TRADING");
+    let tui_mode = (paper_mode || live_mode) && env_flag("TUI");
 
     if live_mode && paper_mode {
         eprintln!("Error: Cannot enable both PAPER_TRADING and LIVE_TRADING. Pick one.");
         std::process::exit(1);
     }
-    
+
     // ── Tracing: ALWAYS persist logs to disk + per-session file ───────────
     std::fs::create_dir_all("logs").ok();
     std::fs::create_dir_all("logs\\sessions").ok();
@@ -80,16 +83,22 @@ async fn main() -> Result<()> {
     let session_stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let session_filename = format!("engine-session-{session_stamp}.log");
     let session_log_path = format!("logs\\sessions\\{session_filename}");
-    let _ = std::fs::write("logs\\LATEST_SESSION_LOG.txt", format!("{session_log_path}\n"));
+    let _ = std::fs::write(
+        "logs\\LATEST_SESSION_LOG.txt",
+        format!("{session_log_path}\n"),
+    );
 
     let engine_file_appender = tracing_appender::rolling::daily("logs", "engine.log");
-    let session_file_appender = tracing_appender::rolling::never("logs\\sessions", &session_filename);
-    let (engine_writer, engine_guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
-        .lossy(false)
-        .finish(engine_file_appender);
-    let (session_writer, session_guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
-        .lossy(false)
-        .finish(session_file_appender);
+    let session_file_appender =
+        tracing_appender::rolling::never("logs\\sessions", &session_filename);
+    let (engine_writer, engine_guard) =
+        tracing_appender::non_blocking::NonBlockingBuilder::default()
+            .lossy(false)
+            .finish(engine_file_appender);
+    let (session_writer, session_guard) =
+        tracing_appender::non_blocking::NonBlockingBuilder::default()
+            .lossy(false)
+            .finish(session_file_appender);
     let _log_guards = [engine_guard, session_guard];
 
     let log_level = std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".into());
@@ -114,8 +123,8 @@ async fn main() -> Result<()> {
             .with_target(true)
             .init();
         println!("\n╔══════════════════════════════════════════════════════╗");
-        println!(  "║         BLINK ENGINE v0.2 — Shadow Maker Bot        ║");
-        println!(  "╚══════════════════════════════════════════════════════╝\n");
+        println!("║         BLINK ENGINE v0.2 — Shadow Maker Bot        ║");
+        println!("╚══════════════════════════════════════════════════════╝\n");
     }
 
     // ── Config ────────────────────────────────────────────────────────────
@@ -135,44 +144,63 @@ async fn main() -> Result<()> {
     }
 
     let rn1_wallet = config.rn1_wallet.clone();
-    let markets    = config.markets.clone();
-    let config     = Arc::new(config);
+    let markets = config.markets.clone();
+    let config = Arc::new(config);
     let book_store = Arc::new(OrderBookStore::new());
-    let clob       = Arc::new(ClobClient::new(&config.clob_host));
+    let clob = Arc::new(ClobClient::new(&config.clob_host));
 
     // ── Shared state ──────────────────────────────────────────────────────
-    let ws_live        = Arc::new(AtomicBool::new(false));
+    let ws_live = Arc::new(AtomicBool::new(false));
     let trading_paused = Arc::new(AtomicBool::new(false));
-    let activity       = new_activity_log();
-    let shutdown       = Arc::new(AtomicBool::new(false));
-    let msg_count      = Arc::new(AtomicU64::new(0));
-    let latency        = Arc::new(Mutex::new(LatencyStats::new(1000)));
-    let risk_status    = Arc::new(Mutex::new("OK".to_string()));
+    let activity = new_activity_log();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let msg_count = Arc::new(AtomicU64::new(0));
+    let latency = Arc::new(Mutex::new(LatencyStats::new(1000)));
+    let risk_status = Arc::new(Mutex::new("OK".to_string()));
     let market_subscriptions = Arc::new(Mutex::new(markets.clone()));
     let ws_force_reconnect = Arc::new(AtomicBool::new(false));
     let ws_health_metrics = Arc::new(WsHealthMetrics::default());
-    let rn1_diagnostics: Rn1PollDiagnosticsHandle = Arc::new(Mutex::new(Rn1PollDiagnostics::default()));
+    let rn1_diagnostics: Rn1PollDiagnosticsHandle =
+        Arc::new(Mutex::new(Rn1PollDiagnostics::default()));
 
-    log_push(&activity, EntryKind::Engine,
-        format!("Engine started — PAPER={paper_mode} TUI={tui_mode} RN1={}...", &rn1_wallet[..10]));
-    log_push(&activity, EntryKind::Engine, format!("Session log: {session_log_path}"));
+    log_push(
+        &activity,
+        EntryKind::Engine,
+        format!(
+            "Engine started — PAPER={paper_mode} TUI={tui_mode} RN1={}...",
+            &rn1_wallet[..10]
+        ),
+    );
+    log_push(
+        &activity,
+        EntryKind::Engine,
+        format!("Session log: {session_log_path}"),
+    );
 
     // ── eBPF kernel telemetry ───────────────────────────────────────────────
     let kernel_snapshot: Option<Arc<Mutex<bpf_probes::KernelSnapshot>>> =
-        if env_flag("EBPF_TELEMETRY")
-            || std::env::var("EBPF_TELEMETRY").is_err() {
+        if env_flag("EBPF_TELEMETRY") || std::env::var("EBPF_TELEMETRY").is_err() {
             match BpfTelemetry::attach(std::process::id()).await {
                 Ok(telemetry) => {
                     let handle = telemetry.snapshot_handle();
-                    log_push(&activity, EntryKind::Engine,
-                        format!("eBPF kernel telemetry attached (available={})", telemetry.is_available()));
+                    log_push(
+                        &activity,
+                        EntryKind::Engine,
+                        format!(
+                            "eBPF kernel telemetry attached (available={})",
+                            telemetry.is_available()
+                        ),
+                    );
                     // Keep telemetry alive for the process lifetime.
                     std::mem::forget(telemetry);
                     Some(handle)
                 }
                 Err(e) => {
-                    log_push(&activity, EntryKind::Warn,
-                        format!("eBPF telemetry failed: {e}"));
+                    log_push(
+                        &activity,
+                        EntryKind::Warn,
+                        format!("eBPF telemetry failed: {e}"),
+                    );
                     None
                 }
             }
@@ -190,10 +218,16 @@ async fn main() -> Result<()> {
                 let act = activity.clone();
                 tokio::spawn(async move {
                     match recorder.ensure_schema().await {
-                        Ok(()) => log_push(&act, EntryKind::Engine,
-                            format!("ClickHouse connected: {url}")),
-                        Err(e) => log_push(&act, EntryKind::Warn,
-                            format!("ClickHouse schema error: {e}")),
+                        Ok(()) => log_push(
+                            &act,
+                            EntryKind::Engine,
+                            format!("ClickHouse connected: {url}"),
+                        ),
+                        Err(e) => log_push(
+                            &act,
+                            EntryKind::Warn,
+                            format!("ClickHouse schema error: {e}"),
+                        ),
                     }
                     recorder.run(rx).await;
                 });
@@ -216,10 +250,16 @@ async fn main() -> Result<()> {
                 let u = url.clone();
                 tokio::spawn(async move {
                     match logger.ensure_schema().await {
-                        Ok(()) => log_push(&act, EntryKind::Engine,
-                            format!("ClickHouse warehouse connected: {u}")),
-                        Err(e) => log_push(&act, EntryKind::Warn,
-                            format!("ClickHouse warehouse schema error (non-fatal): {e}")),
+                        Ok(()) => log_push(
+                            &act,
+                            EntryKind::Engine,
+                            format!("ClickHouse warehouse connected: {u}"),
+                        ),
+                        Err(e) => log_push(
+                            &act,
+                            EntryKind::Warn,
+                            format!("ClickHouse warehouse schema error (non-fatal): {e}"),
+                        ),
                     }
                     logger.run(rx).await;
                 });
@@ -253,18 +293,31 @@ async fn main() -> Result<()> {
 
     // ── Task: WebSocket ───────────────────────────────────────────────────
     let ws_task = {
-        let cfg   = Arc::clone(&config);
+        let cfg = Arc::clone(&config);
         let books = Arc::clone(&book_store);
-        let tx    = signal_tx.clone();
-        let live  = Arc::clone(&ws_live);
-        let act   = Some(activity.clone());
-        let mc    = Arc::clone(&msg_count);
-        let ttx   = tick_tx.clone();
-        let subs  = Arc::clone(&market_subscriptions);
+        let tx = signal_tx.clone();
+        let live = Arc::clone(&ws_live);
+        let act = Some(activity.clone());
+        let mc = Arc::clone(&msg_count);
+        let ttx = tick_tx.clone();
+        let subs = Arc::clone(&market_subscriptions);
         let ws_reconnect = Arc::clone(&ws_force_reconnect);
         let ws_health = Arc::clone(&ws_health_metrics);
         tokio::spawn(async move {
-            if let Err(e) = run_ws(cfg, books, tx, live, act, mc, ttx, subs, ws_reconnect, Some(ws_health)).await {
+            if let Err(e) = run_ws(
+                cfg,
+                books,
+                tx,
+                live,
+                act,
+                mc,
+                ttx,
+                subs,
+                ws_reconnect,
+                Some(ws_health),
+            )
+            .await
+            {
                 tracing::error!(error = %e, "WebSocket task exited");
             }
         })
@@ -273,7 +326,7 @@ async fn main() -> Result<()> {
     // ── Task: RN1 trade poller (REST-based detection) ────────────────────
     let rn1_task = {
         let cfg = Arc::clone(&config);
-        let tx  = signal_tx.clone();
+        let tx = signal_tx.clone();
         let act = Some(activity.clone());
         let diag = Arc::clone(&rn1_diagnostics);
         tokio::spawn(async move {
@@ -283,16 +336,19 @@ async fn main() -> Result<()> {
 
     // ── Optional Agent JSON-RPC server (for orchestrator/agents) ─────────
     let rpc_enabled = env_flag("AGENT_RPC_ENABLED");
-    let rpc_bind_addr = std::env::var("AGENT_RPC_BIND")
-        .unwrap_or_else(|_| "127.0.0.1:7878".to_string());
+    let rpc_bind_addr =
+        std::env::var("AGENT_RPC_BIND").unwrap_or_else(|_| "127.0.0.1:7878".to_string());
 
     // ── Tasks: paper/live engine + optional TUI ─────────────────────────
     let mut tui_thread: Option<std::thread::JoinHandle<()>> = None;
     let mut paper_for_persist: Option<Arc<PaperEngine>> = None;
-    
+
     let twin_enabled = env_flag("BLINK_TWIN");
     let twin_engine = if twin_enabled {
-        Some(engine::blink_twin::BlinkTwin::new(Arc::clone(&book_store), Some(activity.clone())))
+        Some(engine::blink_twin::BlinkTwin::new(
+            Arc::clone(&book_store),
+            Some(activity.clone()),
+        ))
     } else {
         None
     };
@@ -318,13 +374,19 @@ async fn main() -> Result<()> {
             let _ = paper.load_portfolio_if_present(&paper_state_path).await;
         }
         let _ = paper.backfill_position_metadata().await;
-        let _ = paper.load_rejections_if_present(&rejection_state_path).await;
-        let _ = paper.load_warm_state_if_present(&warm_state_path, &market_subscriptions).await;
+        let _ = paper
+            .load_rejections_if_present(&rejection_state_path)
+            .await;
+        let _ = paper
+            .load_warm_state_if_present(&warm_state_path, &market_subscriptions)
+            .await;
         ws_force_reconnect.store(true, Ordering::Relaxed);
 
-        let rejection_trend_state: Arc<Mutex<HashMap<String, Vec<engine::paper_engine::RejectionTrendPoint>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-        let execution_summary_state = Arc::new(Mutex::new(engine::paper_engine::ExecutionSummary::default()));
+        let rejection_trend_state: Arc<
+            Mutex<HashMap<String, Vec<engine::paper_engine::RejectionTrendPoint>>>,
+        > = Arc::new(Mutex::new(HashMap::new()));
+        let execution_summary_state =
+            Arc::new(Mutex::new(engine::paper_engine::ExecutionSummary::default()));
         let experiment_state = Arc::new(Mutex::new((
             engine::paper_engine::ExperimentMetrics::default(),
             paper.experiment_switches(),
@@ -355,17 +417,17 @@ async fn main() -> Result<()> {
 
         if tui_mode {
             let portfolio_for_tui = Arc::clone(&paper.portfolio);
-            let books  = Arc::clone(&book_store);
-            let act    = activity.clone();
-            let live   = Arc::clone(&ws_live);
-            let rs_h   = Arc::clone(&risk_status);
+            let books = Arc::clone(&book_store);
+            let act = activity.clone();
+            let live = Arc::clone(&ws_live);
+            let rs_h = Arc::clone(&risk_status);
             let paused = Arc::clone(&trading_paused);
-            let sd     = Arc::clone(&shutdown);
-            let rn1_w  = rn1_wallet.clone();
-            let mkts   = markets.clone();
-            let mc     = Arc::clone(&msg_count);
-            let lat    = Arc::clone(&latency);
-            let ks     = kernel_snapshot.clone();
+            let sd = Arc::clone(&shutdown);
+            let rn1_w = rn1_wallet.clone();
+            let mkts = markets.clone();
+            let mc = Arc::clone(&msg_count);
+            let lat = Arc::clone(&latency);
+            let ks = kernel_snapshot.clone();
             let risk_for_tui = Arc::clone(&paper.risk);
             let fill_window_for_tui = Arc::clone(&paper.fill_window);
             let fill_latency_for_tui = Arc::clone(&paper.fill_latency);
@@ -430,7 +492,8 @@ async fn main() -> Result<()> {
                     loop {
                         let snap = twin.snapshot().await;
                         *twin_state.lock().await = snap.clone();
-                        let total_attempts = (snap.filled_orders + snap.aborted_orders + snap.skipped_orders) as f64;
+                        let total_attempts =
+                            (snap.filled_orders + snap.aborted_orders + snap.skipped_orders) as f64;
                         let abort_rate = if total_attempts > 0.0 {
                             snap.aborted_orders as f64 / total_attempts
                         } else {
@@ -497,10 +560,14 @@ async fn main() -> Result<()> {
         let ws_reconnect_for_signals = Arc::clone(&ws_force_reconnect);
         tokio::task::spawn_blocking(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all().build().expect("paper rt");
+                .enable_all()
+                .build()
+                .expect("paper rt");
             for signal in &signal_rx {
                 latency.lock().unwrap().record(signal.detected_at.elapsed());
-                if tp.load(Ordering::Relaxed) { continue; }
+                if tp.load(Ordering::Relaxed) {
+                    continue;
+                }
                 {
                     let mut subs = subs_for_signals.lock().unwrap();
                     if !subs.contains(&signal.token_id) {
@@ -538,15 +605,23 @@ async fn main() -> Result<()> {
                 t.tick().await;
                 loop {
                     t.tick().await;
-                    let ok  = hb_metrics.ok_count.load(std::sync::atomic::Ordering::Relaxed);
-                    let err = hb_metrics.fail_count.load(std::sync::atomic::Ordering::Relaxed);
+                    let ok = hb_metrics
+                        .ok_count
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    let err = hb_metrics
+                        .fail_count
+                        .load(std::sync::atomic::Ordering::Relaxed);
                     {
                         let mut m = l.failsafe_metrics.lock().unwrap();
-                        m.heartbeat_ok_count   = ok;
+                        m.heartbeat_ok_count = ok;
                         m.heartbeat_fail_count = err;
                     }
                     if err > 0 {
-                        tracing::warn!(heartbeat_ok = ok, heartbeat_fail = err, "Heartbeat failures detected");
+                        tracing::warn!(
+                            heartbeat_ok = ok,
+                            heartbeat_fail = err,
+                            "Heartbeat failures detected"
+                        );
                     }
                 }
             });
@@ -581,31 +656,35 @@ async fn main() -> Result<()> {
         }
         if tui_mode {
             let portfolio_for_tui = Arc::clone(&live.portfolio);
-            let books  = Arc::clone(&book_store);
-            let act    = activity.clone();
+            let books = Arc::clone(&book_store);
+            let act = activity.clone();
             let live_ws = Arc::clone(&ws_live);
-            let rs_h   = Arc::clone(&risk_status);
+            let rs_h = Arc::clone(&risk_status);
             let paused = Arc::clone(&trading_paused);
-            let sd     = Arc::clone(&shutdown);
-            let rn1_w  = rn1_wallet.clone();
-            let mkts   = markets.clone();
-            let mc     = Arc::clone(&msg_count);
-            let lat    = Arc::clone(&latency);
-            let ks     = kernel_snapshot.clone();
+            let sd = Arc::clone(&shutdown);
+            let rn1_w = rn1_wallet.clone();
+            let mkts = markets.clone();
+            let mc = Arc::clone(&msg_count);
+            let lat = Arc::clone(&latency);
+            let ks = kernel_snapshot.clone();
             let risk_for_tui = Arc::clone(&live.risk);
             let fill_window_for_tui: Arc<Mutex<Option<engine::paper_engine::FillWindowSnapshot>>> =
                 Arc::new(Mutex::new(None));
             let fill_latency_for_tui = Arc::new(Mutex::new(LatencyStats::new(1000)));
             let subs_for_tui = Arc::clone(&market_subscriptions);
             let ws_reconnect_for_tui = Arc::clone(&ws_force_reconnect);
-            let rejection_trend_for_tui: Arc<Mutex<HashMap<String, Vec<engine::paper_engine::RejectionTrendPoint>>>> =
-                Arc::new(Mutex::new(HashMap::new()));
-            let exec_summary_for_tui = Arc::new(Mutex::new(engine::paper_engine::ExecutionSummary::default()));
+            let rejection_trend_for_tui: Arc<
+                Mutex<HashMap<String, Vec<engine::paper_engine::RejectionTrendPoint>>>,
+            > = Arc::new(Mutex::new(HashMap::new()));
+            let exec_summary_for_tui =
+                Arc::new(Mutex::new(engine::paper_engine::ExecutionSummary::default()));
             let experiment_for_tui = Arc::new(Mutex::new((
                 engine::paper_engine::ExperimentMetrics::default(),
                 engine::paper_engine::ExperimentSwitches::default(),
             )));
-            let experiment_switches_for_tui = Arc::new(Mutex::new(engine::paper_engine::ExperimentSwitches::default()));
+            let experiment_switches_for_tui = Arc::new(Mutex::new(
+                engine::paper_engine::ExperimentSwitches::default(),
+            ));
             let rn1_diag_for_tui = Arc::clone(&rn1_diagnostics);
             let twin_snapshot = Arc::new(tokio::sync::Mutex::new(TwinSnapshot::default()));
 
@@ -672,10 +751,14 @@ async fn main() -> Result<()> {
         let twin_opt = twin_engine.clone();
         tokio::task::spawn_blocking(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all().build().expect("live rt");
+                .enable_all()
+                .build()
+                .expect("live rt");
             for signal in &signal_rx {
                 latency.lock().unwrap().record(signal.detected_at.elapsed());
-                if tp.load(Ordering::Relaxed) { continue; }
+                if tp.load(Ordering::Relaxed) {
+                    continue;
+                }
                 let l = Arc::clone(&live);
                 let t_opt = twin_opt.clone();
                 let sig = signal.clone();
@@ -712,11 +795,19 @@ async fn main() -> Result<()> {
         let act = activity.clone();
         tokio::spawn(async move {
             if let Err(e) = run_agent_rpc_server(&bind, state).await {
-                log_push(&act, EntryKind::Warn, format!("Agent RPC server failed: {e}"));
+                log_push(
+                    &act,
+                    EntryKind::Warn,
+                    format!("Agent RPC server failed: {e}"),
+                );
                 tracing::warn!(error = %e, bind_addr = %bind, "Agent RPC server failed");
             }
         });
-        log_push(&activity, EntryKind::Engine, format!("Agent RPC enabled on {rpc_bind_addr}"));
+        log_push(
+            &activity,
+            EntryKind::Engine,
+            format!("Agent RPC enabled on {rpc_bind_addr}"),
+        );
         info!(bind_addr = %rpc_bind_addr, "Agent RPC server enabled");
     } else {
         info!("AGENT_RPC_ENABLED not set — agent RPC server disabled");
@@ -724,7 +815,9 @@ async fn main() -> Result<()> {
 
     // ── Wait for shutdown (Ctrl-C or TUI q) ──────────────────────────────
     loop {
-        if shutdown.load(Ordering::Relaxed) { break; }
+        if shutdown.load(Ordering::Relaxed) {
+            break;
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
@@ -739,10 +832,18 @@ async fn main() -> Result<()> {
             .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());
         if let Some(paper) = paper_for_persist.as_ref() {
             if let Err(e) = paper.save_portfolio(&paper_state_path).await {
-                log_push(&activity, EntryKind::Warn, format!("Failed to save paper state: {e}"));
+                log_push(
+                    &activity,
+                    EntryKind::Warn,
+                    format!("Failed to save paper state: {e}"),
+                );
                 tracing::warn!(error = %e, path = %paper_state_path, "Failed to save paper portfolio state");
             } else {
-                log_push(&activity, EntryKind::Engine, format!("Saved paper state to {paper_state_path}"));
+                log_push(
+                    &activity,
+                    EntryKind::Engine,
+                    format!("Saved paper state to {paper_state_path}"),
+                );
                 info!(path = %paper_state_path, "Saved paper portfolio state");
             }
             let warm_state_path = std::env::var("PAPER_WARM_STATE_PATH")
@@ -750,20 +851,32 @@ async fn main() -> Result<()> {
             let rejection_state_path = std::env::var("PAPER_REJECTIONS_PATH")
                 .unwrap_or_else(|_| "logs\\paper_rejections.json".to_string());
             let subs = market_subscriptions.lock().unwrap().clone();
-            let _ = paper.save_warm_state(&warm_state_path, &subs, &paper_state_path).await;
+            let _ = paper
+                .save_warm_state(&warm_state_path, &subs, &paper_state_path)
+                .await;
             let _ = paper.save_rejections(&rejection_state_path).await;
         }
     }
-    if let Some(h) = tui_thread { let _ = h.join(); }
+    if let Some(h) = tui_thread {
+        let _ = h.join();
+    }
 
     if env_flag_default_true("AUTO_POSTRUN_REVIEW") {
         match write_postrun_review(&session_log_path) {
             Ok(path) => {
-                log_push(&activity, EntryKind::Engine, format!("Post-run review saved: {path}"));
+                log_push(
+                    &activity,
+                    EntryKind::Engine,
+                    format!("Post-run review saved: {path}"),
+                );
                 info!(path = %path, "Post-run review saved");
             }
             Err(e) => {
-                log_push(&activity, EntryKind::Warn, format!("Post-run review failed: {e}"));
+                log_push(
+                    &activity,
+                    EntryKind::Warn,
+                    format!("Post-run review failed: {e}"),
+                );
                 tracing::warn!(error = %e, "Post-run review failed");
             }
         }
@@ -776,8 +889,8 @@ async fn main() -> Result<()> {
 /// Run a historical backtest from a CSV file and exit.
 fn run_backtest(csv_path: &str, output_path: Option<&str>) -> Result<()> {
     println!("\n╔══════════════════════════════════════════════════════╗");
-    println!(  "║         BLINK ENGINE — Backtest Mode                 ║");
-    println!(  "╚══════════════════════════════════════════════════════╝\n");
+    println!("║         BLINK ENGINE — Backtest Mode                 ║");
+    println!("╚══════════════════════════════════════════════════════╝\n");
 
     let rn1_wallet = std::env::var("RN1_WALLET")
         .unwrap_or_else(|_| "".to_string())
@@ -786,15 +899,25 @@ fn run_backtest(csv_path: &str, output_path: Option<&str>) -> Result<()> {
     let config = BacktestConfig {
         rn1_wallet,
         starting_usdc: std::env::var("BACKTEST_STARTING_USDC")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(100.0),
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100.0),
         size_multiplier: std::env::var("BACKTEST_SIZE_MULTIPLIER")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.02),
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.02),
         drift_threshold: std::env::var("BACKTEST_DRIFT_THRESHOLD")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.015),
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.015),
         fill_window_ms: std::env::var("BACKTEST_FILL_WINDOW_MS")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(3000),
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3000),
         slippage_bps: std::env::var("BACKTEST_SLIPPAGE_BPS")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(10),
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10),
     };
 
     println!("Loading ticks from: {csv_path}");
@@ -841,7 +964,10 @@ fn env_flag_default_true(key: &str) -> bool {
 }
 
 async fn run_preflight_live(config: &Config) -> Result<()> {
-    anyhow::ensure!(config.live_trading, "--preflight-live requires LIVE_TRADING=true");
+    anyhow::ensure!(
+        config.live_trading,
+        "--preflight-live requires LIVE_TRADING=true"
+    );
     config.validate_live_profile_contract()?;
 
     // ── Check 1: market data reachable ───────────────────────────────────
@@ -859,15 +985,15 @@ async fn run_preflight_live(config: &Config) -> Result<()> {
         .get_midpoint(token)
         .await
         .map_err(|e| anyhow::anyhow!("preflight failed: get_midpoint for token {token}: {e}"))?;
-    let _ = buy_price
-        .parse::<f64>()
-        .map_err(|e| anyhow::anyhow!("preflight failed: BUY price parse error for token {token}: {e}"))?;
-    let _ = sell_price
-        .parse::<f64>()
-        .map_err(|e| anyhow::anyhow!("preflight failed: SELL price parse error for token {token}: {e}"))?;
-    let _ = mid
-        .parse::<f64>()
-        .map_err(|e| anyhow::anyhow!("preflight failed: midpoint parse error for token {token}: {e}"))?;
+    let _ = buy_price.parse::<f64>().map_err(|e| {
+        anyhow::anyhow!("preflight failed: BUY price parse error for token {token}: {e}")
+    })?;
+    let _ = sell_price.parse::<f64>().map_err(|e| {
+        anyhow::anyhow!("preflight failed: SELL price parse error for token {token}: {e}")
+    })?;
+    let _ = mid.parse::<f64>().map_err(|e| {
+        anyhow::anyhow!("preflight failed: midpoint parse error for token {token}: {e}")
+    })?;
 
     println!(
         "✅ preflight-live [1/4] market data: token={} buy={} sell={} mid={}",
@@ -911,8 +1037,8 @@ async fn run_emergency_stop(config: &Config) -> Result<()> {
     eprintln!("🚨 --emergency-stop requested by operator");
     let executor = engine::order_executor::OrderExecutor::from_config(config);
     match executor.cancel_all_orders().await {
-        Ok(())  => eprintln!("✅ cancel_all_orders succeeded"),
-        Err(e)  => eprintln!("⚠️  cancel_all_orders error (may be no open orders): {e}"),
+        Ok(()) => eprintln!("✅ cancel_all_orders succeeded"),
+        Err(e) => eprintln!("⚠️  cancel_all_orders error (may be no open orders): {e}"),
     }
     std::fs::create_dir_all("logs")?;
     std::fs::write(
@@ -985,7 +1111,9 @@ fn parse_nav(line: &str) -> Option<f64> {
 
 fn parse_ts_utc(line: &str) -> Option<DateTime<Utc>> {
     let token = line.split_whitespace().next()?;
-    DateTime::parse_from_rfc3339(token).ok().map(|d| d.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(token)
+        .ok()
+        .map(|d| d.with_timezone(&Utc))
 }
 
 fn analyze_session_log(path: &str) -> std::io::Result<RunReview> {
@@ -1013,51 +1141,106 @@ fn analyze_session_log(path: &str) -> std::io::Result<RunReview> {
         prev_ts = ts;
         r.last_ts = ts.or(r.last_ts);
 
-        if line.contains(" INFO ") { r.info_lines += 1; }
-        if line.contains(" WARN ") { r.warn_lines += 1; }
-        if line.contains(" ERROR ") { r.error_lines += 1; }
-        if l.contains("rn1 signal received") { r.signals += 1; }
-        if l.contains("paper order filled") { r.fills += 1; }
-        if l.contains("aborted") || l.contains("abort") { r.aborts += 1; }
-        if l.contains("skipped") { r.skips += 1; }
-        if l.contains("risk blocked") { r.risk_blocked += 1; }
-        if l.contains("liquidity guard downsized") { r.liquidity_downsized += 1; }
-        if l.contains("websocket handshake complete") { r.ws_handshake_ok += 1; }
-        if l.contains("subscribed to markets") { r.ws_subscribed += 1; }
-        if l.contains("websocket closed cleanly") { r.ws_closed_cleanly += 1; }
-        if l.contains("reconnect requested for updated market subscriptions") { r.ws_reconnect_requested += 1; }
-        if l.contains("reconnect request suppressed by debounce") { r.ws_reconnect_suppressed += 1; }
-        if l.contains("parse") && l.contains("ws") { r.ws_parse_errors += 1; }
+        if line.contains(" INFO ") {
+            r.info_lines += 1;
+        }
+        if line.contains(" WARN ") {
+            r.warn_lines += 1;
+        }
+        if line.contains(" ERROR ") {
+            r.error_lines += 1;
+        }
+        if l.contains("rn1 signal received") {
+            r.signals += 1;
+        }
+        if l.contains("paper order filled") {
+            r.fills += 1;
+        }
+        if l.contains("aborted") || l.contains("abort") {
+            r.aborts += 1;
+        }
+        if l.contains("skipped") {
+            r.skips += 1;
+        }
+        if l.contains("risk blocked") {
+            r.risk_blocked += 1;
+        }
+        if l.contains("liquidity guard downsized") {
+            r.liquidity_downsized += 1;
+        }
+        if l.contains("websocket handshake complete") {
+            r.ws_handshake_ok += 1;
+        }
+        if l.contains("subscribed to markets") {
+            r.ws_subscribed += 1;
+        }
+        if l.contains("websocket closed cleanly") {
+            r.ws_closed_cleanly += 1;
+        }
+        if l.contains("reconnect requested for updated market subscriptions") {
+            r.ws_reconnect_requested += 1;
+        }
+        if l.contains("reconnect request suppressed by debounce") {
+            r.ws_reconnect_suppressed += 1;
+        }
+        if l.contains("parse") && l.contains("ws") {
+            r.ws_parse_errors += 1;
+        }
         if l.contains("ws parser session summary") {
             r.ws_parser_summary_lines += 1;
             if let Some(i) = l.find("parsed=") {
-                let num: String = l[i + 7..].chars().take_while(|c| c.is_ascii_digit()).collect();
+                let num: String = l[i + 7..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
                 r.ws_parser_parsed_total += num.parse::<usize>().unwrap_or(0);
             }
             if let Some(i) = l.find("unknown=") {
-                let num: String = l[i + 8..].chars().take_while(|c| c.is_ascii_digit()).collect();
+                let num: String = l[i + 8..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
                 r.ws_parser_unknown_total += num.parse::<usize>().unwrap_or(0);
             }
             if let Some(i) = l.find("parse_failed=") {
-                let num: String = l[i + 13..].chars().take_while(|c| c.is_ascii_digit()).collect();
+                let num: String = l[i + 13..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
                 r.ws_parser_failed_total += num.parse::<usize>().unwrap_or(0);
             }
         }
-        if l.contains("reconnect") { r.reconnect_hints += 1; }
-        if l.contains("engine::rn1_poller: poll cycle") { r.rn1_poll_cycles += 1; }
-        if l.contains("rn1 poller metrics") { r.rn1_poller_metrics_lines += 1; }
-        if l.contains("signal channel full") { r.signal_channel_full += 1; }
+        if l.contains("reconnect") {
+            r.reconnect_hints += 1;
+        }
+        if l.contains("engine::rn1_poller: poll cycle") {
+            r.rn1_poll_cycles += 1;
+        }
+        if l.contains("rn1 poller metrics") {
+            r.rn1_poller_metrics_lines += 1;
+        }
+        if l.contains("signal channel full") {
+            r.signal_channel_full += 1;
+        }
         if l.contains("twin") {
             r.twin_mentions += 1;
-            if l.contains("fill") { r.twin_fill_hints += 1; }
-            if l.contains("close") || l.contains("autoclaim") || l.contains("tp") || l.contains("sl") {
+            if l.contains("fill") {
+                r.twin_fill_hints += 1;
+            }
+            if l.contains("close")
+                || l.contains("autoclaim")
+                || l.contains("tp")
+                || l.contains("sl")
+            {
                 r.twin_close_hints += 1;
             }
         }
 
         if let Some(nav) = parse_nav(&line) {
             r.nav_points += 1;
-            if r.nav_first.is_none() { r.nav_first = Some(nav); }
+            if r.nav_first.is_none() {
+                r.nav_first = Some(nav);
+            }
             if let Some(prev) = prev_nav {
                 r.nav_step_abs_sum += (nav - prev).abs();
             }
@@ -1083,15 +1266,31 @@ fn write_postrun_review(session_log_path: &str) -> Result<String> {
         _ => 0.0,
     };
     let attempts = review.fills + review.aborts + review.skips;
-    let fill_rate = if attempts > 0 { (review.fills as f64 / attempts as f64) * 100.0 } else { 0.0 };
-    let abort_rate = if attempts > 0 { (review.aborts as f64 / attempts as f64) * 100.0 } else { 0.0 };
-    let skip_rate = if attempts > 0 { (review.skips as f64 / attempts as f64) * 100.0 } else { 0.0 };
+    let fill_rate = if attempts > 0 {
+        (review.fills as f64 / attempts as f64) * 100.0
+    } else {
+        0.0
+    };
+    let abort_rate = if attempts > 0 {
+        (review.aborts as f64 / attempts as f64) * 100.0
+    } else {
+        0.0
+    };
+    let skip_rate = if attempts > 0 {
+        (review.skips as f64 / attempts as f64) * 100.0
+    } else {
+        0.0
+    };
 
-    let (ret_pct, nav_swing_pct) = match (review.nav_first, review.nav_last, review.nav_min, review.nav_max) {
-        (Some(s), Some(e), Some(nmin), Some(nmax)) if s > 0.0 => (
-            ((e - s) / s) * 100.0,
-            ((nmax - nmin) / s) * 100.0,
-        ),
+    let (ret_pct, nav_swing_pct) = match (
+        review.nav_first,
+        review.nav_last,
+        review.nav_min,
+        review.nav_max,
+    ) {
+        (Some(s), Some(e), Some(nmin), Some(nmax)) if s > 0.0 => {
+            (((e - s) / s) * 100.0, ((nmax - nmin) / s) * 100.0)
+        }
         _ => (0.0, 0.0),
     };
 
@@ -1116,7 +1315,9 @@ fn write_postrun_review(session_log_path: &str) -> Result<String> {
         Some(s) if s > 0.0 => (review.nav_step_abs_sum / s) * 100.0,
         _ => 0.0,
     };
-    let session_size_bytes = std::fs::metadata(session_log_path).map(|m| m.len()).unwrap_or(0);
+    let session_size_bytes = std::fs::metadata(session_log_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
     let paper_state = "logs\\paper_portfolio_state.json";
     let warm_state = "logs\\paper_warm_state.json";
     let rej_state = "logs\\paper_rejections.json";
@@ -1154,44 +1355,128 @@ fn write_postrun_review(session_log_path: &str) -> Result<String> {
     writeln!(file)?;
     writeln!(file, "[1] EXECUTIVE SUMMARY")?;
     writeln!(file, "duration_min={duration_min:.2}")?;
-    writeln!(file, "signals={} attempts={} fills={} aborts={} skips={}", review.signals, attempts, review.fills, review.aborts, review.skips)?;
-    writeln!(file, "fill_rate_pct={fill_rate:.2} abort_rate_pct={abort_rate:.2} skip_rate_pct={skip_rate:.2}")?;
-    writeln!(file, "nav_return_pct={ret_pct:.2} nav_swing_pct={nav_swing_pct:.2}")?;
-    writeln!(file, "nav_points={} nav_jitter_pct={nav_jitter_pct:.2}", review.nav_points)?;
-    writeln!(file, "log_lines={} info={} warn={} error={}", review.total_lines, review.info_lines, review.warn_lines, review.error_lines)?;
+    writeln!(
+        file,
+        "signals={} attempts={} fills={} aborts={} skips={}",
+        review.signals, attempts, review.fills, review.aborts, review.skips
+    )?;
+    writeln!(
+        file,
+        "fill_rate_pct={fill_rate:.2} abort_rate_pct={abort_rate:.2} skip_rate_pct={skip_rate:.2}"
+    )?;
+    writeln!(
+        file,
+        "nav_return_pct={ret_pct:.2} nav_swing_pct={nav_swing_pct:.2}"
+    )?;
+    writeln!(
+        file,
+        "nav_points={} nav_jitter_pct={nav_jitter_pct:.2}",
+        review.nav_points
+    )?;
+    writeln!(
+        file,
+        "log_lines={} info={} warn={} error={}",
+        review.total_lines, review.info_lines, review.warn_lines, review.error_lines
+    )?;
     writeln!(file)?;
     writeln!(file, "[2] DATA SOURCES COVERAGE")?;
     writeln!(file, "session_log_bytes={session_size_bytes}")?;
-    writeln!(file, "paper_state_exists={} warm_state_exists={} rejection_state_exists={}",
+    writeln!(
+        file,
+        "paper_state_exists={} warm_state_exists={} rejection_state_exists={}",
         std::path::Path::new(paper_state).exists(),
         std::path::Path::new(warm_state).exists(),
         std::path::Path::new(rej_state).exists()
     )?;
     writeln!(file)?;
     writeln!(file, "[3] CONNECTIVITY & INGEST QUALITY")?;
-    writeln!(file, "ws_handshake_ok={} ws_subscribed={} ws_closed_cleanly={}", review.ws_handshake_ok, review.ws_subscribed, review.ws_closed_cleanly)?;
-    writeln!(file, "ws_reconnect_requested={} ws_reconnect_suppressed={} reconnect_hints={}", review.ws_reconnect_requested, review.ws_reconnect_suppressed, review.reconnect_hints)?;
+    writeln!(
+        file,
+        "ws_handshake_ok={} ws_subscribed={} ws_closed_cleanly={}",
+        review.ws_handshake_ok, review.ws_subscribed, review.ws_closed_cleanly
+    )?;
+    writeln!(
+        file,
+        "ws_reconnect_requested={} ws_reconnect_suppressed={} reconnect_hints={}",
+        review.ws_reconnect_requested, review.ws_reconnect_suppressed, review.reconnect_hints
+    )?;
     writeln!(file, "ws_parser_summary_lines={} parser_parsed_total={} parser_unknown_total={} parser_failed_total={}",
         review.ws_parser_summary_lines, review.ws_parser_parsed_total, review.ws_parser_unknown_total, review.ws_parser_failed_total)?;
     writeln!(file, "parser_unknown_rate_pct={parser_unknown_rate:.3} parser_failed_rate_pct={parser_fail_rate:.3}")?;
-    writeln!(file, "ws_parse_error_hints={} signal_channel_full={}", review.ws_parse_errors, review.signal_channel_full)?;
-    writeln!(file, "assessment={}", if review.ws_parse_errors > 0 || parser_fail_rate > 0.1 { "degraded" } else { "stable" })?;
+    writeln!(
+        file,
+        "ws_parse_error_hints={} signal_channel_full={}",
+        review.ws_parse_errors, review.signal_channel_full
+    )?;
+    writeln!(
+        file,
+        "assessment={}",
+        if review.ws_parse_errors > 0 || parser_fail_rate > 0.1 {
+            "degraded"
+        } else {
+            "stable"
+        }
+    )?;
     writeln!(file)?;
     writeln!(file, "[4] SIGNAL PIPELINE DIAGNOSTIC")?;
-    writeln!(file, "rn1_poll_cycles={} rn1_poller_metrics_lines={} signals_detected={}", review.rn1_poll_cycles, review.rn1_poller_metrics_lines, review.signals)?;
-    writeln!(file, "assessment={}", if review.rn1_poll_cycles == 0 { "poller_inactive_or_unlogged" } else { "poller_active" })?;
+    writeln!(
+        file,
+        "rn1_poll_cycles={} rn1_poller_metrics_lines={} signals_detected={}",
+        review.rn1_poll_cycles, review.rn1_poller_metrics_lines, review.signals
+    )?;
+    writeln!(
+        file,
+        "assessment={}",
+        if review.rn1_poll_cycles == 0 {
+            "poller_inactive_or_unlogged"
+        } else {
+            "poller_active"
+        }
+    )?;
     writeln!(file)?;
     writeln!(file, "[5] EXECUTION QUALITY")?;
-    writeln!(file, "risk_blocked={} liquidity_downsized={}", review.risk_blocked, review.liquidity_downsized)?;
-    writeln!(file, "assessment={}", if fill_rate < 20.0 { "low_fill_efficiency" } else { "acceptable" })?;
+    writeln!(
+        file,
+        "risk_blocked={} liquidity_downsized={}",
+        review.risk_blocked, review.liquidity_downsized
+    )?;
+    writeln!(
+        file,
+        "assessment={}",
+        if fill_rate < 20.0 {
+            "low_fill_efficiency"
+        } else {
+            "acceptable"
+        }
+    )?;
     writeln!(file)?;
     writeln!(file, "[6] BLINK TWIN DIAGNOSTIC")?;
-    writeln!(file, "twin_mentions={} twin_fill_hints={} twin_close_hints={}", review.twin_mentions, review.twin_fill_hints, review.twin_close_hints)?;
-    writeln!(file, "assessment={}", if review.twin_fill_hints > 0 && review.twin_close_hints == 0 { "twin_not_rotating" } else { "ok_or_no_data" })?;
+    writeln!(
+        file,
+        "twin_mentions={} twin_fill_hints={} twin_close_hints={}",
+        review.twin_mentions, review.twin_fill_hints, review.twin_close_hints
+    )?;
+    writeln!(
+        file,
+        "assessment={}",
+        if review.twin_fill_hints > 0 && review.twin_close_hints == 0 {
+            "twin_not_rotating"
+        } else {
+            "ok_or_no_data"
+        }
+    )?;
     writeln!(file)?;
     writeln!(file, "[7] REALISM GAP DIAGNOSTIC")?;
     writeln!(file, "realism_alert={realism_alert}")?;
-    writeln!(file, "rule_return_per_min_pct={:.3}", if duration_min > 0.0 { ret_pct.abs() / duration_min } else { 0.0 })?;
+    writeln!(
+        file,
+        "rule_return_per_min_pct={:.3}",
+        if duration_min > 0.0 {
+            ret_pct.abs() / duration_min
+        } else {
+            0.0
+        }
+    )?;
     writeln!(file, "rule_nav_swing_pct={nav_swing_pct:.2}")?;
     writeln!(file, "max_log_gap_secs={}", review.max_gap_secs)?;
     writeln!(file)?;
@@ -1202,7 +1487,10 @@ fn write_postrun_review(session_log_path: &str) -> Result<String> {
     writeln!(file)?;
     writeln!(file, "[9] ACTIONABLE NEXT TUNING")?;
     writeln!(file, "- Keep PAPER_REALISM_MODE=true")?;
-    writeln!(file, "- If realism_alert=HIGH: increase PAPER_FILL_WINDOW_MS and PAPER_ADVERSE_FILL_BPS")?;
+    writeln!(
+        file,
+        "- If realism_alert=HIGH: increase PAPER_FILL_WINDOW_MS and PAPER_ADVERSE_FILL_BPS"
+    )?;
     writeln!(file, "- If abort_rate_pct>60: reduce PAPER_SIZE_MULTIPLIER and raise PAPER_DEPTH_CAPTURE_RATIO cautiously")?;
     writeln!(file, "- If twin_not_rotating: tighten TWIN_AUTOCLAIM_TIERS and verify live market price coverage")?;
     writeln!(file, "- If max_log_gap_secs>=3 and ws_reconnect_requested high: increase WS_RECONNECT_DEBOUNCE_MS")?;

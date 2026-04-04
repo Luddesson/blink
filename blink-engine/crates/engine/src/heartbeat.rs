@@ -34,9 +34,9 @@ use crate::order_executor::OrderExecutor;
 /// Default heartbeat interval.  Polymarket recommends ≤ 30 s.
 const DEFAULT_INTERVAL_SECS: u64 = 15;
 /// Minimum allowed interval — prevents accidental hammering.
-const MIN_INTERVAL_SECS:     u64 = 5;
+const MIN_INTERVAL_SECS: u64 = 5;
 /// Maximum allowed interval — beyond this the session risks expiry.
-const MAX_INTERVAL_SECS:     u64 = 29;
+const MAX_INTERVAL_SECS: u64 = 29;
 
 // ─── SLO counters ─────────────────────────────────────────────────────────────
 
@@ -45,17 +45,17 @@ const MAX_INTERVAL_SECS:     u64 = 29;
 #[derive(Debug, Default)]
 pub struct HeartbeatMetrics {
     /// Total heartbeats sent successfully.
-    pub ok_count:      AtomicU64,
+    pub ok_count: AtomicU64,
     /// Total heartbeats that received a non-2xx or network error response.
-    pub fail_count:    AtomicU64,
+    pub fail_count: AtomicU64,
     /// Unix-ms timestamp of the last successful heartbeat (0 = never).
-    pub last_ok_ms:    AtomicU64,
+    pub last_ok_ms: AtomicU64,
 }
 
 impl HeartbeatMetrics {
     pub fn snapshot(&self) -> HeartbeatSnapshot {
         HeartbeatSnapshot {
-            ok_count:   self.ok_count.load(Ordering::Relaxed),
+            ok_count: self.ok_count.load(Ordering::Relaxed),
             fail_count: self.fail_count.load(Ordering::Relaxed),
             last_ok_ms: self.last_ok_ms.load(Ordering::Relaxed),
         }
@@ -65,7 +65,7 @@ impl HeartbeatMetrics {
 /// Point-in-time snapshot of heartbeat health for dashboards / alerts.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HeartbeatSnapshot {
-    pub ok_count:   u64,
+    pub ok_count: u64,
     pub fail_count: u64,
     /// Last successful heartbeat timestamp in Unix milliseconds.
     pub last_ok_ms: u64,
@@ -99,10 +99,10 @@ impl HeartbeatSnapshot {
 /// Returns the `Arc<HeartbeatMetrics>` handle so callers can read SLO state.
 pub fn spawn_heartbeat_worker(
     executor: OrderExecutor,
-    metrics:  Option<Arc<HeartbeatMetrics>>,
+    metrics: Option<Arc<HeartbeatMetrics>>,
 ) -> Arc<HeartbeatMetrics> {
     let metrics = metrics.unwrap_or_default();
-    let m       = Arc::clone(&metrics);
+    let m = Arc::clone(&metrics);
 
     let interval_secs = std::env::var("HEARTBEAT_INTERVAL_SECS")
         .ok()
@@ -148,7 +148,11 @@ mod tests {
 
     #[test]
     fn snapshot_stale_when_never_sent() {
-        let snap = HeartbeatSnapshot { ok_count: 0, fail_count: 0, last_ok_ms: 0 };
+        let snap = HeartbeatSnapshot {
+            ok_count: 0,
+            fail_count: 0,
+            last_ok_ms: 0,
+        };
         assert!(snap.is_stale(30_000));
     }
 
@@ -158,7 +162,11 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let snap = HeartbeatSnapshot { ok_count: 1, fail_count: 0, last_ok_ms: now_ms };
+        let snap = HeartbeatSnapshot {
+            ok_count: 1,
+            fail_count: 0,
+            last_ok_ms: now_ms,
+        };
         assert!(!snap.is_stale(30_000));
     }
 
@@ -170,7 +178,11 @@ mod tests {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0)
             .saturating_sub(60_001);
-        let snap = HeartbeatSnapshot { ok_count: 5, fail_count: 0, last_ok_ms: old_ms };
+        let snap = HeartbeatSnapshot {
+            ok_count: 5,
+            fail_count: 0,
+            last_ok_ms: old_ms,
+        };
         assert!(snap.is_stale(60_000));
     }
 }

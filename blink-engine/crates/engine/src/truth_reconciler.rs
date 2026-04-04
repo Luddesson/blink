@@ -58,7 +58,7 @@ pub enum FillLifecycle {
     /// Exchange confirmed the fill.  Local portfolio/risk state has been
     /// updated using these exchange-confirmed amounts.
     Confirmed {
-        actual_size_usdc:   f64,
+        actual_size_usdc: f64,
         actual_size_shares: f64,
     },
 
@@ -184,7 +184,9 @@ pub fn process_order_status(
             elapsed_secs = elapsed,
             "⚠️  Order pending >{MAX_PENDING_AGE_SECS}s — suspected stale; operator review recommended"
         );
-        return ReconciliationOutcome::SuspectedStale { elapsed_secs: elapsed };
+        return ReconciliationOutcome::SuspectedStale {
+            elapsed_secs: elapsed,
+        };
     }
 
     let state = status.status.to_ascii_lowercase();
@@ -192,10 +194,8 @@ pub fn process_order_status(
     match state.as_str() {
         // ── Filled ────────────────────────────────────────────────────────
         "matched" | "filled" => {
-            let size_matched_shares =
-                parse_decimal_field(&status.size_matched, "size_matched");
-            let remaining =
-                parse_decimal_field(&status.remaining_amount, "remaining_amount");
+            let size_matched_shares = parse_decimal_field(&status.size_matched, "size_matched");
+            let remaining = parse_decimal_field(&status.remaining_amount, "remaining_amount");
 
             let (actual_shares, actual_usdc) = if size_matched_shares > 0.0 {
                 let usdc = size_matched_shares * pending.submitted_price;
@@ -238,16 +238,16 @@ pub fn process_order_status(
             }
 
             pending.lifecycle = FillLifecycle::Confirmed {
-                actual_size_usdc:   actual_usdc,
+                actual_size_usdc: actual_usdc,
                 actual_size_shares: actual_shares,
             };
 
             ReconciliationOutcome::Fill {
-                token_id:           pending.token_id.clone(),
-                side:               pending.side,
-                actual_size_usdc:   actual_usdc,
+                token_id: pending.token_id.clone(),
+                side: pending.side,
+                actual_size_usdc: actual_usdc,
                 actual_size_shares: actual_shares,
-                submitted_price:    pending.submitted_price,
+                submitted_price: pending.submitted_price,
                 partial_fill,
                 fill_ratio,
             }
@@ -261,7 +261,9 @@ pub fn process_order_status(
                 token_id = %pending.token_id,
                 "Order cancelled by exchange — no fill recorded"
             );
-            pending.lifecycle = FillLifecycle::NoFill { reason: reason.clone() };
+            pending.lifecycle = FillLifecycle::NoFill {
+                reason: reason.clone(),
+            };
             ReconciliationOutcome::NoFill {
                 token_id: pending.token_id.clone(),
                 reason,
@@ -275,7 +277,9 @@ pub fn process_order_status(
                 token_id = %pending.token_id,
                 "Order rejected by exchange — no fill recorded"
             );
-            pending.lifecycle = FillLifecycle::NoFill { reason: reason.clone() };
+            pending.lifecycle = FillLifecycle::NoFill {
+                reason: reason.clone(),
+            };
             ReconciliationOutcome::NoFill {
                 token_id: pending.token_id.clone(),
                 reason,
@@ -289,7 +293,9 @@ pub fn process_order_status(
                 token_id = %pending.token_id,
                 "Order expired on exchange — no fill recorded"
             );
-            pending.lifecycle = FillLifecycle::NoFill { reason: reason.clone() };
+            pending.lifecycle = FillLifecycle::NoFill {
+                reason: reason.clone(),
+            };
             ReconciliationOutcome::NoFill {
                 token_id: pending.token_id.clone(),
                 reason,
@@ -318,13 +324,13 @@ pub fn process_order_status(
 /// exchange's actual open order state.
 #[derive(Debug, Clone)]
 pub struct DriftEvent {
-    pub token_id:    String,
+    pub token_id: String,
     /// Shares held according to local portfolio.
-    pub local_size:  f64,
+    pub local_size: f64,
     /// Shares held according to exchange snapshot.
     pub exchange_size: f64,
     /// Absolute percentage divergence.
-    pub drift_pct:   f64,
+    pub drift_pct: f64,
     pub detected_at: std::time::SystemTime,
 }
 
@@ -335,7 +341,7 @@ pub struct DriftEvent {
 /// * `local_positions`      — `token_id → shares` from the local portfolio.
 /// * `exchange_open_orders` — `token_id → shares` from `GET /orders` snapshot.
 pub fn detect_position_drift(
-    local_positions:      &HashMap<String, f64>,
+    local_positions: &HashMap<String, f64>,
     exchange_open_orders: &HashMap<String, f64>,
 ) -> Vec<DriftEvent> {
     let mut events = Vec::new();
@@ -358,11 +364,11 @@ pub fn detect_position_drift(
                 "🚨 Exchange has open order not tracked locally — possible ghost position"
             );
             events.push(DriftEvent {
-                token_id:     token_id.clone(),
-                local_size:   0.0,
+                token_id: token_id.clone(),
+                local_size: 0.0,
                 exchange_size,
-                drift_pct:    100.0,
-                detected_at:  now,
+                drift_pct: 100.0,
+                detected_at: now,
             });
         }
     }
@@ -371,10 +377,10 @@ pub fn detect_position_drift(
 }
 
 fn build_drift_event(
-    token_id:      &str,
-    local_size:    f64,
+    token_id: &str,
+    local_size: f64,
     exchange_size: f64,
-    now:           std::time::SystemTime,
+    now: std::time::SystemTime,
 ) -> Option<DriftEvent> {
     let max = local_size.max(exchange_size);
     if max < 0.001 {
@@ -406,7 +412,11 @@ fn build_drift_event(
 fn parse_decimal_field(field: &Option<String>, name: &str) -> f64 {
     match field {
         Some(s) => s.parse::<f64>().unwrap_or_else(|_| {
-            warn!(field = name, raw = s, "Failed to parse decimal field from exchange");
+            warn!(
+                field = name,
+                raw = s,
+                "Failed to parse decimal field from exchange"
+            );
             0.0
         }),
         None => 0.0,
@@ -430,14 +440,18 @@ mod tests {
         )
     }
 
-    fn make_status(status: &str, size_matched: Option<&str>, remaining: Option<&str>) -> OrderStatus {
+    fn make_status(
+        status: &str,
+        size_matched: Option<&str>,
+        remaining: Option<&str>,
+    ) -> OrderStatus {
         OrderStatus {
-            id:               "order-123".to_string(),
-            status:           status.to_string(),
-            maker_amount:     None,
-            taker_amount:     None,
+            id: "order-123".to_string(),
+            status: status.to_string(),
+            maker_amount: None,
+            taker_amount: None,
             remaining_amount: remaining.map(str::to_string),
-            size_matched:     size_matched.map(str::to_string),
+            size_matched: size_matched.map(str::to_string),
         }
     }
 
@@ -447,7 +461,12 @@ mod tests {
         let status = make_status("matched", Some("200"), None); // 200 shares × $0.50 = $100
         let outcome = process_order_status(&mut order, &status);
         match outcome {
-            ReconciliationOutcome::Fill { actual_size_usdc, partial_fill, fill_ratio, .. } => {
+            ReconciliationOutcome::Fill {
+                actual_size_usdc,
+                partial_fill,
+                fill_ratio,
+                ..
+            } => {
                 assert!((actual_size_usdc - 100.0).abs() < 0.01);
                 assert!(!partial_fill);
                 assert!((fill_ratio - 1.0).abs() < 0.01);
@@ -464,7 +483,11 @@ mod tests {
         let status = make_status("matched", Some("100"), Some("100"));
         let outcome = process_order_status(&mut order, &status);
         match outcome {
-            ReconciliationOutcome::Fill { partial_fill, actual_size_usdc, .. } => {
+            ReconciliationOutcome::Fill {
+                partial_fill,
+                actual_size_usdc,
+                ..
+            } => {
                 assert!(partial_fill, "Should be flagged as partial fill");
                 assert!((actual_size_usdc - 50.0).abs() < 0.01);
             }

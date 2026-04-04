@@ -17,25 +17,25 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
-use crate::activity_log::{ActivityLog, EntryKind, push as log_push};
+use crate::activity_log::{push as log_push, ActivityLog, EntryKind};
 use crate::latency_tracker::LatencyStats;
 use crate::order_book::{OrderBook, OrderBookStore};
-use crate::paper_portfolio::{DRIFT_THRESHOLD, PaperPortfolio, STARTING_BALANCE_USDC};
+use crate::paper_portfolio::{PaperPortfolio, DRIFT_THRESHOLD, STARTING_BALANCE_USDC};
 use crate::risk_manager::{RiskConfig, RiskManager};
-use crate::types::{OrderSide, RN1Signal, format_price};
+use crate::types::{format_price, OrderSide, RN1Signal};
 
 // ─── PaperEngine ─────────────────────────────────────────────────────────────
 
 /// Paper trading engine — simulates order placement without touching real funds.
 pub struct PaperEngine {
     pub portfolio: Arc<Mutex<PaperPortfolio>>,
-    book_store:    Arc<OrderBookStore>,
+    book_store: Arc<OrderBookStore>,
     /// Optional activity log for TUI display. `None` → log to stdout only.
-    activity:      Option<ActivityLog>,
+    activity: Option<ActivityLog>,
     /// Risk manager — shared with TUI for runtime config editing.
-    pub risk:      Arc<std::sync::Mutex<RiskManager>>,
+    pub risk: Arc<std::sync::Mutex<RiskManager>>,
     /// Active fill-window snapshot for the TUI failsafe visualizer.
-    pub fill_window:  Arc<std::sync::Mutex<Option<FillWindowSnapshot>>>,
+    pub fill_window: Arc<std::sync::Mutex<Option<FillWindowSnapshot>>>,
     /// Detection-to-fill latency samples for the TUI histogram.
     pub fill_latency: Arc<std::sync::Mutex<LatencyStats>>,
     signal_queue: Arc<Mutex<BinaryHeap<PrioritySignal>>>,
@@ -54,13 +54,13 @@ pub struct PaperEngine {
 /// Snapshot of the currently active fill window, if any.
 #[derive(Debug, Clone)]
 pub struct FillWindowSnapshot {
-    pub token_id:      String,
-    pub side:          OrderSide,
-    pub entry_price:   f64,
+    pub token_id: String,
+    pub side: OrderSide,
+    pub entry_price: f64,
     pub current_price: Option<f64>,
-    pub drift_pct:     Option<f64>,
-    pub elapsed:       Duration,
-    pub countdown:     Duration,
+    pub drift_pct: Option<f64>,
+    pub elapsed: Duration,
+    pub countdown: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -250,7 +250,10 @@ impl PaperEngine {
             println!();
             println!("╔════════════════════════════════════════════════════════════╗");
             println!("║         📄  BLINK PAPER TRADING MODE ACTIVE               ║");
-            println!("║  Starting balance:  ${:<10.2}  (virtual USDC)           ║", STARTING_BALANCE_USDC);
+            println!(
+                "║  Starting balance:  ${:<10.2}  (virtual USDC)           ║",
+                STARTING_BALANCE_USDC
+            );
             println!("║  Sizing:            2% of RN1 notional, max 10% of NAV   ║");
             println!("║  Fill window:       3 s — aborts if price drifts >1.5%   ║");
             println!("║  NO REAL ORDERS WILL BE PLACED                            ║");
@@ -258,19 +261,30 @@ impl PaperEngine {
             println!();
         }
         if let Some(ref log) = activity {
-            log_push(log, EntryKind::Engine,
-                format!("Paper trading started — balance ${:.2} USDC", STARTING_BALANCE_USDC));
+            log_push(
+                log,
+                EntryKind::Engine,
+                format!(
+                    "Paper trading started — balance ${:.2} USDC",
+                    STARTING_BALANCE_USDC
+                ),
+            );
         }
         Self {
             portfolio: Arc::new(Mutex::new(PaperPortfolio::new())),
             book_store,
             activity,
-            risk: Arc::new(std::sync::Mutex::new(RiskManager::new(RiskConfig::from_env()))),
+            risk: Arc::new(std::sync::Mutex::new(RiskManager::new(
+                RiskConfig::from_env(),
+            ))),
             fill_window: Arc::new(std::sync::Mutex::new(None)),
             fill_latency: Arc::new(std::sync::Mutex::new(LatencyStats::new(1_000))),
             signal_queue: Arc::new(Mutex::new(BinaryHeap::new())),
             volatility_state: Arc::new(std::sync::Mutex::new(VolatilityState::new(120))),
-            rejection_analytics: Arc::new(Mutex::new(RejectionAnalytics { schema_version: 1, reasons: HashMap::new() })),
+            rejection_analytics: Arc::new(Mutex::new(RejectionAnalytics {
+                schema_version: 1,
+                reasons: HashMap::new(),
+            })),
             shadow_comparator: Arc::new(Mutex::new(ShadowComparator::default())),
             experiments: Arc::new(std::sync::Mutex::new(ExperimentSwitches {
                 schema_version: 1,
@@ -335,8 +349,11 @@ impl PaperEngine {
         let mut tmp = p.save_to_path(path);
         if tmp.is_ok() {
             let data = std::fs::read_to_string(path)?;
-            atomic_write_with_backup(path, &serde_json::from_str::<serde_json::Value>(&data)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?)?;
+            atomic_write_with_backup(
+                path,
+                &serde_json::from_str::<serde_json::Value>(&data)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?,
+            )?;
             tmp = Ok(());
         }
         tmp
@@ -390,8 +407,8 @@ impl PaperEngine {
         let queue_delay_ms = prio_signal.queued_at.elapsed().as_millis() as u64;
 
         // Convert scaled integers back to f64 for human-readable logic.
-        let mut entry_price      = signal.price as f64 / 1_000.0;
-        let rn1_shares       = signal.size  as f64 / 1_000.0;
+        let mut entry_price = signal.price as f64 / 1_000.0;
+        let rn1_shares = signal.size as f64 / 1_000.0;
         let rn1_notional_usd = rn1_shares * entry_price;
         let realism_mode = std::env::var("PAPER_REALISM_MODE")
             .ok()
@@ -419,7 +436,7 @@ impl PaperEngine {
             // RN1 signal price becomes a fallback mark update for this token.
             p.update_price(&signal.token_id, entry_price);
             let size = p.calculate_size_usdc(rn1_notional_usd);
-            let nav  = p.nav();
+            let nav = p.nav();
             (size, nav)
         };
 
@@ -433,13 +450,19 @@ impl PaperEngine {
             "📡 RN1 signal received"
         );
         if let Some(ref log) = self.activity {
-            log_push(log, EntryKind::Signal, format!(
-                "RN1 {} @{:.3}  notional=${:.2}  our size={}",
-                signal.side,
-                entry_price,
-                rn1_notional_usd,
-                size_usdc.map(|s| format!("${:.2}", s)).unwrap_or_else(|| "–".into()),
-            ));
+            log_push(
+                log,
+                EntryKind::Signal,
+                format!(
+                    "RN1 {} @{:.3}  notional=${:.2}  our size={}",
+                    signal.side,
+                    entry_price,
+                    rn1_notional_usd,
+                    size_usdc
+                        .map(|s| format!("${:.2}", s))
+                        .unwrap_or_else(|| "–".into()),
+                ),
+            );
         }
 
         let size_usdc = match size_usdc {
@@ -453,9 +476,14 @@ impl PaperEngine {
                     "⏭️  Signal skipped — size below minimum or no cash"
                 );
                 if let Some(ref log) = self.activity {
-                    log_push(log, EntryKind::Skip, format!(
-                        "Skipped — notional=${:.2}  cash=${:.2}", rn1_notional_usd, p.cash_usdc
-                    ));
+                    log_push(
+                        log,
+                        EntryKind::Skip,
+                        format!(
+                            "Skipped — notional=${:.2}  cash=${:.2}",
+                            rn1_notional_usd, p.cash_usdc
+                        ),
+                    );
                 }
                 self.record_rejection("size_or_cash").await;
                 return;
@@ -466,7 +494,8 @@ impl PaperEngine {
         let mut size_usdc = size_usdc;
         {
             let p = self.portfolio.lock().await;
-            let token_invested: f64 = p.positions
+            let token_invested: f64 = p
+                .positions
                 .iter()
                 .filter(|pos| pos.token_id == signal.token_id)
                 .map(|pos| pos.usdc_spent)
@@ -479,10 +508,14 @@ impl PaperEngine {
             let token_cap_usdc = current_nav * token_cap_pct;
             if token_invested >= token_cap_usdc {
                 if let Some(ref log) = self.activity {
-                    log_push(log, EntryKind::Skip, format!(
+                    log_push(
+                        log,
+                        EntryKind::Skip,
+                        format!(
                         "Skipped — token concentration cap hit token={} invested={:.2} cap={:.2}",
                         &signal.token_id, token_invested, token_cap_usdc
-                    ));
+                    ),
+                    );
                 }
                 self.record_rejection("token_concentration_cap").await;
                 let mut pm = self.portfolio.lock().await;
@@ -493,7 +526,11 @@ impl PaperEngine {
             if size_usdc > remaining_cap {
                 size_usdc = remaining_cap;
             }
-            let concentration_ratio = if token_cap_usdc > 0.0 { token_invested / token_cap_usdc } else { 0.0 };
+            let concentration_ratio = if token_cap_usdc > 0.0 {
+                token_invested / token_cap_usdc
+            } else {
+                0.0
+            };
             let sizing_decay = if concentration_ratio > 0.80 {
                 0.5
             } else if concentration_ratio > 0.60 {
@@ -530,12 +567,17 @@ impl PaperEngine {
         }
 
         // Pre-trade liquidity guard.
-        let (possibly_downsized, liq_status) = self.check_liquidity_guard(&signal.token_id, signal.side, size_usdc);
+        let (possibly_downsized, liq_status) =
+            self.check_liquidity_guard(&signal.token_id, signal.side, size_usdc);
         let size_usdc = match possibly_downsized {
             Some(s) => s,
             None => {
                 if let Some(ref log) = self.activity {
-                    log_push(log, EntryKind::Skip, "Skipped — liquidity guard reject".to_string());
+                    log_push(
+                        log,
+                        EntryKind::Skip,
+                        "Skipped — liquidity guard reject".to_string(),
+                    );
                 }
                 self.record_rejection("liquidity_reject").await;
                 return;
@@ -543,15 +585,24 @@ impl PaperEngine {
         };
         if liq_status == "downsized" {
             if let Some(ref log) = self.activity {
-                log_push(log, EntryKind::Warn, format!("Liquidity guard downsized to ${:.2}", size_usdc));
+                log_push(
+                    log,
+                    EntryKind::Warn,
+                    format!("Liquidity guard downsized to ${:.2}", size_usdc),
+                );
             }
             self.record_rejection("liquidity_downsize").await;
         }
 
         // ── Risk check ────────────────────────────────────────────────────
         if let Err(violation) = self.risk.lock().unwrap().check_pre_order(
-            size_usdc, {let p = self.portfolio.lock().await; p.positions.len()},
-            current_nav, STARTING_BALANCE_USDC,
+            size_usdc,
+            {
+                let p = self.portfolio.lock().await;
+                p.positions.len()
+            },
+            current_nav,
+            STARTING_BALANCE_USDC,
         ) {
             warn!("🛑 Risk check blocked paper order: {violation}");
             if let Some(ref log) = self.activity {
@@ -574,17 +625,25 @@ impl PaperEngine {
                 "🛑 Paper order ABORTED — price drift exceeded 1.5% during fill window"
             );
             if let Some(ref log) = self.activity {
-                log_push(log, EntryKind::Abort, format!(
-                    "ABORTED — price moved >1.5% during 3s fill window  token={:.12}…",
-                    &signal.token_id
-                ));
+                log_push(
+                    log,
+                    EntryKind::Abort,
+                    format!(
+                        "ABORTED — price moved >1.5% during 3s fill window  token={:.12}…",
+                        &signal.token_id
+                    ),
+                );
             }
             self.record_rejection("drift_abort").await;
             return;
         }
 
         let slippage_bps = self.estimate_slippage_bps(&signal.token_id, signal.side, entry_price);
-        let variant = if self.experiments.lock().unwrap().sizing_variant_b { "B" } else { "A" };
+        let variant = if self.experiments.lock().unwrap().sizing_variant_b {
+            "B"
+        } else {
+            "A"
+        };
 
         // ── Record virtual fill ───────────────────────────────────────
         self.fill_latency
@@ -609,14 +668,20 @@ impl PaperEngine {
         // Record fill in risk manager for VaR tracking.
         self.risk.lock().unwrap().record_fill(size_usdc);
 
-        self.shadow_comparator.lock().await.observations.push(ShadowFillObservation {
-            token_id: signal.token_id.clone(),
-            order_id: signal.order_id.clone(),
-            side: signal.side,
-            expected_price: self.get_market_price(&signal.token_id).unwrap_or(entry_price),
-            paper_fill_price: entry_price,
-            timestamp_ms: Utc::now().timestamp_millis(),
-        });
+        self.shadow_comparator
+            .lock()
+            .await
+            .observations
+            .push(ShadowFillObservation {
+                token_id: signal.token_id.clone(),
+                order_id: signal.order_id.clone(),
+                side: signal.side,
+                expected_price: self
+                    .get_market_price(&signal.token_id)
+                    .unwrap_or(entry_price),
+                paper_fill_price: entry_price,
+                timestamp_ms: Utc::now().timestamp_millis(),
+            });
 
         let shares = size_usdc / entry_price;
         {
@@ -633,11 +698,20 @@ impl PaperEngine {
                 "✅ Paper order FILLED"
             );
             if let Some(ref log) = self.activity {
-                log_push(log, EntryKind::Fill, format!(
-                    "FILLED #{} {} @{:.3}  {:.4} shares  ${:.2} spent  cash=${:.2}  NAV=${:.2}",
-                    pos_id, signal.side, entry_price, shares,
-                    size_usdc, p.cash_usdc, p.nav()
-                ));
+                log_push(
+                    log,
+                    EntryKind::Fill,
+                    format!(
+                        "FILLED #{} {} @{:.3}  {:.4} shares  ${:.2} spent  cash=${:.2}  NAV=${:.2}",
+                        pos_id,
+                        signal.side,
+                        entry_price,
+                        shares,
+                        size_usdc,
+                        p.cash_usdc,
+                        p.nav()
+                    ),
+                );
             }
         }
 
@@ -654,8 +728,16 @@ impl PaperEngine {
                 .iter()
                 .enumerate()
                 .filter_map(|(idx, pos)| {
-                    let title_ok = pos.market_title.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
-                    let outcome_ok = pos.market_outcome.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+                    let title_ok = pos
+                        .market_title
+                        .as_ref()
+                        .map(|s| !s.trim().is_empty())
+                        .unwrap_or(false);
+                    let outcome_ok = pos
+                        .market_outcome
+                        .as_ref()
+                        .map(|s| !s.trim().is_empty())
+                        .unwrap_or(false);
                     if title_ok && outcome_ok {
                         None
                     } else {
@@ -665,7 +747,8 @@ impl PaperEngine {
                 .collect()
         };
 
-        let mut resolved: Vec<(usize, Option<String>, Option<String>)> = Vec::with_capacity(targets.len());
+        let mut resolved: Vec<(usize, Option<String>, Option<String>)> =
+            Vec::with_capacity(targets.len());
         for (idx, token_id) in targets {
             if let Some((title, outcome)) = self.lookup_signal_metadata(&token_id, None).await {
                 resolved.push((idx, title, outcome));
@@ -678,11 +761,23 @@ impl PaperEngine {
             let Some(pos) = p.positions.get_mut(idx) else {
                 continue;
             };
-            if pos.market_title.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) && title.is_some() {
+            if pos
+                .market_title
+                .as_ref()
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true)
+                && title.is_some()
+            {
                 pos.market_title = title;
                 updated += 1;
             }
-            if pos.market_outcome.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) && outcome.is_some() {
+            if pos
+                .market_outcome
+                .as_ref()
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true)
+                && outcome.is_some()
+            {
                 pos.market_outcome = outcome;
             }
         }
@@ -693,7 +788,7 @@ impl PaperEngine {
     pub async fn print_dashboard(&self) {
         // Gather current prices outside the lock to avoid deadlock.
         let token_prices = {
-            let p      = self.portfolio.lock().await;
+            let p = self.portfolio.lock().await;
             let tokens: Vec<String> = p.positions.iter().map(|pos| pos.token_id.clone()).collect();
             tokens
                 .into_iter()
@@ -716,21 +811,36 @@ impl PaperEngine {
 
         self.run_autoclaim().await;
 
-        let p         = self.portfolio.lock().await;
-        let nav       = p.nav();
+        let p = self.portfolio.lock().await;
+        let nav = p.nav();
         let nav_delta = nav - STARTING_BALANCE_USDC;
-        let nav_pct   = nav_delta / STARTING_BALANCE_USDC * 100.0;
+        let nav_pct = nav_delta / STARTING_BALANCE_USDC * 100.0;
 
         println!();
         println!("╔════════════════════════════════════════════════════════════╗");
         println!("║            📄  BLINK PAPER TRADING DASHBOARD              ║");
         println!("╠════════════════════════════════════════════════════════════╣");
-        println!("║  Cash:             ${:<10.2} USDC                        ║", p.cash_usdc);
-        println!("║  Invested:         ${:<10.2} USDC                        ║", p.total_invested());
-        println!("║  Unrealized P&L:   {:>+10.4} USDC                        ║", p.unrealized_pnl());
-        println!("║  Realized P&L:     {:>+10.4} USDC                        ║", p.realized_pnl());
+        println!(
+            "║  Cash:             ${:<10.2} USDC                        ║",
+            p.cash_usdc
+        );
+        println!(
+            "║  Invested:         ${:<10.2} USDC                        ║",
+            p.total_invested()
+        );
+        println!(
+            "║  Unrealized P&L:   {:>+10.4} USDC                        ║",
+            p.unrealized_pnl()
+        );
+        println!(
+            "║  Realized P&L:     {:>+10.4} USDC                        ║",
+            p.realized_pnl()
+        );
         println!("║  ─────────────────────────────────────────────────────    ║");
-        println!("║  NAV:              ${:<8.2} ({:>+.2}%)                    ║", nav, nav_pct);
+        println!(
+            "║  NAV:              ${:<8.2} ({:>+.2}%)                    ║",
+            nav, nav_pct
+        );
         println!("╠════════════════════════════════════════════════════════════╣");
         println!(
             "║  Signals: {:>3}  │  Filled: {:>3}  │  Aborted: {:>3}  │  Skipped: {:>3}  ║",
@@ -741,8 +851,8 @@ impl PaperEngine {
             println!("╠════════════════════════════════════════════════════════════╣");
             println!("║  OPEN POSITIONS                                            ║");
             for pos in &p.positions {
-                let age_s   = pos.opened_at.elapsed().as_secs();
-                let upnl    = pos.unrealized_pnl();
+                let age_s = pos.opened_at.elapsed().as_secs();
+                let upnl = pos.unrealized_pnl();
                 let upnl_pc = pos.unrealized_pnl_pct();
                 // Truncate token_id for display (first 12 chars + "…")
                 let tid_short = if pos.token_id.len() > 14 {
@@ -752,9 +862,15 @@ impl PaperEngine {
                 };
                 println!(
                     "║  #{:<3} {} {} @{:.3} → {:.3} | {:>6.2}sh | {:>+.3}$ ({:>+.1}%) | {:>4}s  ║",
-                    pos.id, pos.side, tid_short,
-                    pos.entry_price, pos.current_price,
-                    pos.shares, upnl, upnl_pc, age_s,
+                    pos.id,
+                    pos.side,
+                    tid_short,
+                    pos.entry_price,
+                    pos.current_price,
+                    pos.shares,
+                    upnl,
+                    upnl_pc,
+                    age_s,
                 );
             }
         } else {
@@ -767,8 +883,11 @@ impl PaperEngine {
             for trade in p.closed_trades.iter().rev().take(5) {
                 println!(
                     "║  {} @{:.3}→{:.3} | {:>+.3}$ ({})                     ║",
-                    trade.side, trade.entry_price, trade.exit_price,
-                    trade.realized_pnl, trade.reason,
+                    trade.side,
+                    trade.entry_price,
+                    trade.exit_price,
+                    trade.realized_pnl,
+                    trade.reason,
                 );
             }
         }
@@ -783,12 +902,7 @@ impl PaperEngine {
     ///
     /// Defaults to **immediate fill** (0 ms) for ultra-low-latency paper mode.
     /// Set `PAPER_FILL_WINDOW_MS > 0` to re-enable timed drift checks.
-    async fn check_fill_window(
-        &self,
-        token_id:    &str,
-        entry_price: f64,
-        side:        OrderSide,
-    ) -> bool {
+    async fn check_fill_window(&self, token_id: &str, entry_price: f64, side: OrderSide) -> bool {
         let realism_mode = std::env::var("PAPER_REALISM_MODE")
             .ok()
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
@@ -807,8 +921,12 @@ impl PaperEngine {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(100)
             .max(1);
-        let (countdown_ms, check_interval_ms) =
-            self.adaptive_fill_policy(token_id, effective_countdown_ms, base_check_interval_ms, entry_price);
+        let (countdown_ms, check_interval_ms) = self.adaptive_fill_policy(
+            token_id,
+            effective_countdown_ms,
+            base_check_interval_ms,
+            entry_price,
+        );
         let countdown = Duration::from_millis(countdown_ms);
 
         if countdown_ms == 0 {
@@ -817,12 +935,15 @@ impl PaperEngine {
         }
 
         let started_at = Instant::now();
-        self.fill_window.lock().unwrap().replace(FillWindowSnapshot::new(
-            token_id.to_string(),
-            side,
-            entry_price,
-            countdown,
-        ));
+        self.fill_window
+            .lock()
+            .unwrap()
+            .replace(FillWindowSnapshot::new(
+                token_id.to_string(),
+                side,
+                entry_price,
+                countdown,
+            ));
 
         let checks = (countdown_ms / check_interval_ms).max(1);
         for check in 0..checks {
@@ -833,15 +954,18 @@ impl PaperEngine {
                 let drift = (current - entry_price).abs() / entry_price;
                 let drift_pct = drift * 100.0;
                 self.volatility_state.lock().unwrap().push(current);
-                self.fill_window.lock().unwrap().replace(FillWindowSnapshot {
-                    token_id: token_id.to_string(),
-                    side,
-                    entry_price,
-                    current_price: Some(current),
-                    drift_pct: Some(drift_pct),
-                    elapsed,
-                    countdown,
-                });
+                self.fill_window
+                    .lock()
+                    .unwrap()
+                    .replace(FillWindowSnapshot {
+                        token_id: token_id.to_string(),
+                        side,
+                        entry_price,
+                        current_price: Some(current),
+                        drift_pct: Some(drift_pct),
+                        elapsed,
+                        countdown,
+                    });
                 if drift > DRIFT_THRESHOLD {
                     warn!(
                         check        = check,
@@ -854,15 +978,18 @@ impl PaperEngine {
                     return false;
                 }
             } else {
-                self.fill_window.lock().unwrap().replace(FillWindowSnapshot {
-                    token_id: token_id.to_string(),
-                    side,
-                    entry_price,
-                    current_price: None,
-                    drift_pct: None,
-                    elapsed,
-                    countdown,
-                });
+                self.fill_window
+                    .lock()
+                    .unwrap()
+                    .replace(FillWindowSnapshot {
+                        token_id: token_id.to_string(),
+                        side,
+                        entry_price,
+                        current_price: None,
+                        drift_pct: None,
+                        elapsed,
+                        countdown,
+                    });
             }
         }
         self.fill_window.lock().unwrap().take();
@@ -904,14 +1031,32 @@ impl PaperEngine {
         if let Some(book) = self.book_store.get_book_snapshot(&signal.token_id) {
             spread_bps = book.spread_bps().unwrap_or(0) as f64;
             depth = match signal.side {
-                OrderSide::Buy => book.asks.iter().next().map(|(_, s)| *s as f64 / 1_000.0).unwrap_or(0.0),
-                OrderSide::Sell => book.bids.iter().next_back().map(|(_, s)| *s as f64 / 1_000.0).unwrap_or(0.0),
+                OrderSide::Buy => book
+                    .asks
+                    .iter()
+                    .next()
+                    .map(|(_, s)| *s as f64 / 1_000.0)
+                    .unwrap_or(0.0),
+                OrderSide::Sell => book
+                    .bids
+                    .iter()
+                    .next_back()
+                    .map(|(_, s)| *s as f64 / 1_000.0)
+                    .unwrap_or(0.0),
             };
         }
-        (notional * 0.45) + (depth * 0.30) + ((500.0 - spread_bps).max(0.0) * 0.15) + ((5_000.0 - recency_ms).max(0.0) * 0.10)
+        (notional * 0.45)
+            + (depth * 0.30)
+            + ((500.0 - spread_bps).max(0.0) * 0.15)
+            + ((5_000.0 - recency_ms).max(0.0) * 0.10)
     }
 
-    fn check_liquidity_guard(&self, token_id: &str, side: OrderSide, size_usdc: f64) -> (Option<f64>, &'static str) {
+    fn check_liquidity_guard(
+        &self,
+        token_id: &str,
+        side: OrderSide,
+        size_usdc: f64,
+    ) -> (Option<f64>, &'static str) {
         let realism_mode = std::env::var("PAPER_REALISM_MODE")
             .ok()
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
@@ -997,7 +1142,10 @@ impl PaperEngine {
             }
             let mut pts: Vec<RejectionTrendPoint> = buckets
                 .into_iter()
-                .map(|(h, c)| RejectionTrendPoint { hour_utc_epoch: h, count: c })
+                .map(|(h, c)| RejectionTrendPoint {
+                    hour_utc_epoch: h,
+                    count: c,
+                })
                 .collect();
             pts.sort_by_key(|p| p.hour_utc_epoch);
             out.insert(reason.clone(), pts);
@@ -1038,13 +1186,17 @@ impl PaperEngine {
         if comp.observations.is_empty() {
             return 0.0;
         }
-        let sum = comp.observations.iter().map(|o| {
-            if o.expected_price <= 0.0 {
-                0.0
-            } else {
-                ((o.paper_fill_price - o.expected_price).abs() / o.expected_price) * 10_000.0
-            }
-        }).sum::<f64>();
+        let sum = comp
+            .observations
+            .iter()
+            .map(|o| {
+                if o.expected_price <= 0.0 {
+                    0.0
+                } else {
+                    ((o.paper_fill_price - o.expected_price).abs() / o.expected_price) * 10_000.0
+                }
+            })
+            .sum::<f64>();
         sum / comp.observations.len() as f64
     }
 
@@ -1059,11 +1211,7 @@ impl PaperEngine {
             }
         }
         for t in &p.closed_trades {
-            let is_b = t
-                .scorecard
-                .outcome_tags
-                .iter()
-                .any(|t| t == "variant:B");
+            let is_b = t.scorecard.outcome_tags.iter().any(|t| t == "variant:B");
             if is_b {
                 m.variant_b_realized_pnl += t.realized_pnl;
             } else {
@@ -1147,22 +1295,47 @@ impl PaperEngine {
     }
 
     async fn enrich_signal_metadata(&self, signal: &mut RN1Signal) {
-        let title_ok = signal.market_title.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
-        let outcome_ok = signal.market_outcome.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+        let title_ok = signal
+            .market_title
+            .as_ref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        let outcome_ok = signal
+            .market_outcome
+            .as_ref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
         if title_ok && outcome_ok {
             return;
         }
-        if let Some((title, outcome)) = self.lookup_signal_metadata(&signal.token_id, Some(&signal.order_id)).await {
-            if signal.market_title.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+        if let Some((title, outcome)) = self
+            .lookup_signal_metadata(&signal.token_id, Some(&signal.order_id))
+            .await
+        {
+            if signal
+                .market_title
+                .as_ref()
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true)
+            {
                 signal.market_title = title;
             }
-            if signal.market_outcome.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+            if signal
+                .market_outcome
+                .as_ref()
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true)
+            {
                 signal.market_outcome = outcome;
             }
         }
     }
 
-    async fn lookup_signal_metadata(&self, token_id: &str, order_id: Option<&str>) -> Option<(Option<String>, Option<String>)> {
+    async fn lookup_signal_metadata(
+        &self,
+        token_id: &str,
+        order_id: Option<&str>,
+    ) -> Option<(Option<String>, Option<String>)> {
         const CACHE_TTL: Duration = Duration::from_secs(600);
 
         {
@@ -1190,7 +1363,11 @@ impl PaperEngine {
         Some((title, outcome))
     }
 
-    async fn fetch_signal_metadata(&self, token_id: &str, order_id: Option<&str>) -> Option<(Option<String>, Option<String>)> {
+    async fn fetch_signal_metadata(
+        &self,
+        token_id: &str,
+        order_id: Option<&str>,
+    ) -> Option<(Option<String>, Option<String>)> {
         if self.rn1_wallet.trim().is_empty() {
             return None;
         }
@@ -1229,12 +1406,21 @@ impl PaperEngine {
                     e.transaction_hash.as_deref() == Some(oid)
                         && e.asset.as_deref() == Some(token_id)
                 }) {
-                    return Some((normalize_opt(hit.title.clone()), normalize_opt(hit.outcome.clone())));
+                    return Some((
+                        normalize_opt(hit.title.clone()),
+                        normalize_opt(hit.outcome.clone()),
+                    ));
                 }
             }
 
-            if let Some(hit) = entries.iter().find(|e| e.asset.as_deref() == Some(token_id)) {
-                return Some((normalize_opt(hit.title.clone()), normalize_opt(hit.outcome.clone())));
+            if let Some(hit) = entries
+                .iter()
+                .find(|e| e.asset.as_deref() == Some(token_id))
+            {
+                return Some((
+                    normalize_opt(hit.title.clone()),
+                    normalize_opt(hit.outcome.clone()),
+                ));
             }
         }
         None
@@ -1246,8 +1432,11 @@ impl PaperEngine {
     pub fn reset_daily_risk(&self) {
         self.risk.lock().unwrap().reset_daily();
         if let Some(ref log) = self.activity {
-            log_push(log, EntryKind::Engine,
-                "🌅 Daily risk counters reset (UTC midnight)".to_string());
+            log_push(
+                log,
+                EntryKind::Engine,
+                "🌅 Daily risk counters reset (UTC midnight)".to_string(),
+            );
         }
         info!("Daily risk counters reset");
     }
@@ -1270,9 +1459,13 @@ impl PaperEngine {
             return;
         }
 
-        let token_prices: Vec<(String, f64)> = p.positions
+        let token_prices: Vec<(String, f64)> = p
+            .positions
             .iter()
-            .filter_map(|pos| self.get_market_price(&pos.token_id).map(|pr| (pos.token_id.clone(), pr)))
+            .filter_map(|pos| {
+                self.get_market_price(&pos.token_id)
+                    .map(|pr| (pos.token_id.clone(), pr))
+            })
             .collect();
         for (token_id, price) in token_prices {
             p.update_price(&token_id, price);
@@ -1281,11 +1474,16 @@ impl PaperEngine {
         // If a position's market is no longer live (no book price), close it to
         // avoid stale overnight carry. This preserves the user's rule: keep open
         // positions only while event data remains live.
-        let stale_indexes: Vec<usize> = p.positions
+        let stale_indexes: Vec<usize> = p
+            .positions
             .iter()
             .enumerate()
             .filter_map(|(idx, pos)| {
-                if self.get_market_price(&pos.token_id).is_none() { Some(idx) } else { None }
+                if self.get_market_price(&pos.token_id).is_none() {
+                    Some(idx)
+                } else {
+                    None
+                }
             })
             .collect();
         for idx in stale_indexes.into_iter().rev() {
@@ -1346,7 +1544,8 @@ fn env_flag(key: &str) -> bool {
 }
 
 pub(crate) fn parse_autoclaim_tiers() -> Vec<(f64, f64)> {
-    let raw = std::env::var("AUTOCLAIM_TIERS").unwrap_or_else(|_| "40:0.30,70:0.30,100:1.0".to_string());
+    let raw =
+        std::env::var("AUTOCLAIM_TIERS").unwrap_or_else(|_| "40:0.30,70:0.30,100:1.0".to_string());
     let mut out: Vec<(f64, f64)> = raw
         .split(',')
         .filter_map(|item| {
@@ -1390,7 +1589,11 @@ fn atomic_write_with_backup<T: Serialize>(path: &str, value: &T) -> std::io::Res
 }
 
 fn read_json_with_fallback(path: &str) -> std::io::Result<Option<serde_json::Value>> {
-    let candidates = [path.to_string(), format!("{path}.bak1"), format!("{path}.bak2")];
+    let candidates = [
+        path.to_string(),
+        format!("{path}.bak1"),
+        format!("{path}.bak2"),
+    ];
     for p in candidates {
         if !std::path::Path::new(&p).exists() {
             continue;

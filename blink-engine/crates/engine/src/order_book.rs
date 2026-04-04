@@ -11,7 +11,7 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::types::{MarketEvent, OrderSide, PriceLevel, parse_price};
+use crate::types::{parse_price, MarketEvent, OrderSide, PriceLevel};
 
 // ─── OrderBook ───────────────────────────────────────────────────────────────
 
@@ -160,16 +160,10 @@ impl OrderBookStore {
                 // Key by asset_id (token) when present; fall back to market (condition ID).
                 let key = book_event.asset_id.as_deref().unwrap_or(&book_event.market);
 
-                let bid_levels: Vec<PriceLevel> = book_event
-                    .bids
-                    .iter()
-                    .map(|r| r.to_price_level())
-                    .collect();
-                let ask_levels: Vec<PriceLevel> = book_event
-                    .asks
-                    .iter()
-                    .map(|r| r.to_price_level())
-                    .collect();
+                let bid_levels: Vec<PriceLevel> =
+                    book_event.bids.iter().map(|r| r.to_price_level()).collect();
+                let ask_levels: Vec<PriceLevel> =
+                    book_event.asks.iter().map(|r| r.to_price_level()).collect();
 
                 let mut book = self.get_or_create(key);
                 book.apply_bids_delta(&bid_levels);
@@ -191,7 +185,7 @@ impl OrderBookStore {
                     };
                     let mut book = self.get_or_create(&change.asset_id);
                     match change.side {
-                        OrderSide::Buy  => book.apply_bids_delta(&[level]),
+                        OrderSide::Buy => book.apply_bids_delta(&[level]),
                         OrderSide::Sell => book.apply_asks_delta(&[level]),
                     }
                     tracing::debug!(
@@ -218,11 +212,7 @@ impl OrderBookStore {
     pub fn top_of_book(&self, token_id: &str, side: OrderSide) -> Option<(u64, u64)> {
         let book = self.books.get(token_id)?;
         match side {
-            OrderSide::Buy => book
-                .asks
-                .iter()
-                .next()
-                .map(|(price, size)| (*price, *size)),
+            OrderSide::Buy => book.asks.iter().next().map(|(price, size)| (*price, *size)),
             OrderSide::Sell => book
                 .bids
                 .iter()

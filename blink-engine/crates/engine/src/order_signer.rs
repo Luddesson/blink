@@ -68,24 +68,24 @@ impl Default for OrderSigningPolicy {
 #[derive(Debug, Clone)]
 pub struct SignedOrder {
     /// Random decimal salt string (u128).
-    pub salt:           String,
+    pub salt: String,
     /// Maker address as `"0x..."`.
-    pub maker:          String,
+    pub maker: String,
     /// Signing-key address as `"0x..."`.
-    pub signer:         String,
+    pub signer: String,
     /// Taker address — always the zero address.
-    pub taker:          String,
+    pub taker: String,
     /// Polymarket token ID as a decimal string.
-    pub token_id:       String,
-    pub maker_amount:   u64,
-    pub taker_amount:   u64,
-    pub expiration:     u64,
-    pub nonce:          u64,
-    pub fee_rate_bps:   u64,
-    pub side:           u8,
+    pub token_id: String,
+    pub maker_amount: u64,
+    pub taker_amount: u64,
+    pub expiration: u64,
+    pub nonce: u64,
+    pub fee_rate_bps: u64,
+    pub side: u8,
     pub signature_type: u8,
     /// 0x-prefixed hex EIP-712 signature (65 bytes / 130 hex chars).
-    pub signature:      String,
+    pub signature: String,
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -105,9 +105,8 @@ pub fn sign_order_with_policy(
     policy: OrderSigningPolicy,
 ) -> Result<SignedOrder> {
     validate_signing_policy(&policy)?;
-    let signing_key =
-        SigningKey::from_bytes(private_key_bytes.into())
-            .context("invalid secp256k1 private key")?;
+    let signing_key = SigningKey::from_bytes(private_key_bytes.into())
+        .context("invalid secp256k1 private key")?;
     let signer_addr = pubkey_to_address(signing_key.verifying_key());
 
     // Salt: full random u128
@@ -116,17 +115,17 @@ pub fn sign_order_with_policy(
     let (maker_amount, taker_amount, side_u8) = compute_amounts(params)?;
 
     // Encode struct fields for hashing
-    let salt_b32          = u128_to_b32(salt);
-    let maker_b32         = addr_to_b32(&params.maker).context("invalid maker address")?;
-    let signer_b32        = addr_to_b32(&signer_addr).context("invalid signer address")?;
-    let taker_b32         = [0u8; 32]; // zero address
-    let token_id_b32      = decimal_to_b32(&params.token_id)
-                                .with_context(|| format!("invalid token_id: {}", params.token_id))?;
-    let maker_amount_b32  = u64_to_b32(maker_amount);
-    let taker_amount_b32  = u64_to_b32(taker_amount);
-    let expiration_b32    = u64_to_b32(policy.expiration);
-    let nonce_b32         = u64_to_b32(policy.nonce);
-    let side_b32          = u8_to_b32(side_u8);
+    let salt_b32 = u128_to_b32(salt);
+    let maker_b32 = addr_to_b32(&params.maker).context("invalid maker address")?;
+    let signer_b32 = addr_to_b32(&signer_addr).context("invalid signer address")?;
+    let taker_b32 = [0u8; 32]; // zero address
+    let token_id_b32 = decimal_to_b32(&params.token_id)
+        .with_context(|| format!("invalid token_id: {}", params.token_id))?;
+    let maker_amount_b32 = u64_to_b32(maker_amount);
+    let taker_amount_b32 = u64_to_b32(taker_amount);
+    let expiration_b32 = u64_to_b32(policy.expiration);
+    let nonce_b32 = u64_to_b32(policy.nonce);
+    let side_b32 = u8_to_b32(side_u8);
     let signature_type_b32 = u8_to_b32(policy.signature_type);
 
     // Order struct hash = keccak256(typeHash || fields...)
@@ -167,19 +166,19 @@ pub fn sign_order_with_policy(
     sig65.push(v);
 
     Ok(SignedOrder {
-        salt:           salt.to_string(),
-        maker:          params.maker.clone(),
-        signer:         signer_addr,
-        taker:          "0x0000000000000000000000000000000000000000".to_string(),
-        token_id:       params.token_id.clone(),
+        salt: salt.to_string(),
+        maker: params.maker.clone(),
+        signer: signer_addr,
+        taker: "0x0000000000000000000000000000000000000000".to_string(),
+        token_id: params.token_id.clone(),
         maker_amount,
         taker_amount,
-        expiration:     policy.expiration,
-        nonce:          policy.nonce,
-        fee_rate_bps:   0,
-        side:           side_u8,
+        expiration: policy.expiration,
+        nonce: policy.nonce,
+        fee_rate_bps: 0,
+        side: side_u8,
         signature_type: policy.signature_type,
-        signature:      format!("0x{}", hex_encode(&sig65)),
+        signature: format!("0x{}", hex_encode(&sig65)),
     })
 }
 
@@ -207,17 +206,17 @@ pub fn sign_order_with_vault_policy(
     let (maker_amount, taker_amount, side_u8) = compute_amounts(params)?;
 
     // Encode struct fields for hashing
-    let salt_b32         = u128_to_b32(salt);
-    let maker_b32        = addr_to_b32(&params.maker).context("invalid maker address")?;
-    let signer_b32       = addr_to_b32(&signer_addr).context("invalid signer address")?;
-    let taker_b32        = [0u8; 32];
-    let token_id_b32     = decimal_to_b32(&params.token_id)
-                               .with_context(|| format!("invalid token_id: {}", params.token_id))?;
+    let salt_b32 = u128_to_b32(salt);
+    let maker_b32 = addr_to_b32(&params.maker).context("invalid maker address")?;
+    let signer_b32 = addr_to_b32(&signer_addr).context("invalid signer address")?;
+    let taker_b32 = [0u8; 32];
+    let token_id_b32 = decimal_to_b32(&params.token_id)
+        .with_context(|| format!("invalid token_id: {}", params.token_id))?;
     let maker_amount_b32 = u64_to_b32(maker_amount);
     let taker_amount_b32 = u64_to_b32(taker_amount);
-    let expiration_b32   = u64_to_b32(policy.expiration);
-    let nonce_b32        = u64_to_b32(policy.nonce);
-    let side_b32         = u8_to_b32(side_u8);
+    let expiration_b32 = u64_to_b32(policy.expiration);
+    let nonce_b32 = u64_to_b32(policy.nonce);
+    let side_b32 = u8_to_b32(side_u8);
     let signature_type_b32 = u8_to_b32(policy.signature_type);
 
     let order_type_hash = keccak256(ORDER_TYPE_STRING);
@@ -248,19 +247,19 @@ pub fn sign_order_with_vault_policy(
     let sig65 = vault.sign_digest(&digest)?;
 
     Ok(SignedOrder {
-        salt:           salt.to_string(),
-        maker:          params.maker.clone(),
-        signer:         signer_addr,
-        taker:          "0x0000000000000000000000000000000000000000".to_string(),
-        token_id:       params.token_id.clone(),
+        salt: salt.to_string(),
+        maker: params.maker.clone(),
+        signer: signer_addr,
+        taker: "0x0000000000000000000000000000000000000000".to_string(),
+        token_id: params.token_id.clone(),
         maker_amount,
         taker_amount,
-        expiration:     policy.expiration,
-        nonce:          policy.nonce,
-        fee_rate_bps:   0,
-        side:           side_u8,
+        expiration: policy.expiration,
+        nonce: policy.nonce,
+        fee_rate_bps: 0,
+        side: side_u8,
         signature_type: policy.signature_type,
-        signature:      format!("0x{}", hex_encode(&sig65)),
+        signature: format!("0x{}", hex_encode(&sig65)),
     })
 }
 
@@ -274,11 +273,11 @@ pub fn load_signer_bytes(private_key_hex: &str) -> Result<Vec<u8>> {
 // ─── EIP-712 helpers ─────────────────────────────────────────────────────────
 
 fn domain_separator() -> [u8; 32] {
-    let type_hash    = keccak256(DOMAIN_TYPE_STRING);
-    let name_hash    = keccak256(b"Polymarket CTF Exchange");
+    let type_hash = keccak256(DOMAIN_TYPE_STRING);
+    let name_hash = keccak256(b"Polymarket CTF Exchange");
     let version_hash = keccak256(b"1");
-    let chain_id     = u128_to_b32(137u128);
-    let contract     = addr_to_b32(VERIFYING_CONTRACT_HEX).unwrap();
+    let chain_id = u128_to_b32(137u128);
+    let contract = addr_to_b32(VERIFYING_CONTRACT_HEX).unwrap();
 
     let mut enc = Vec::with_capacity(32 * 5);
     enc.extend_from_slice(&type_hash);
@@ -312,8 +311,7 @@ fn compute_amounts(params: &OrderParams) -> Result<(u64, u64, u8)> {
             let maker_amount = (params.size * 1_000_000.0).floor() as u64;
             anyhow::ensure!(params.price > 0, "BUY order price cannot be zero");
             // taker_amount = shares received = USDC_base × 1_000 / price_scaled
-            let taker_amount =
-                (maker_amount as u128 * 1_000 / params.price as u128) as u64;
+            let taker_amount = (maker_amount as u128 * 1_000 / params.price as u128) as u64;
             Ok((maker_amount, taker_amount, 0u8))
         }
         OrderSide::Sell => {
@@ -323,8 +321,7 @@ fn compute_amounts(params: &OrderParams) -> Result<(u64, u64, u8)> {
             let maker_amount = (params.size * 1_000_000.0).floor() as u64;
             anyhow::ensure!(params.price > 0, "SELL order price cannot be zero");
             // taker_amount = USDC received = shares_base × price_scaled / 1_000
-            let taker_amount =
-                (maker_amount as u128 * params.price as u128 / 1_000) as u64;
+            let taker_amount = (maker_amount as u128 * params.price as u128 / 1_000) as u64;
             Ok((maker_amount, taker_amount, 1u8))
         }
     }
@@ -392,7 +389,9 @@ fn decimal_to_b32(s: &str) -> Result<[u8; 32]> {
     // Simple big-integer parsing: accumulate via multiply-add.
     let mut result = [0u8; 32];
     for ch in s.chars() {
-        let digit = ch.to_digit(10).with_context(|| format!("non-decimal char '{ch}' in '{s}'"))?;
+        let digit = ch
+            .to_digit(10)
+            .with_context(|| format!("non-decimal char '{ch}' in '{s}'"))?;
         // result = result * 10 + digit (big-endian u256 arithmetic)
         let mut carry = digit as u32;
         for byte in result.iter_mut().rev() {
@@ -423,8 +422,7 @@ fn hex_decode(s: &str) -> Result<Vec<u8>> {
     (0..s.len())
         .step_by(2)
         .map(|i| {
-            u8::from_str_radix(&s[i..i + 2], 16)
-                .with_context(|| format!("invalid hex byte at {i}"))
+            u8::from_str_radix(&s[i..i + 2], 16).with_context(|| format!("invalid hex byte at {i}"))
         })
         .collect()
 }
@@ -445,7 +443,12 @@ mod tests {
         }
     }
 
-    fn make_params_with_token(token_id: &str, side: OrderSide, price: u64, size: f64) -> OrderParams {
+    fn make_params_with_token(
+        token_id: &str,
+        side: OrderSide,
+        price: u64,
+        size: f64,
+    ) -> OrderParams {
         OrderParams {
             token_id: token_id.to_string(),
             side,
@@ -470,7 +473,7 @@ mod tests {
         let p = make_params(OrderSide::Sell, 650, 10.0);
         let (ma, ta, side) = compute_amounts(&p).unwrap();
         assert_eq!(ma, 10_000_000); // 10 shares in 6-dec base units
-        assert_eq!(ta, 6_500_000);  // $6.50 USDC in 6-dec base units
+        assert_eq!(ta, 6_500_000); // $6.50 USDC in 6-dec base units
         assert_eq!(side, 1u8);
     }
 
@@ -481,7 +484,7 @@ mod tests {
         let p = make_params(OrderSide::Sell, 650, 10.5);
         let (ma, ta, side) = compute_amounts(&p).unwrap();
         assert_eq!(ma, 10_500_000); // 10.5 shares × 1e6 — no truncation
-        assert_eq!(ta, 6_825_000);  // 10.5 × $0.65 = $6.825 USDC × 1e6
+        assert_eq!(ta, 6_825_000); // 10.5 × $0.65 = $6.825 USDC × 1e6
         assert_eq!(side, 1u8);
     }
 
@@ -498,7 +501,10 @@ mod tests {
         let (sell_ma, sell_ta, _) = compute_amounts(&sell).unwrap();
 
         // Maker amount of SELL must equal taker amount of BUY (same share count).
-        assert_eq!(sell_ma, buy_ta, "SELL maker_amount must equal BUY taker_amount");
+        assert_eq!(
+            sell_ma, buy_ta,
+            "SELL maker_amount must equal BUY taker_amount"
+        );
         // USDC recovered must equal USDC spent (within 1 base unit of rounding).
         assert!(
             (sell_ta as i64 - buy_ma as i64).abs() <= 1,
@@ -540,10 +546,8 @@ mod tests {
         let key_hex = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
         let key_bytes = load_signer_bytes(key_hex).unwrap();
 
-        let vault = tee_vault::SoftwareVault::new(
-            key_bytes.as_slice().try_into().unwrap(),
-        )
-        .unwrap();
+        let vault =
+            tee_vault::SoftwareVault::new(key_bytes.as_slice().try_into().unwrap()).unwrap();
 
         let params = make_params(OrderSide::Buy, 650, 10.0);
 
@@ -600,7 +604,8 @@ mod tests {
             let hash = keccak256(input);
             let actual_hex = hex_encode(&hash);
             assert_eq!(
-                actual_hex, *expected_hex,
+                actual_hex,
+                *expected_hex,
                 "Keccak256 mismatch for input {:?}",
                 String::from_utf8_lossy(input)
             );
@@ -621,9 +626,9 @@ mod tests {
 #[cfg(test)]
 mod proptest_verification {
     use super::*;
-    use proptest::prelude::*;
-    use k256::ecdsa::{SigningKey, VerifyingKey};
     use k256::ecdsa::signature::hazmat::PrehashVerifier;
+    use k256::ecdsa::{SigningKey, VerifyingKey};
+    use proptest::prelude::*;
 
     const PROPTEST_CASES: u32 = 10_000;
 
@@ -705,7 +710,14 @@ mod proptest_verification {
     }
 
     /// Helper: build the EIP-712 digest given params and a fixed salt.
-    fn build_digest(params: &OrderParams, salt: u128, signer_addr: &str, maker_amount: u64, taker_amount: u64, side: u8) -> [u8; 32] {
+    fn build_digest(
+        params: &OrderParams,
+        salt: u128,
+        signer_addr: &str,
+        maker_amount: u64,
+        taker_amount: u64,
+        side: u8,
+    ) -> [u8; 32] {
         let order_type_hash = keccak256(ORDER_TYPE_STRING);
         let salt_b32 = u128_to_b32(salt);
         let maker_b32 = addr_to_b32(&params.maker).unwrap();

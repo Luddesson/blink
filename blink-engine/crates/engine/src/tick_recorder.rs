@@ -36,15 +36,15 @@ pub struct TickRecord {
     /// Unix timestamp of when the event was received, in milliseconds.
     pub timestamp_ms: u64,
     /// Polymarket token (condition) ID.
-    pub token_id:     String,
+    pub token_id: String,
     /// `"BUY"` or `"SELL"`.
-    pub side:         String,
+    pub side: String,
     /// Limit price × 1 000 (e.g. `0.65` → `650`).
-    pub price:        u64,
+    pub price: u64,
     /// Order size × 1 000.
-    pub size:         u64,
+    pub size: u64,
     /// On-chain wallet address of the order owner.
-    pub wallet:       String,
+    pub wallet: String,
 }
 
 // ─── TickRecorder ─────────────────────────────────────────────────────────────
@@ -95,10 +95,10 @@ impl TickRecorder {
     ///
     /// Never returns under normal operation.
     pub async fn run(self, rx: Receiver<TickRecord>) {
-        const BATCH_SIZE:     usize    = 1_000;
+        const BATCH_SIZE: usize = 1_000;
         const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
-        let mut batch:      Vec<TickRecord>  = Vec::with_capacity(BATCH_SIZE);
+        let mut batch: Vec<TickRecord> = Vec::with_capacity(BATCH_SIZE);
         let mut last_flush: std::time::Instant = std::time::Instant::now();
 
         loop {

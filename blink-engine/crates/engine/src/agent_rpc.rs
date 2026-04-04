@@ -7,14 +7,14 @@
 
 use std::io;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex,
 };
 use std::time::Duration;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -118,7 +118,9 @@ fn parse_http_headers(req: &str) -> Result<(&str, &str, usize, usize)> {
     };
     let head = &req[..header_end];
     let mut lines = head.lines();
-    let first = lines.next().ok_or_else(|| anyhow!("missing request line"))?;
+    let first = lines
+        .next()
+        .ok_or_else(|| anyhow!("missing request line"))?;
     let mut parts = first.split_whitespace();
     let method = parts.next().ok_or_else(|| anyhow!("missing HTTP method"))?;
     let path = parts.next().ok_or_else(|| anyhow!("missing HTTP path"))?;
@@ -132,12 +134,18 @@ fn parse_http_headers(req: &str) -> Result<(&str, &str, usize, usize)> {
     Ok((method, path, content_len, header_end + 4))
 }
 
-async fn handle_rpc(req: RpcRequest, state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+async fn handle_rpc(
+    req: RpcRequest,
+    state: &AgentRpcState,
+) -> std::result::Result<Value, RpcError> {
     match req.method.as_str() {
         "blink_status" => blink_status(state).await,
         "paper_summary" => paper_summary(state).await,
         "set_pause" => set_pause(req.params, state).await,
-        _ => Err(RpcError { code: -32601, message: "Method not found".to_string() }),
+        _ => Err(RpcError {
+            code: -32601,
+            message: "Method not found".to_string(),
+        }),
     }
 }
 
@@ -154,7 +162,19 @@ async fn blink_status(state: &AgentRpcState) -> std::result::Result<Value, RpcEr
     });
 
     if let Some(ref paper) = state.paper {
-        let (cash_usdc, nav_usdc, invested_usdc, unrealized_pnl_usdc, realized_pnl_usdc, open_positions, closed_trades, total_signals, filled_orders, skipped_orders, aborted_orders) = {
+        let (
+            cash_usdc,
+            nav_usdc,
+            invested_usdc,
+            unrealized_pnl_usdc,
+            realized_pnl_usdc,
+            open_positions,
+            closed_trades,
+            total_signals,
+            filled_orders,
+            skipped_orders,
+            aborted_orders,
+        ) = {
             let p = paper.portfolio.lock().await;
             (
                 p.cash_usdc,
@@ -192,11 +212,19 @@ async fn blink_status(state: &AgentRpcState) -> std::result::Result<Value, RpcEr
 
 async fn paper_summary(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
     let Some(ref paper) = state.paper else {
-        return Err(RpcError { code: -32001, message: "Paper mode not active".to_string() });
+        return Err(RpcError {
+            code: -32001,
+            message: "Paper mode not active".to_string(),
+        });
     };
     let (cash_usdc, nav_usdc, open_positions, closed_trades) = {
         let p = paper.portfolio.lock().await;
-        (p.cash_usdc, p.nav(), p.positions.len(), p.closed_trades.len())
+        (
+            p.cash_usdc,
+            p.nav(),
+            p.positions.len(),
+            p.closed_trades.len(),
+        )
     };
     let summary = paper.execution_summary().await;
     Ok(json!({

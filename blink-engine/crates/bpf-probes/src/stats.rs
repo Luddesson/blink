@@ -11,10 +11,10 @@
 /// to Polymarket CDN IP range (104.18.0.0/16).
 #[derive(Debug, Clone, Default)]
 pub struct RttStats {
-    pub min_us:  u64,
-    pub max_us:  u64,
-    pub avg_us:  u64,
-    pub p99_us:  u64,
+    pub min_us: u64,
+    pub max_us: u64,
+    pub avg_us: u64,
+    pub p99_us: u64,
     pub samples: u64,
 }
 
@@ -26,13 +26,13 @@ pub struct RttStats {
 /// to the engine PID. High values indicate CPU contention or priority issues.
 #[derive(Debug, Clone, Default)]
 pub struct SchedStats {
-    pub min_us:                u64,
-    pub max_us:                u64,
-    pub avg_us:                u64,
-    pub p99_us:                u64,
+    pub min_us: u64,
+    pub max_us: u64,
+    pub avg_us: u64,
+    pub p99_us: u64,
     /// Count of wakeup latencies exceeding 100µs threshold.
-    pub threshold_violations:  u64,
-    pub samples:               u64,
+    pub threshold_violations: u64,
+    pub samples: u64,
 }
 
 // ─── Syscall Profiling ────────────────────────────────────────────────────────
@@ -79,11 +79,11 @@ impl SyscallHistogram {
 /// tracking time spent inside each syscall.
 #[derive(Debug, Clone, Default)]
 pub struct SyscallStats {
-    pub send_avg_us:  u64,
-    pub recv_avg_us:  u64,
+    pub send_avg_us: u64,
+    pub recv_avg_us: u64,
     pub epoll_avg_us: u64,
-    pub histogram:    SyscallHistogram,
-    pub samples:      u64,
+    pub histogram: SyscallHistogram,
+    pub samples: u64,
 }
 
 // ─── Combined Snapshot ────────────────────────────────────────────────────────
@@ -96,9 +96,9 @@ pub struct SyscallStats {
 pub struct KernelSnapshot {
     /// Whether eBPF telemetry is actively collecting data.
     pub available: bool,
-    pub rtt:       RttStats,
-    pub sched:     SchedStats,
-    pub syscall:   SyscallStats,
+    pub rtt: RttStats,
+    pub sched: SchedStats,
+    pub syscall: SyscallStats,
 }
 
 #[cfg(test)]
@@ -108,12 +108,12 @@ mod tests {
     #[test]
     fn histogram_record_distributes_correctly() {
         let mut h = SyscallHistogram::default();
-        h.record(0);    // < 1µs → bucket 0
-        h.record(1);    // ≥ 1µs → bucket 0
-        h.record(3);    // ≥ 2µs → bucket 1
-        h.record(7);    // ≥ 5µs → bucket 2
-        h.record(50);   // ≥ 50µs → bucket 4
-        h.record(999);  // ≥ 500µs → bucket 6
+        h.record(0); // < 1µs → bucket 0
+        h.record(1); // ≥ 1µs → bucket 0
+        h.record(3); // ≥ 2µs → bucket 1
+        h.record(7); // ≥ 5µs → bucket 2
+        h.record(50); // ≥ 50µs → bucket 4
+        h.record(999); // ≥ 500µs → bucket 6
         h.record(1000); // ≥ 1000µs → bucket 7
         h.record(5000); // ≥ 1000µs → bucket 7
 

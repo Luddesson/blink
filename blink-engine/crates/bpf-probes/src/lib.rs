@@ -24,8 +24,8 @@
 //! - BTF enabled kernel (`CONFIG_DEBUG_INFO_BTF=y`)
 //! - Pre-compiled BPF object files in `bpf/` directory
 
-pub mod stats;
 pub mod latency_probe;
+pub mod stats;
 
 #[cfg(all(target_os = "linux", feature = "ebpf-telemetry"))]
 mod linux_impl;
@@ -39,8 +39,7 @@ mod stub_impl;
 #[cfg(not(all(target_os = "linux", feature = "ebpf-telemetry")))]
 pub use stub_impl::BpfTelemetry;
 
-pub use stats::{KernelSnapshot, RttStats, SchedStats, SyscallHistogram, SyscallStats};
 pub use latency_probe::{
-    EbpfProbe, LatencyProbe, LoggingProbe, NullProbe,
-    LATENCY_ALERT_THRESHOLD_US,
+    EbpfProbe, LatencyProbe, LoggingProbe, NullProbe, LATENCY_ALERT_THRESHOLD_US,
 };
+pub use stats::{KernelSnapshot, RttStats, SchedStats, SyscallHistogram, SyscallStats};

@@ -25,9 +25,23 @@ const BASE_URL: &str = "https://gamma-api.polymarket.com";
 const TOP_SPORTS_FOR_ENV: usize = 20;
 
 const SPORTS_KEYWORDS: &[&str] = &[
-    "soccer", "football", "basketball", "nba", "nfl", "tennis",
-    "baseball", "mlb", "cricket", "esports", "mma", "ufc", "boxing",
-    "hockey", "nhl", "golf", "rugby",
+    "soccer",
+    "football",
+    "basketball",
+    "nba",
+    "nfl",
+    "tennis",
+    "baseball",
+    "mlb",
+    "cricket",
+    "esports",
+    "mma",
+    "ufc",
+    "boxing",
+    "hockey",
+    "nhl",
+    "golf",
+    "rugby",
 ];
 
 // ─── Serde helpers ───────────────────────────────────────────────────────────
@@ -153,9 +167,7 @@ fn fetch_events_for_tag(
     client: &reqwest::blocking::Client,
     tag_id: &str,
 ) -> Result<Vec<GammaEvent>> {
-    let url = format!(
-        "{BASE_URL}/events?active=true&closed=false&tag_id={tag_id}&limit=20"
-    );
+    let url = format!("{BASE_URL}/events?active=true&closed=false&tag_id={tag_id}&limit=20");
     let text = client
         .get(&url)
         .send()
@@ -317,8 +329,11 @@ fn main() -> Result<()> {
             });
         }
     }
-    sports_rows
-        .sort_by(|a, b| b.volume.partial_cmp(&a.volume).unwrap_or(std::cmp::Ordering::Equal));
+    sports_rows.sort_by(|a, b| {
+        b.volume
+            .partial_cmp(&a.volume)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // ── Build all-markets rows (top_events) ───────────────────────────────────
     let mut all_rows: Vec<AllRow> = Vec::new();
@@ -348,8 +363,11 @@ fn main() -> Result<()> {
             });
         }
     }
-    all_rows
-        .sort_by(|a, b| b.volume.partial_cmp(&a.volume).unwrap_or(std::cmp::Ordering::Equal));
+    all_rows.sort_by(|a, b| {
+        b.volume
+            .partial_cmp(&a.volume)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // ── Section 1: Top Sports Markets ─────────────────────────────────────────
     println!("{border}");

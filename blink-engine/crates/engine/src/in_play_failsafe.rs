@@ -127,8 +127,7 @@ pub async fn run_in_play_failsafe(
                     Err(_) => {
                         warn!(
                             token_id,
-                            price_str,
-                            "failsafe: unparseable price — aborting"
+                            price_str, "failsafe: unparseable price — aborting"
                         );
                         return FailsafeResult::FetchError;
                     }

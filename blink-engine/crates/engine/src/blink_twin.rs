@@ -14,10 +14,12 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::info;
 
-use crate::activity_log::{ActivityLog, EntryKind, push as log_push};
+use crate::activity_log::{push as log_push, ActivityLog, EntryKind};
 use crate::order_book::OrderBookStore;
-use crate::paper_portfolio::{DRIFT_THRESHOLD, ExecutionScorecard, PaperPortfolio, STARTING_BALANCE_USDC};
 use crate::paper_engine::parse_autoclaim_tiers;
+use crate::paper_portfolio::{
+    ExecutionScorecard, PaperPortfolio, DRIFT_THRESHOLD, STARTING_BALANCE_USDC,
+};
 use crate::types::{OrderSide, RN1Signal};
 
 /// Configuration for the adversarial simulation.
@@ -36,7 +38,7 @@ pub struct TwinConfig {
 impl Default for TwinConfig {
     fn default() -> Self {
         Self {
-            extra_latency_ms: 100,      // Pessimistic start
+            extra_latency_ms: 100, // Pessimistic start
             slippage_penalty_bps: 10.0,
             drift_multiplier: 0.90,
             generation: 1,
@@ -76,18 +78,22 @@ pub struct TwinSnapshot {
 impl BlinkTwin {
     pub fn new(book_store: Arc<OrderBookStore>, activity: Option<ActivityLog>) -> Arc<Self> {
         let config = TwinConfig::default();
-        
+
         info!(
             latency = config.extra_latency_ms,
             slippage = config.slippage_penalty_bps,
             "Blink Twin initialized (Self-Improving Shadow Mode)"
         );
-        
+
         if let Some(ref log) = activity {
-            log_push(log, EntryKind::Engine, format!(
-                "Blink Twin Gen 1 active: +{}ms lat, +{:.1}bps slip",
-                config.extra_latency_ms, config.slippage_penalty_bps
-            ));
+            log_push(
+                log,
+                EntryKind::Engine,
+                format!(
+                    "Blink Twin Gen 1 active: +{}ms lat, +{:.1}bps slip",
+                    config.extra_latency_ms, config.slippage_penalty_bps
+                ),
+            );
         }
 
         let twin = Arc::new(Self {
@@ -110,13 +116,17 @@ impl BlinkTwin {
                 // Evaluate every 60 seconds
                 sleep(Duration::from_secs(60)).await;
                 twin.run_autoclaim().await;
-                
+
                 let (win_rate, trades_count, pnl) = {
                     let p = twin.portfolio.lock().await;
                     if p.closed_trades.is_empty() {
                         continue;
                     }
-                    let wins = p.closed_trades.iter().filter(|t| t.realized_pnl > 0.0).count();
+                    let wins = p
+                        .closed_trades
+                        .iter()
+                        .filter(|t| t.realized_pnl > 0.0)
+                        .count();
                     let win_rate = wins as f64 / p.closed_trades.len() as f64;
                     let trades = p.closed_trades.len();
                     (win_rate, trades, p.realized_pnl())
@@ -193,7 +203,7 @@ impl BlinkTwin {
 
         // 4. Adversarial Fill Window Check
         let twin_drift_threshold = DRIFT_THRESHOLD * current_cfg.drift_multiplier;
-        
+
         let filled = self
             .check_fill_window_adversarial(&signal.token_id, entry_price, twin_drift_threshold)
             .await;
@@ -274,19 +284,28 @@ impl BlinkTwin {
             return;
         }
 
-        let token_prices: Vec<(String, f64)> = p.positions
+        let token_prices: Vec<(String, f64)> = p
+            .positions
             .iter()
-            .filter_map(|pos| self.get_market_price(&pos.token_id).map(|pr| (pos.token_id.clone(), pr)))
+            .filter_map(|pos| {
+                self.get_market_price(&pos.token_id)
+                    .map(|pr| (pos.token_id.clone(), pr))
+            })
             .collect();
         for (token_id, price) in token_prices {
             p.update_price(&token_id, price);
         }
 
-        let stale_indexes: Vec<usize> = p.positions
+        let stale_indexes: Vec<usize> = p
+            .positions
             .iter()
             .enumerate()
             .filter_map(|(idx, pos)| {
-                if self.get_market_price(&pos.token_id).is_none() { Some(idx) } else { None }
+                if self.get_market_price(&pos.token_id).is_none() {
+                    Some(idx)
+                } else {
+                    None
+                }
             })
             .collect();
         for idx in stale_indexes.into_iter().rev() {
@@ -332,7 +351,11 @@ impl BlinkTwin {
     pub async fn snapshot(&self) -> TwinSnapshot {
         let cfg = self.config.lock().await.clone();
         let p = self.portfolio.lock().await;
-        let wins = p.closed_trades.iter().filter(|t| t.realized_pnl > 0.0).count();
+        let wins = p
+            .closed_trades
+            .iter()
+            .filter(|t| t.realized_pnl > 0.0)
+            .count();
         let win_rate_pct = if p.closed_trades.is_empty() {
             0.0
         } else {
@@ -343,7 +366,10 @@ impl BlinkTwin {
         if equity_curve.is_empty() {
             equity_curve.push(p.nav());
         }
-        let start_nav = equity_curve.first().copied().unwrap_or(STARTING_BALANCE_USDC);
+        let start_nav = equity_curve
+            .first()
+            .copied()
+            .unwrap_or(STARTING_BALANCE_USDC);
         let nav_return_pct = if start_nav > 0.0 {
             ((p.nav() - start_nav) / start_nav) * 100.0
         } else {

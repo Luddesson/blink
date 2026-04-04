@@ -15,8 +15,8 @@
 //! to avoid near-instant RSTs.  The system is designed to be resilient to
 //! these drops — RN1 poller is the primary data source.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -27,30 +27,30 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
-    activity_log::{ActivityLog, EntryKind, push as log_push},
+    activity_log::{push as log_push, ActivityLog, EntryKind},
     config::Config,
     order_book::OrderBookStore,
     sniffer::Sniffer,
-    tick_recorder::{TickRecord, now_ms},
+    tick_recorder::{now_ms, TickRecord},
     types::{MarketEvent, RN1Signal},
 };
 
 /// Polymarket expects application-level `"PING"` text messages (uppercase, NOT
 /// protocol-level WebSocket pings).  Server replies with `"PONG"` text.
 /// Docs: "Send PING every 10 seconds" — matching exactly.
-const PING_INTERVAL:       Duration = Duration::from_secs(10);
+const PING_INTERVAL: Duration = Duration::from_secs(10);
 /// Conservative initial backoff prevents Cloudflare rate-limiting after an RST.
-const INITIAL_BACKOFF:     Duration = Duration::from_millis(1_000);
-const MAX_BACKOFF:         Duration = Duration::from_secs(30);
+const INITIAL_BACKOFF: Duration = Duration::from_millis(1_000);
+const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// If we receive no data at all (neither market events nor pong replies) for
 /// this long, the connection is considered dead and we force a reconnect.
-const PONG_TIMEOUT:        Duration = Duration::from_secs(45);
-const CONNECT_TIMEOUT:     Duration = Duration::from_secs(10);
+const PONG_TIMEOUT: Duration = Duration::from_secs(45);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const BACKOFF_RESET_AFTER: Duration = Duration::from_secs(15);
 /// After this many consecutive failures, add a long cooldown to avoid being
 /// blacklisted by Cloudflare.
 const CONSECUTIVE_FAIL_COOLDOWN_THRESHOLD: u32 = 3;
-const CONSECUTIVE_FAIL_COOLDOWN:           Duration = Duration::from_secs(45);
+const CONSECUTIVE_FAIL_COOLDOWN: Duration = Duration::from_secs(45);
 
 #[derive(Default)]
 pub struct WsHealthMetrics {
@@ -62,8 +62,8 @@ pub struct WsHealthMetrics {
 
 #[derive(Default)]
 struct MessageParseCounters {
-    parsed:       u64,
-    unknown:      u64,
+    parsed: u64,
+    unknown: u64,
     parse_failed: u64,
 }
 
@@ -84,7 +84,9 @@ impl MessageParseCounters {
 /// Adds ±25% jitter to a duration to avoid thundering-herd reconnects.
 fn jittered(d: Duration) -> Duration {
     let millis = d.as_millis() as u64;
-    if millis == 0 { return d; }
+    if millis == 0 {
+        return d;
+    }
     let jitter_range = (millis / 4).max(1);
     let offset = rand::thread_rng().gen_range(0..=jitter_range * 2) as i64 - jitter_range as i64;
     Duration::from_millis((millis as i64 + offset).max(10) as u64)
@@ -99,16 +101,16 @@ fn jittered(d: Duration) -> Duration {
 /// - Optionally records every order event to ClickHouse via `tick_tx`.
 /// - Never returns under normal operation; propagates only unrecoverable errors.
 pub async fn run_ws(
-    config:               Arc<Config>,
-    book_store:           Arc<OrderBookStore>,
-    signal_tx:            crossbeam_channel::Sender<RN1Signal>,
-    ws_live:              Arc<AtomicBool>,
-    activity:             Option<ActivityLog>,
-    msg_count:            Arc<AtomicU64>,
-    tick_tx:              Option<crossbeam_channel::Sender<TickRecord>>,
+    config: Arc<Config>,
+    book_store: Arc<OrderBookStore>,
+    signal_tx: crossbeam_channel::Sender<RN1Signal>,
+    ws_live: Arc<AtomicBool>,
+    activity: Option<ActivityLog>,
+    msg_count: Arc<AtomicU64>,
+    tick_tx: Option<crossbeam_channel::Sender<TickRecord>>,
     market_subscriptions: Arc<Mutex<Vec<String>>>,
-    force_reconnect:      Arc<AtomicBool>,
-    health_metrics:       Option<Arc<WsHealthMetrics>>,
+    force_reconnect: Arc<AtomicBool>,
+    health_metrics: Option<Arc<WsHealthMetrics>>,
 ) -> Result<()> {
     let sniffer = Sniffer::new(&config.rn1_wallet);
     let mut backoff = INITIAL_BACKOFF;
@@ -130,8 +132,15 @@ pub async fn run_ws(
                 "Too many consecutive failures — cooling down before retry"
             );
             if let Some(ref log) = activity {
-                log_push(log, EntryKind::Warn,
-                    format!("WS cooldown {:.0}s after {} failures", cooldown.as_secs_f32(), consecutive_failures));
+                log_push(
+                    log,
+                    EntryKind::Warn,
+                    format!(
+                        "WS cooldown {:.0}s after {} failures",
+                        cooldown.as_secs_f32(),
+                        consecutive_failures
+                    ),
+                );
             }
             tokio::time::sleep(cooldown).await;
         }
@@ -150,13 +159,18 @@ pub async fn run_ws(
             &market_subscriptions,
             &force_reconnect,
             health_metrics.as_ref(),
-        ).await {
+        )
+        .await
+        {
             Ok(()) => {
                 ws_live.store(false, Ordering::Relaxed);
                 // Even after a clean close, pause briefly so Cloudflare doesn't
                 // see us as a connection-churning bot.
                 let pause = jittered(Duration::from_secs(5));
-                info!(pause_ms = pause.as_millis(), "WebSocket closed cleanly — reconnecting after pause");
+                info!(
+                    pause_ms = pause.as_millis(),
+                    "WebSocket closed cleanly — reconnecting after pause"
+                );
                 if let Some(ref log) = activity {
                     log_push(log, EntryKind::Warn, "WS closed cleanly — reconnecting");
                 }
@@ -192,7 +206,11 @@ pub async fn run_ws(
                     "WebSocket error — backing off before reconnect"
                 );
                 if let Some(ref log) = activity {
-                    log_push(log, EntryKind::Warn, format!("WS error — retry in {}ms", sleep_dur.as_millis()));
+                    log_push(
+                        log,
+                        EntryKind::Warn,
+                        format!("WS error — retry in {}ms", sleep_dur.as_millis()),
+                    );
                 }
                 tokio::time::sleep(sleep_dur).await;
                 backoff = (backoff * 2).min(MAX_BACKOFF);
@@ -207,29 +225,32 @@ pub async fn run_ws(
 /// stream ends or an error occurs.
 #[instrument(skip_all, fields(ws_url = %config.ws_url))]
 async fn connect_and_run(
-    config:               &Config,
-    book_store:           &Arc<OrderBookStore>,
-    sniffer:              &Sniffer,
-    signal_tx:            &crossbeam_channel::Sender<RN1Signal>,
-    ws_live:              &Arc<AtomicBool>,
-    activity:             &Option<ActivityLog>,
-    msg_count:            &Arc<AtomicU64>,
-    tick_tx:              &Option<crossbeam_channel::Sender<TickRecord>>,
+    config: &Config,
+    book_store: &Arc<OrderBookStore>,
+    sniffer: &Sniffer,
+    signal_tx: &crossbeam_channel::Sender<RN1Signal>,
+    ws_live: &Arc<AtomicBool>,
+    activity: &Option<ActivityLog>,
+    msg_count: &Arc<AtomicU64>,
+    tick_tx: &Option<crossbeam_channel::Sender<TickRecord>>,
     market_subscriptions: &Arc<Mutex<Vec<String>>>,
-    force_reconnect:      &Arc<AtomicBool>,
-    health_metrics:       Option<&Arc<WsHealthMetrics>>,
+    force_reconnect: &Arc<AtomicBool>,
+    health_metrics: Option<&Arc<WsHealthMetrics>>,
 ) -> Result<()> {
     // NOTE: connect_async keeps Nagle's algorithm (no TCP_NODELAY).  This is
     // intentional — TCP_NODELAY causes Cloudflare to RST the connection after
     // ~2-5s because the burst of tiny TCP segments looks suspicious.
-    let ws_stream = match tokio::time::timeout(
-        CONNECT_TIMEOUT,
-        connect_async(config.ws_url.as_str()),
-    ).await {
-        Ok(Ok((stream, _response))) => stream,
-        Ok(Err(e)) => return Err(anyhow::anyhow!("WebSocket handshake failed: {e}")),
-        Err(_) => return Err(anyhow::anyhow!("WebSocket handshake timed out after {}s", CONNECT_TIMEOUT.as_secs())),
-    };
+    let ws_stream =
+        match tokio::time::timeout(CONNECT_TIMEOUT, connect_async(config.ws_url.as_str())).await {
+            Ok(Ok((stream, _response))) => stream,
+            Ok(Err(e)) => return Err(anyhow::anyhow!("WebSocket handshake failed: {e}")),
+            Err(_) => {
+                return Err(anyhow::anyhow!(
+                    "WebSocket handshake timed out after {}s",
+                    CONNECT_TIMEOUT.as_secs()
+                ))
+            }
+        };
 
     ws_live.store(true, Ordering::Relaxed);
     info!("WebSocket handshake complete");
@@ -243,8 +264,15 @@ async fn connect_and_run(
     };
 
     if let Some(ref log) = activity {
-        log_push(log, EntryKind::Engine,
-            format!("WS connected to {}  subscribed to {} markets", config.ws_url, markets.len()));
+        log_push(
+            log,
+            EntryKind::Engine,
+            format!(
+                "WS connected to {}  subscribed to {} markets",
+                config.ws_url,
+                markets.len()
+            ),
+        );
     }
 
     let (mut write, mut read) = ws_stream.split();
@@ -427,7 +455,9 @@ mod tests {
             None,
         );
 
-        let best_bid = store.top_of_book("asset-1", OrderSide::Sell).map(|(p, _)| p);
+        let best_bid = store
+            .top_of_book("asset-1", OrderSide::Sell)
+            .map(|(p, _)| p);
         assert_eq!(best_bid, Some(500));
         assert_eq!(counters.parsed, 1);
         assert_eq!(counters.parse_failed, 0);
@@ -469,7 +499,9 @@ mod tests {
             None,
         );
 
-        let best_bid = store.top_of_book("asset-2", OrderSide::Sell).map(|(p, _)| p);
+        let best_bid = store
+            .top_of_book("asset-2", OrderSide::Sell)
+            .map(|(p, _)| p);
         let best_ask = store.top_of_book("asset-2", OrderSide::Buy).map(|(p, _)| p);
         assert_eq!(best_bid, Some(420));
         assert_eq!(best_ask, Some(580));
@@ -485,12 +517,12 @@ mod tests {
 /// Unknown `event_type` values are silently ignored (logged at `debug`).
 /// Order events are forwarded to `tick_tx` when present (ClickHouse recording).
 fn handle_message(
-    msg:        Message,
+    msg: Message,
     book_store: &Arc<OrderBookStore>,
-    sniffer:    &Sniffer,
-    signal_tx:  &crossbeam_channel::Sender<RN1Signal>,
-    msg_count:  &Arc<AtomicU64>,
-    tick_tx:    &Option<crossbeam_channel::Sender<TickRecord>>,
+    sniffer: &Sniffer,
+    signal_tx: &crossbeam_channel::Sender<RN1Signal>,
+    msg_count: &Arc<AtomicU64>,
+    tick_tx: &Option<crossbeam_channel::Sender<TickRecord>>,
     parse_counters: &mut MessageParseCounters,
     parse_error_preview_chars: usize,
     health_metrics: Option<&Arc<WsHealthMetrics>>,
@@ -526,11 +558,11 @@ fn handle_message(
                     if let (Some(tx), MarketEvent::Order(ref ev)) = (tick_tx, &event) {
                         let tick = TickRecord {
                             timestamp_ms: now_ms(),
-                            token_id:     ev.market.clone(),
-                            side:         ev.side.to_string(),
-                            price:        crate::types::parse_price(&ev.price),
-                            size:         crate::types::parse_price(&ev.original_size),
-                            wallet:       ev.owner.clone(),
+                            token_id: ev.market.clone(),
+                            side: ev.side.to_string(),
+                            price: crate::types::parse_price(&ev.price),
+                            size: crate::types::parse_price(&ev.original_size),
+                            wallet: ev.owner.clone(),
                         };
                         if let Err(e) = tx.try_send(tick) {
                             debug!(error = %e, "tick channel full — tick dropped");
@@ -563,11 +595,11 @@ fn handle_message(
                                 if let (Some(tx), MarketEvent::Order(ref ev)) = (tick_tx, &event) {
                                     let tick = TickRecord {
                                         timestamp_ms: now_ms(),
-                                        token_id:     ev.market.clone(),
-                                        side:         ev.side.to_string(),
-                                        price:        crate::types::parse_price(&ev.price),
-                                        size:         crate::types::parse_price(&ev.original_size),
-                                        wallet:       ev.owner.clone(),
+                                        token_id: ev.market.clone(),
+                                        side: ev.side.to_string(),
+                                        price: crate::types::parse_price(&ev.price),
+                                        size: crate::types::parse_price(&ev.original_size),
+                                        wallet: ev.owner.clone(),
                                     };
                                     if let Err(e) = tx.try_send(tick) {
                                         debug!(error = %e, "tick channel full — tick dropped");

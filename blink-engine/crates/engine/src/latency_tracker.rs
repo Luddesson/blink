@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 /// Rolling-window latency statistics (raw `Duration` samples).
 pub struct LatencyStats {
     samples: Vec<Duration>,
-    window:  usize,
+    window: usize,
 }
 
 impl LatencyStats {
@@ -83,7 +83,7 @@ impl LatencyStats {
 /// Bundle of all latency tracking state shared across threads.
 pub struct LatencyTracker {
     /// Time from RN1Signal creation (`detected_at`) to consumption in the engine.
-    pub signal_age:   Arc<Mutex<LatencyStats>>,
+    pub signal_age: Arc<Mutex<LatencyStats>>,
     /// WebSocket message throughput counter.
     pub msgs_per_sec: Arc<Mutex<MsgCounter>>,
 }
@@ -91,7 +91,7 @@ pub struct LatencyTracker {
 impl LatencyTracker {
     pub fn new(window: usize) -> Self {
         Self {
-            signal_age:   Arc::new(Mutex::new(LatencyStats::new(window))),
+            signal_age: Arc::new(Mutex::new(LatencyStats::new(window))),
             msgs_per_sec: Arc::new(Mutex::new(MsgCounter::new())),
         }
     }
@@ -101,17 +101,17 @@ impl LatencyTracker {
 
 /// Sliding 1-second window message counter for WS throughput measurement.
 pub struct MsgCounter {
-    count_current:  u64,
+    count_current: u64,
     count_last_sec: u64,
-    window_start:   Instant,
+    window_start: Instant,
 }
 
 impl MsgCounter {
     pub fn new() -> Self {
         Self {
-            count_current:  0,
+            count_current: 0,
             count_last_sec: 0,
-            window_start:   Instant::now(),
+            window_start: Instant::now(),
         }
     }
 
@@ -125,10 +125,9 @@ impl MsgCounter {
     pub fn per_second(&mut self) -> u64 {
         let elapsed = self.window_start.elapsed();
         if elapsed >= Duration::from_secs(1) {
-            self.count_last_sec =
-                (self.count_current as f64 / elapsed.as_secs_f64()) as u64;
+            self.count_last_sec = (self.count_current as f64 / elapsed.as_secs_f64()) as u64;
             self.count_current = 0;
-            self.window_start  = Instant::now();
+            self.window_start = Instant::now();
         }
         self.count_last_sec
     }

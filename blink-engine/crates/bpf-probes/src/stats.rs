@@ -41,15 +41,9 @@ pub struct SchedStats {
 ///
 /// Buckets: `[1, 2, 5, 10, 50, 100, 500, 1000]` µs.
 /// Each bucket counts syscalls with latency ≥ bucket bound and < next bound.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SyscallHistogram {
     pub buckets: [u64; 8],
-}
-
-impl Default for SyscallHistogram {
-    fn default() -> Self {
-        Self { buckets: [0; 8] }
-    }
 }
 
 impl SyscallHistogram {

@@ -122,9 +122,8 @@ impl SoftwareVault {
                 .with_context(|| format!("invalid hex byte at position {i}"))?;
         }
 
-        let result = Self::new(&bytes);
         // `bytes` is Zeroizing and will be zeroed on drop here.
-        result
+        Self::new(&bytes)
     }
 }
 

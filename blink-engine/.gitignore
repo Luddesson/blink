@@ -30,3 +30,7 @@ flamegraph.svg
 
 # Scanner output
 scanner_output.txt
+
+# Web UI
+web-ui/node_modules/
+web-ui/dist/

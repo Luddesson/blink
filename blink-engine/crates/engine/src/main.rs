@@ -30,6 +30,7 @@ use engine::tick_recorder::{TickRecord, TickRecorder};
 use engine::tui_app::run_tui;
 use engine::blink_twin::TwinSnapshot;
 use engine::types::RN1Signal;
+use engine::web_server::{AppState, run_web_server};
 use engine::ws_client::run_ws;
 use engine::rn1_poller::{run_rn1_poller, Rn1PollDiagnostics, Rn1PollDiagnosticsHandle};
 use engine::ws_client::WsHealthMetrics;
@@ -720,6 +721,46 @@ async fn main() -> Result<()> {
         info!(bind_addr = %rpc_bind_addr, "Agent RPC server enabled");
     } else {
         info!("AGENT_RPC_ENABLED not set — agent RPC server disabled");
+    }
+
+    // ── Optional Web UI server (WEB_UI=true) ─────────────────────────────
+    let web_ui_enabled = env_flag("WEB_UI");
+    if web_ui_enabled {
+        let web_ui_port = std::env::var("WEB_UI_PORT")
+            .ok()
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(3030);
+        let web_bind = format!("0.0.0.0:{web_ui_port}");
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(64);
+
+        let risk_handle = paper_for_persist.as_ref().map(|p| Arc::clone(&p.risk));
+
+        let web_state = AppState {
+            ws_live: Arc::clone(&ws_live),
+            trading_paused: Arc::clone(&trading_paused),
+            msg_count: Arc::clone(&msg_count),
+            book_store: Arc::clone(&book_store),
+            activity_log: activity.clone(),
+            paper: paper_for_persist.as_ref().map(Arc::clone),
+            risk: risk_handle,
+            twin_snapshot: None,
+            ws_health: None,
+            market_subscriptions: Arc::clone(&market_subscriptions),
+            broadcast_tx,
+        };
+
+        let static_dir = std::env::var("WEB_UI_STATIC_DIR").ok()
+            .or_else(|| {
+                let candidate = "web-ui/dist".to_string();
+                if std::path::Path::new(&candidate).exists() { Some(candidate) } else { None }
+            });
+
+        let bind = web_bind.clone();
+        tokio::spawn(async move {
+            run_web_server(&bind, web_state, static_dir).await;
+        });
+        log_push(&activity, EntryKind::Engine, format!("Web UI enabled on {web_bind}"));
+        info!(bind_addr = %web_bind, "Web UI server enabled");
     }
 
     // ── Wait for shutdown (Ctrl-C or TUI q) ──────────────────────────────

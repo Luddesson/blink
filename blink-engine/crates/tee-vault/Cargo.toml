@@ -12,6 +12,7 @@ sha3     = { workspace = true }
 zeroize  = { version = "1", features = ["derive"] }
 chrono   = { workspace = true }
 tokio    = { workspace = true }
+libc     = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["memoryapi", "errhandlingapi"] }

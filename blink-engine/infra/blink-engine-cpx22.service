@@ -1,0 +1,40 @@
+# ============================================================================
+# Blink Engine — systemd Service Unit (Hetzner CPX22 / VPS)
+# No NUMA pinning or CPU affinity (not applicable on shared VPS)
+# ============================================================================
+
+[Unit]
+Description=Blink Trading Engine (Paper Soak Test)
+After=network.target clickhouse-server.service
+Wants=clickhouse-server.service
+
+[Service]
+Type=simple
+User=blink
+Group=blink
+WorkingDirectory=/opt/blink/blink/blink-engine
+
+EnvironmentFile=/etc/blink-engine.env
+
+ExecStart=/opt/blink/blink/blink-engine/target/release/engine
+
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+
+# Reasonable limits for a 4 GB VPS
+LimitNOFILE=65536
+LimitMEMLOCK=65536
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/blink /tmp
+PrivateTmp=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=blink-engine
+
+[Install]
+WantedBy=multi-user.target

@@ -72,5 +72,6 @@ pub mod tui_app;
 pub mod truth_reconciler;
 pub mod tx_router;
 pub mod types;
+pub mod web_server;
 pub mod ws_client;
 

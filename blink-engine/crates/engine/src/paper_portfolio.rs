@@ -819,10 +819,10 @@ mod tests {
 
     #[test]
     fn size_capped_at_10_pct_nav() {
-        let p = PaperPortfolio::new(); // NAV = 100, cap = 25% = 25
-                                       // RN1 trades $20,000 → 20% = $4,000, capped at $25
+        let p = PaperPortfolio::new(); // NAV = 100, cap = 20% (SIZE_MULTIPLIER)
+                                       // RN1 trades $20,000 → 20% = $4,000, capped at $20
         let size = p.calculate_size_usdc(20_000.0).unwrap();
-        assert!((size - 25.0).abs() < 1e-9, "size={size}");
+        assert!((size - 20.0).abs() < 1e-9, "size={size}");
     }
 
     #[test]

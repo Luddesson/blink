@@ -1,4 +1,4 @@
-.PHONY: help setup setup-check build build-release test clean run run-paper run-market-scanner run-live logs logs-tail lint fmt check
+.PHONY: help setup setup-check build build-release test test-verbose clean run run-paper run-paper-no-tui run-market-scanner run-live logs logs-tail lint fmt fmt-check check
 
 # Colors for output
 GREEN := \033[0;32m
@@ -136,6 +136,6 @@ logs: ## Show available log files
 
 logs-tail: ## Follow the latest session log
 	@echo "$(BLUE)Tailing latest session log...$(NC)"
-	@tail -f $$(cat blink-engine/logs/LATEST_SESSION_LOG.txt 2>/dev/null || echo "logs/engine.log")
+	@tail -f "$$(cat blink-engine/logs/LATEST_SESSION_LOG.txt 2>/dev/null || echo "blink-engine/logs/engine.log")"
 
 .DEFAULT_GOAL := help

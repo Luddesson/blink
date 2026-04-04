@@ -8,19 +8,23 @@ $ErrorActionPreference = "Stop"
 
 # Color functions
 function Write-Info {
-    Write-Host "ℹ $args" -ForegroundColor Cyan
+    param([string]$Message)
+    Write-Host "ℹ $Message" -ForegroundColor Cyan
 }
 
 function Write-Success {
-    Write-Host "✓ $args" -ForegroundColor Green
+    param([string]$Message)
+    Write-Host "✓ $Message" -ForegroundColor Green
 }
 
-function Write-Warning {
-    Write-Host "⚠ $args" -ForegroundColor Yellow
+function Write-SetupWarning {
+    param([string]$Message)
+    Write-Host "⚠ $Message" -ForegroundColor Yellow
 }
 
-function Write-Error {
-    Write-Host "✗ $args" -ForegroundColor Red
+function Write-SetupError {
+    param([string]$Message)
+    Write-Host "✗ $Message" -ForegroundColor Red
 }
 
 # Header
@@ -35,13 +39,13 @@ Write-Host ""
 # ###############################################################################
 
 if (-not (Test-Path "Cargo.toml")) {
-    Write-Warning "Not in blink-engine directory. Attempting to navigate..."
+    Write-SetupWarning "Not in blink-engine directory. Attempting to navigate..."
 
     if (Test-Path "blink-engine") {
         Set-Location "blink-engine"
         Write-Success "Navigated to blink-engine\"
     } else {
-        Write-Error "Could not find blink-engine directory."
+        Write-SetupError "Could not find blink-engine directory."
         Write-Info "Please run this script from the root of the Blink repository"
         exit 1
     }
@@ -57,7 +61,7 @@ try {
     $rustVersion = rustc --version
     Write-Success "Found: $rustVersion"
 } catch {
-    Write-Error "Rust is not installed."
+    Write-SetupError "Rust is not installed."
     Write-Info "Please download and install from: https://rustup.rs/"
     Write-Info "Or use: choco install rust"
     exit 1
@@ -67,7 +71,7 @@ try {
     $cargoVersion = cargo --version
     Write-Success "Found: $cargoVersion"
 } catch {
-    Write-Error "Cargo is not installed."
+    Write-SetupError "Cargo is not installed."
     exit 1
 }
 
@@ -85,14 +89,14 @@ if (Test-Path ".env") {
         Write-Info "Creating .env from .env.example..."
         Copy-Item ".env.example" ".env"
         Write-Success "Created .env file"
-        Write-Warning "Please edit .env with your configuration:"
+        Write-SetupWarning "Please edit .env with your configuration:"
         Write-Host "  - CLOB_HOST"
         Write-Host "  - WS_URL"
         Write-Host "  - RN1_WALLET"
         Write-Host "  - MARKETS"
         Write-Host "  - Live trading credentials (if using LIVE_TRADING=true)"
     } else {
-        Write-Error "Neither .env nor .env.example found"
+        Write-SetupError "Neither .env nor .env.example found"
         exit 1
     }
 }
@@ -110,7 +114,7 @@ try {
     cargo build --release
     Write-Success "Build completed successfully"
 } catch {
-    Write-Error "Build failed. Check output above for errors."
+    Write-SetupError "Build failed. Check output above for errors."
     exit 1
 }
 
@@ -127,7 +131,7 @@ if ($runTests -eq "y" -or $runTests -eq "Y") {
         cargo test --release
         Write-Success "All tests passed"
     } catch {
-        Write-Error "Some tests failed. Check output above."
+        Write-SetupError "Some tests failed. Check output above."
         exit 1
     }
 }
@@ -142,14 +146,14 @@ Write-Info "Verifying build artifacts..."
 if (Test-Path "target\release\engine.exe") {
     Write-Success "Engine binary built successfully"
 } else {
-    Write-Error "Engine binary not found after build"
+    Write-SetupError "Engine binary not found after build"
     exit 1
 }
 
 if (Test-Path "target\release\market-scanner.exe") {
     Write-Success "Market scanner binary built successfully"
 } else {
-    Write-Warning "Market scanner binary not found"
+    Write-SetupWarning "Market scanner binary not found"
 }
 
 # ###############################################################################
@@ -176,7 +180,7 @@ Write-Host ""
 Write-Host "5. For live trading (use with caution):"
 Write-Host "   `$env:LIVE_TRADING='true'; cargo run --release -p engine"
 Write-Host ""
-Write-Warning "Important security notes:"
+Write-SetupWarning "Important security notes:"
 Write-Host "   * Never commit .env to version control"
 Write-Host "   * Always test in read-only or paper mode first"
 Write-Host "   * TRADING_ENABLED must be explicitly set to true"

@@ -1,21 +1,21 @@
-use std::sync::Arc;
+use chrono::Timelike;
 use std::collections::HashMap;
-use std::time::Duration;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
-use chrono::Timelike;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
-use crate::activity_log::{ActivityLog, EntryKind, push as log_push};
+use crate::activity_log::{push as log_push, ActivityLog, EntryKind};
 use crate::config::Config;
 use crate::mev_router::MevRouter;
 use crate::order_book::OrderBookStore;
 use crate::order_executor::OrderExecutor;
 use crate::order_signer::{sign_order_with_vault_policy, OrderParams, OrderSigningPolicy};
-use crate::paper_portfolio::{DRIFT_THRESHOLD, PaperPortfolio, STARTING_BALANCE_USDC};
+use crate::paper_portfolio::{PaperPortfolio, DRIFT_THRESHOLD, STARTING_BALANCE_USDC};
 use crate::risk_manager::{RiskConfig, RiskManager};
-use crate::truth_reconciler::{PendingOrder, process_order_status, ReconciliationOutcome};
+use crate::truth_reconciler::{process_order_status, PendingOrder, ReconciliationOutcome};
 use crate::types::{OrderSide, RN1Signal, TimeInForce};
 
 pub struct LiveEngine {
@@ -102,7 +102,11 @@ struct CanaryState {
 }
 
 impl LiveEngine {
-    pub fn new(config: Arc<Config>, book_store: Arc<OrderBookStore>, activity: Option<ActivityLog>) -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        book_store: Arc<OrderBookStore>,
+        activity: Option<ActivityLog>,
+    ) -> Self {
         let executor = OrderExecutor::from_config(&config);
 
         // Initialize the TEE vault for key isolation.
@@ -125,7 +129,9 @@ impl LiveEngine {
         };
 
         let funder_addr = config.funder_address.clone();
-        let risk = Arc::new(std::sync::Mutex::new(RiskManager::new(RiskConfig::from_env())));
+        let risk = Arc::new(std::sync::Mutex::new(RiskManager::new(
+            RiskConfig::from_env(),
+        )));
         let signing_policy = OrderSigningPolicy {
             expiration: config.polymarket_order_expiration,
             nonce: config.polymarket_order_nonce,
@@ -153,7 +159,9 @@ impl LiveEngine {
                 EntryKind::Engine,
                 format!(
                     "LiveEngine started — live={} vault={} dry_run={}",
-                    config.live_trading, vault.is_some(), !config.live_trading
+                    config.live_trading,
+                    vault.is_some(),
+                    !config.live_trading
                 ),
             );
         }
@@ -223,8 +231,7 @@ impl LiveEngine {
         if flushed > 0 {
             warn!(
                 token_id,
-                flushed,
-                "🧹 Pre-game order wipe: flushed {flushed} positions for {token_id}"
+                flushed, "🧹 Pre-game order wipe: flushed {flushed} positions for {token_id}"
             );
             if let Some(ref log) = self.activity {
                 log_push(
@@ -241,7 +248,10 @@ impl LiveEngine {
         self.run_reconciliation_pass().await;
 
         let intent = self.classify_signal_intent(&signal).await;
-        if matches!(intent, SignalIntent::HedgeOrFlatten | SignalIntent::Ambiguous) {
+        if matches!(
+            intent,
+            SignalIntent::HedgeOrFlatten | SignalIntent::Ambiguous
+        ) {
             let reason = match intent {
                 SignalIntent::HedgeOrFlatten => "hedge_or_flatten",
                 SignalIntent::Ambiguous => "ambiguous_multi_side_exposure",
@@ -257,7 +267,10 @@ impl LiveEngine {
                 log_push(
                     log,
                     EntryKind::Warn,
-                    format!("INTENT-SKIP {} token={} side={}", reason, signal.token_id, signal.side),
+                    format!(
+                        "INTENT-SKIP {} token={} side={}",
+                        reason, signal.token_id, signal.side
+                    ),
                 );
             }
             let mut p = self.portfolio.lock().await;
@@ -345,37 +358,38 @@ impl LiveEngine {
             }
             (true, None)
         } else {
-            let vault = self.vault.as_ref().unwrap();
+            let vault = match &self.vault {
+                Some(v) => v,
+                None => unreachable!("vault cannot be none in this else clause"),
+            };
             let mut policy = self.signing_policy;
             policy.nonce = self.nonce_counter.fetch_add(1, Ordering::Relaxed);
             match sign_order_with_vault_policy(vault.as_ref(), &params, policy) {
-                Ok(signed) => {
-                    match self.executor.submit_order(&signed, TimeInForce::Gtc).await {
-                        Ok(resp) => {
-                            if resp.success {
-                                info!(order_id = ?resp.order_id, "✅ LIVE order submitted");
-                                if let Some(ref log) = self.activity {
-                                    log_push(
-                                        log,
-                                        EntryKind::Fill,
-                                        format!(
-                                            "LIVE SUBMITTED {} @{:.3} ${:.2} id={:?}",
-                                            signal.side, entry_price, size_usdc, resp.order_id
-                                        ),
-                                    );
-                                }
-                                (true, resp.order_id.clone())
-                            } else {
-                                error!(error = ?resp.error_msg, "❌ LIVE order rejected");
-                                (false, None)
+                Ok(signed) => match self.executor.submit_order(&signed, TimeInForce::Gtc).await {
+                    Ok(resp) => {
+                        if resp.success {
+                            info!(order_id = ?resp.order_id, "✅ LIVE order submitted");
+                            if let Some(ref log) = self.activity {
+                                log_push(
+                                    log,
+                                    EntryKind::Fill,
+                                    format!(
+                                        "LIVE SUBMITTED {} @{:.3} ${:.2} id={:?}",
+                                        signal.side, entry_price, size_usdc, resp.order_id
+                                    ),
+                                );
                             }
-                        }
-                        Err(e) => {
-                            error!(error = %e, "❌ LIVE submit failed");
+                            (true, resp.order_id.clone())
+                        } else {
+                            error!(error = ?resp.error_msg, "❌ LIVE order rejected");
                             (false, None)
                         }
                     }
-                }
+                    Err(e) => {
+                        error!(error = %e, "❌ LIVE submit failed");
+                        (false, None)
+                    }
+                },
                 Err(e) => {
                     error!(error = %e, "❌ EIP-712 signing failed");
                     (false, None)
@@ -394,7 +408,10 @@ impl LiveEngine {
                 log_push(
                     log,
                     EntryKind::Warn,
-                    format!("LIVE REJECTED {} @{:.3} ${:.2}", signal.side, entry_price, size_usdc),
+                    format!(
+                        "LIVE REJECTED {} @{:.3} ${:.2}",
+                        signal.side, entry_price, size_usdc
+                    ),
                 );
             }
             return;
@@ -473,7 +490,11 @@ impl LiveEngine {
         }
         if self.canary_policy.daytime_only {
             let hour = chrono::Utc::now().hour() as u8;
-            if !hour_in_window(hour, self.canary_policy.start_hour_utc, self.canary_policy.end_hour_utc) {
+            if !hour_in_window(
+                hour,
+                self.canary_policy.start_hour_utc,
+                self.canary_policy.end_hour_utc,
+            ) {
                 return Err(format!(
                     "outside_daytime_window hour={} window={}..{}",
                     hour, self.canary_policy.start_hour_utc, self.canary_policy.end_hour_utc
@@ -481,7 +502,11 @@ impl LiveEngine {
             }
         }
         if !self.canary_policy.allowed_markets.is_empty()
-            && !self.canary_policy.allowed_markets.iter().any(|m| m == &signal.token_id)
+            && !self
+                .canary_policy
+                .allowed_markets
+                .iter()
+                .any(|m| m == &signal.token_id)
         {
             return Err("token_not_in_canary_allowlist".to_string());
         }
@@ -529,7 +554,11 @@ impl LiveEngine {
             let p = self.portfolio.lock().await;
             let mut same = 0usize;
             let mut opposite = 0usize;
-            for pos in p.positions.iter().filter(|pos| pos.token_id == signal.token_id) {
+            for pos in p
+                .positions
+                .iter()
+                .filter(|pos| pos.token_id == signal.token_id)
+            {
                 if pos.side == signal.side {
                     same += 1;
                 } else {
@@ -562,16 +591,15 @@ impl LiveEngine {
     async fn run_reconciliation_pass(&self) {
         self.sync_risk_closes_from_portfolio().await;
 
-        let pending_ids: Vec<String> =
-            self.pending_orders.lock().await.keys().cloned().collect();
+        let pending_ids: Vec<String> = self.pending_orders.lock().await.keys().cloned().collect();
 
-        let mut resolved       = 0usize;
+        let mut resolved = 0usize;
         let mut fills_recorded = 0usize;
 
         for order_id in pending_ids {
             // Fetch latest status from exchange.
             let status = match self.executor.get_order_status(&order_id).await {
-                Ok(s)  => s,
+                Ok(s) => s,
                 Err(e) => {
                     warn!(order_id = %order_id, error = %e, "Reconciliation status fetch failed");
                     continue;
@@ -583,7 +611,7 @@ impl LiveEngine {
                 let mut map = self.pending_orders.lock().await;
                 match map.get_mut(&order_id) {
                     Some(pending) => process_order_status(pending, &status),
-                    None          => continue, // removed by concurrent path
+                    None => continue, // removed by concurrent path
                 }
             };
 
@@ -612,7 +640,7 @@ impl LiveEngine {
                     }
                     self.risk.lock().unwrap().record_fill(actual_size_usdc);
                     fills_recorded += 1;
-                    resolved       += 1;
+                    resolved += 1;
                     self.failsafe_metrics.lock().unwrap().confirmed_fills += 1;
 
                     if partial_fill {
@@ -701,7 +729,10 @@ impl LiveEngine {
 
         if resolved > 0 {
             let pending = self.pending_orders.lock().await.len();
-            info!(resolved, fills_recorded, pending, "Reconciliation pass completed");
+            info!(
+                resolved,
+                fills_recorded, pending, "Reconciliation pass completed"
+            );
         }
     }
 
@@ -747,15 +778,15 @@ impl LiveEngine {
             None
         };
         FailsafeMetricsSnapshot {
-            trigger_count:          m.trigger_count,
-            check_count:            m.check_count,
+            trigger_count: m.trigger_count,
+            check_count: m.check_count,
             max_observed_drift_bps: m.max_observed_drift_bps,
-            confirmed_fills:        m.confirmed_fills,
-            no_fills:               m.no_fills,
-            stale_orders:           m.stale_orders,
+            confirmed_fills: m.confirmed_fills,
+            no_fills: m.no_fills,
+            stale_orders: m.stale_orders,
             confirmation_rate_pct,
-            heartbeat_ok_count:     m.heartbeat_ok_count,
-            heartbeat_fail_count:   m.heartbeat_fail_count,
+            heartbeat_ok_count: m.heartbeat_ok_count,
+            heartbeat_fail_count: m.heartbeat_fail_count,
         }
     }
 
@@ -772,8 +803,8 @@ impl LiveEngine {
 
         // 2. Cancel all open orders on the exchange.
         match self.executor.cancel_all_orders().await {
-            Ok(())  => info!("Emergency stop: exchange cancel-all succeeded"),
-            Err(e)  => error!("Emergency stop: cancel_all_orders failed: {e}"),
+            Ok(()) => info!("Emergency stop: exchange cancel-all succeeded"),
+            Err(e) => error!("Emergency stop: cancel_all_orders failed: {e}"),
         }
 
         // 3. Run reconciliation to sync any fills that arrived before cancel.
@@ -791,7 +822,9 @@ impl LiveEngine {
             log_push(
                 log,
                 EntryKind::Warn,
-                format!("🚨 EMERGENCY STOP: {reason} — circuit breaker tripped, all orders cancelled"),
+                format!(
+                    "🚨 EMERGENCY STOP: {reason} — circuit breaker tripped, all orders cancelled"
+                ),
             );
         }
 
@@ -843,7 +876,10 @@ mod tests {
 
     #[test]
     fn classify_intent_hedge_or_flatten() {
-        assert_eq!(classify_intent_from_counts(0, 1), SignalIntent::HedgeOrFlatten);
+        assert_eq!(
+            classify_intent_from_counts(0, 1),
+            SignalIntent::HedgeOrFlatten
+        );
     }
 
     #[test]

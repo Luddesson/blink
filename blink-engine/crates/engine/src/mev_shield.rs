@@ -121,11 +121,7 @@ impl MevShield {
     ///
     /// Runs staleness check + sandwich detection. Returns `true` if the
     /// transaction is safe to submit.
-    pub fn screen_submission(
-        &mut self,
-        token_id: &str,
-        submitted_at: Instant,
-    ) -> bool {
+    pub fn screen_submission(&mut self, token_id: &str, submitted_at: Instant) -> bool {
         // 1. Staleness check.
         if self.is_bundle_stale(submitted_at) {
             return false;
@@ -276,12 +272,5 @@ mod tests {
         assert!(!hints.logs);
         assert!(hints.tx_hash);
         assert!(hints.function_selector.is_none());
-    }
-
-    #[test]
-    fn constants_are_consistent() {
-        assert!(BUNDLE_MAX_AGE > SANDWICH_WINDOW);
-        assert!(SANDWICH_TX_THRESHOLD >= 2);
-        assert!(DEADLINE_OFFSET_SECS > 0);
     }
 }

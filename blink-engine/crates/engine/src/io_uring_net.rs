@@ -87,9 +87,9 @@ impl AsyncNetworkIo for TokioNet {
         Box::pin(async move {
             use tokio::io::AsyncReadExt;
             let mut guard = self.stream.lock().await;
-            let stream = guard
-                .as_mut()
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected"))?;
+            let stream = guard.as_mut().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")
+            })?;
             stream.read(buf).await
         })
     }
@@ -98,9 +98,9 @@ impl AsyncNetworkIo for TokioNet {
         Box::pin(async move {
             use tokio::io::AsyncWriteExt;
             let mut guard = self.stream.lock().await;
-            let stream = guard
-                .as_mut()
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected"))?;
+            let stream = guard.as_mut().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")
+            })?;
             stream.write_all(buf).await
         })
     }
@@ -109,9 +109,9 @@ impl AsyncNetworkIo for TokioNet {
         Box::pin(async move {
             use tokio::io::AsyncWriteExt;
             let mut guard = self.stream.lock().await;
-            let stream = guard
-                .as_mut()
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected"))?;
+            let stream = guard.as_mut().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")
+            })?;
             stream.flush().await
         })
     }

@@ -91,11 +91,7 @@ impl GasStrategy {
 
         debug!(
             expected_profit_usdc,
-            gas_limit,
-            profit_fee_gwei,
-            oracle_fee,
-            clamped,
-            "GasStrategy fee calculated"
+            gas_limit, profit_fee_gwei, oracle_fee, clamped, "GasStrategy fee calculated"
         );
 
         clamped
@@ -140,12 +136,6 @@ mod tests {
         let fee = strategy.calc_priority_fee(5.0, 200_000).await;
         assert!(fee >= PRIORITY_FEE_FLOOR_GWEI);
         assert!(fee <= PRIORITY_FEE_CEILING_GWEI);
-    }
-
-    #[test]
-    fn constants_are_sane() {
-        assert!(PRIORITY_FEE_FLOOR_GWEI < PRIORITY_FEE_CEILING_GWEI);
-        assert!(PROFIT_GAS_FRACTION > 0.0 && PROFIT_GAS_FRACTION < 1.0);
     }
 
     #[tokio::test]

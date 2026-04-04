@@ -4,8 +4,8 @@
 //! submission.  It returns `Ok(())` only when all safety checks pass.
 
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
 use std::fmt;
+use std::time::{Duration, Instant};
 
 // ─── RiskConfig ───────────────────────────────────────────────────────────────
 
@@ -109,30 +109,15 @@ pub enum RiskViolation {
     /// The global kill switch (`trading_enabled`) is set to false.
     KillSwitchOff,
     /// The circuit breaker was manually tripped.
-    CircuitBreakerTripped {
-        reason: String,
-        tripped_at: Instant,
-    },
+    CircuitBreakerTripped { reason: String, tripped_at: Instant },
     /// Cumulative daily losses have exceeded the configured limit.
-    DailyLossLimitExceeded {
-        loss_usdc: f64,
-        limit_usdc: f64,
-    },
+    DailyLossLimitExceeded { loss_usdc: f64, limit_usdc: f64 },
     /// Too many concurrent open positions.
-    TooManyPositions {
-        current: usize,
-        max: usize,
-    },
+    TooManyPositions { current: usize, max: usize },
     /// Single order size exceeds the configured cap.
-    OrderTooLarge {
-        size_usdc: f64,
-        max_usdc: f64,
-    },
+    OrderTooLarge { size_usdc: f64, max_usdc: f64 },
     /// Order rate exceeds the per-second limit.
-    RateLimitExceeded {
-        orders_in_window: u32,
-        max: u32,
-    },
+    RateLimitExceeded { orders_in_window: u32, max: u32 },
     /// Rolling 60-second Value-at-Risk exceeds the configured threshold.
     VarBreached {
         exposure_usdc: f64,
@@ -154,31 +139,41 @@ impl fmt::Display for RiskViolation {
                     "RISK: Circuit breaker tripped {secs}s ago — reason: {reason}"
                 )
             }
-            RiskViolation::DailyLossLimitExceeded { loss_usdc, limit_usdc } => {
+            RiskViolation::DailyLossLimitExceeded {
+                loss_usdc,
+                limit_usdc,
+            } => {
                 write!(
                     f,
                     "RISK: Daily loss limit exceeded (loss=${loss_usdc:.2}, limit=${limit_usdc:.2})"
                 )
             }
             RiskViolation::TooManyPositions { current, max } => {
-                write!(
-                    f,
-                    "RISK: Too many open positions ({current}/{max})"
-                )
+                write!(f, "RISK: Too many open positions ({current}/{max})")
             }
-            RiskViolation::OrderTooLarge { size_usdc, max_usdc } => {
+            RiskViolation::OrderTooLarge {
+                size_usdc,
+                max_usdc,
+            } => {
                 write!(
                     f,
                     "RISK: Order too large (${size_usdc:.2} > max ${max_usdc:.2})"
                 )
             }
-            RiskViolation::RateLimitExceeded { orders_in_window, max } => {
+            RiskViolation::RateLimitExceeded {
+                orders_in_window,
+                max,
+            } => {
                 write!(
                     f,
                     "RISK: Rate limit exceeded ({orders_in_window}/{max} orders/sec)"
                 )
             }
-            RiskViolation::VarBreached { exposure_usdc, threshold_usdc, nav } => {
+            RiskViolation::VarBreached {
+                exposure_usdc,
+                threshold_usdc,
+                nav,
+            } => {
                 write!(
                     f,
                     "RISK: VaR breached — rolling exposure ${exposure_usdc:.2} > {:.1}% of NAV ${nav:.2} (threshold ${threshold_usdc:.2})",
@@ -251,8 +246,7 @@ impl RiskManager {
             if self.circuit_breaker_reason.starts_with("VaR breached") {
                 let now = Instant::now();
                 self.evict_expired_exposure(now);
-                let rolling_sum: f64 =
-                    self.rolling_exposure.iter().map(|e| e.amount_usdc).sum();
+                let rolling_sum: f64 = self.rolling_exposure.iter().map(|e| e.amount_usdc).sum();
                 let threshold_usdc = starting_nav * self.config.var_threshold_pct;
                 if rolling_sum + size_usdc <= threshold_usdc {
                     // Exposure decayed below threshold — auto-reset.
@@ -293,7 +287,8 @@ impl RiskManager {
 
         // 4. Concurrent positions (0 = unlimited)
         if self.config.max_concurrent_positions > 0
-            && open_positions >= self.config.max_concurrent_positions {
+            && open_positions >= self.config.max_concurrent_positions
+        {
             return Err(RiskViolation::TooManyPositions {
                 current: open_positions,
                 max: self.config.max_concurrent_positions,
@@ -522,7 +517,10 @@ mod tests {
     fn too_many_positions_blocks() {
         let mut rm = default_rm(); // max = 5
         let err = rm.check_pre_order(5.0, 5, 100.0, 100.0).unwrap_err();
-        assert!(matches!(err, RiskViolation::TooManyPositions { current: 5, max: 5 }));
+        assert!(matches!(
+            err,
+            RiskViolation::TooManyPositions { current: 5, max: 5 }
+        ));
     }
 
     #[test]
@@ -582,11 +580,24 @@ mod tests {
                 reason: "loss".into(),
                 tripped_at: Instant::now(),
             },
-            RiskViolation::DailyLossLimitExceeded { loss_usdc: 12.0, limit_usdc: 10.0 },
+            RiskViolation::DailyLossLimitExceeded {
+                loss_usdc: 12.0,
+                limit_usdc: 10.0,
+            },
             RiskViolation::TooManyPositions { current: 5, max: 5 },
-            RiskViolation::OrderTooLarge { size_usdc: 25.0, max_usdc: 20.0 },
-            RiskViolation::RateLimitExceeded { orders_in_window: 3, max: 3 },
-            RiskViolation::VarBreached { exposure_usdc: 6.0, threshold_usdc: 5.0, nav: 100.0 },
+            RiskViolation::OrderTooLarge {
+                size_usdc: 25.0,
+                max_usdc: 20.0,
+            },
+            RiskViolation::RateLimitExceeded {
+                orders_in_window: 3,
+                max: 3,
+            },
+            RiskViolation::VarBreached {
+                exposure_usdc: 6.0,
+                threshold_usdc: 5.0,
+                nav: 100.0,
+            },
         ];
         for v in &violations {
             let s = v.to_string();
@@ -631,7 +642,10 @@ mod tests {
 
         // Exposure should have expired; new order under threshold passes
         let exposure = rm.rolling_exposure_usdc();
-        assert!(exposure < 0.01, "exposure should be ~0 after window, got {exposure}");
+        assert!(
+            exposure < 0.01,
+            "exposure should be ~0 after window, got {exposure}"
+        );
     }
 
     #[test]

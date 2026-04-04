@@ -32,50 +32,50 @@ use tracing::{debug, info, warn};
 #[derive(Row, Serialize, Debug, Clone)]
 pub struct OrderBookSnapshot {
     pub timestamp_ms: u64,
-    pub token_id:     String,
-    pub best_bid:     u64,
-    pub best_ask:     u64,
-    pub bid_depth:    u64,
-    pub ask_depth:    u64,
-    pub spread:       u64,
+    pub token_id: String,
+    pub best_bid: u64,
+    pub best_ask: u64,
+    pub bid_depth: u64,
+    pub ask_depth: u64,
+    pub spread: u64,
 }
 
 /// A detected RN1 whale signal.
 #[derive(Row, Serialize, Debug, Clone)]
 pub struct Rn1SignalRecord {
     pub timestamp_ms: u64,
-    pub token_id:     String,
-    pub side:         String,
-    pub price:        u64,
-    pub size:         u64,
-    pub wallet:       String,
+    pub token_id: String,
+    pub side: String,
+    pub price: u64,
+    pub size: u64,
+    pub wallet: String,
 }
 
 /// An order placed by the engine (paper or live).
 #[derive(Row, Serialize, Debug, Clone)]
 pub struct TradeExecution {
     pub timestamp_ms: u64,
-    pub token_id:     String,
-    pub side:         String,
-    pub price:        u64,
-    pub size:         u64,
-    pub order_id:     String,
-    pub mode:         String,
-    pub status:       String,
+    pub token_id: String,
+    pub side: String,
+    pub price: u64,
+    pub size: u64,
+    pub order_id: String,
+    pub mode: String,
+    pub status: String,
 }
 
 /// Periodic engine health snapshot.
 #[derive(Row, Serialize, Debug, Clone)]
 pub struct SystemMetric {
-    pub timestamp_ms:     u64,
-    pub ws_connected:     u8,
-    pub msg_per_sec:      u64,
-    pub latency_min_us:   u64,
-    pub latency_max_us:   u64,
-    pub latency_avg_us:   u64,
-    pub latency_p99_us:   u64,
-    pub open_positions:   u32,
-    pub unrealised_pnl:   i64,
+    pub timestamp_ms: u64,
+    pub ws_connected: u8,
+    pub msg_per_sec: u64,
+    pub latency_min_us: u64,
+    pub latency_max_us: u64,
+    pub latency_avg_us: u64,
+    pub latency_p99_us: u64,
+    pub open_positions: u32,
+    pub unrealised_pnl: i64,
 }
 
 // ─── Envelope ────────────────────────────────────────────────────────────────
@@ -189,10 +189,10 @@ impl ClickHouseLogger {
         const BATCH_SIZE: usize = 500;
         const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
-        let mut ob_batch:  Vec<OrderBookSnapshot> = Vec::with_capacity(BATCH_SIZE);
-        let mut rn1_batch: Vec<Rn1SignalRecord>   = Vec::with_capacity(BATCH_SIZE);
-        let mut tx_batch:  Vec<TradeExecution>     = Vec::with_capacity(BATCH_SIZE);
-        let mut met_batch: Vec<SystemMetric>       = Vec::with_capacity(BATCH_SIZE);
+        let mut ob_batch: Vec<OrderBookSnapshot> = Vec::with_capacity(BATCH_SIZE);
+        let mut rn1_batch: Vec<Rn1SignalRecord> = Vec::with_capacity(BATCH_SIZE);
+        let mut tx_batch: Vec<TradeExecution> = Vec::with_capacity(BATCH_SIZE);
+        let mut met_batch: Vec<SystemMetric> = Vec::with_capacity(BATCH_SIZE);
 
         let mut last_flush = Instant::now();
 
@@ -201,25 +201,23 @@ impl ClickHouseLogger {
                 match event {
                     WarehouseEvent::OrderBook(e) => ob_batch.push(e),
                     WarehouseEvent::Rn1Signal(e) => rn1_batch.push(e),
-                    WarehouseEvent::Trade(e)     => tx_batch.push(e),
-                    WarehouseEvent::Metric(e)    => met_batch.push(e),
+                    WarehouseEvent::Trade(e) => tx_batch.push(e),
+                    WarehouseEvent::Metric(e) => met_batch.push(e),
                 }
 
-                let total = ob_batch.len() + rn1_batch.len()
-                          + tx_batch.len() + met_batch.len();
+                let total = ob_batch.len() + rn1_batch.len() + tx_batch.len() + met_batch.len();
                 if total >= BATCH_SIZE {
-                    self.flush_all(&mut ob_batch, &mut rn1_batch,
-                                   &mut tx_batch, &mut met_batch).await;
+                    self.flush_all(&mut ob_batch, &mut rn1_batch, &mut tx_batch, &mut met_batch)
+                        .await;
                     last_flush = Instant::now();
                 }
             }
 
             if last_flush.elapsed() >= FLUSH_INTERVAL {
-                let total = ob_batch.len() + rn1_batch.len()
-                          + tx_batch.len() + met_batch.len();
+                let total = ob_batch.len() + rn1_batch.len() + tx_batch.len() + met_batch.len();
                 if total > 0 {
-                    self.flush_all(&mut ob_batch, &mut rn1_batch,
-                                   &mut tx_batch, &mut met_batch).await;
+                    self.flush_all(&mut ob_batch, &mut rn1_batch, &mut tx_batch, &mut met_batch)
+                        .await;
                 }
                 last_flush = Instant::now();
             }
@@ -230,9 +228,9 @@ impl ClickHouseLogger {
 
     async fn flush_all(
         &self,
-        ob:  &mut Vec<OrderBookSnapshot>,
+        ob: &mut Vec<OrderBookSnapshot>,
         rn1: &mut Vec<Rn1SignalRecord>,
-        tx:  &mut Vec<TradeExecution>,
+        tx: &mut Vec<TradeExecution>,
         met: &mut Vec<SystemMetric>,
     ) {
         self.flush_table("blink.order_book_snapshots", ob).await;
@@ -241,11 +239,7 @@ impl ClickHouseLogger {
         self.flush_table("blink.system_metrics", met).await;
     }
 
-    async fn flush_table<T: Row + Serialize>(
-        &self,
-        table: &str,
-        batch: &mut Vec<T>,
-    ) {
+    async fn flush_table<T: Row + Serialize>(&self, table: &str, batch: &mut Vec<T>) {
         if batch.is_empty() {
             return;
         }

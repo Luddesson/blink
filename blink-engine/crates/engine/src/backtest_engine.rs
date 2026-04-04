@@ -75,7 +75,7 @@ pub struct TickRecord {
 // ─── Virtual Clock ───────────────────────────────────────────────────────────
 
 /// A monotonically non-decreasing virtual clock.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct VirtualClock {
     current_ms: i64,
 }
@@ -271,7 +271,12 @@ impl BacktestEngine {
                 let open_positions = self.portfolio.positions.len();
                 if self
                     .risk
-                    .check_pre_order(size_usdc, open_positions, self.portfolio.nav(), starting_nav)
+                    .check_pre_order(
+                        size_usdc,
+                        open_positions,
+                        self.portfolio.nav(),
+                        starting_nav,
+                    )
                     .is_err()
                 {
                     continue;
@@ -284,12 +289,12 @@ impl BacktestEngine {
                 let window_end = tick.timestamp + self.config.fill_window_ms as i64;
                 let mut drift_abort = false;
 
-                for j in (i + 1)..tick_count {
-                    if ticks[j].timestamp > window_end {
+                for tick_j in ticks.iter().skip(i + 1).take(tick_count - i - 1) {
+                    if tick_j.timestamp > window_end {
                         break;
                     }
-                    if ticks[j].token_id == tick.token_id {
-                        let future_price = ticks[j].price as f64 / 1000.0;
+                    if tick_j.token_id == tick.token_id {
+                        let future_price = tick_j.price as f64 / 1000.0;
                         let drift = (future_price - entry_price).abs() / entry_price;
                         if drift > self.config.drift_threshold {
                             drift_abort = true;
@@ -325,9 +330,10 @@ impl BacktestEngine {
 
             // 5. Record equity curve (one point per distinct timestamp).
             let nav = self.portfolio.nav();
-            if equity_curve
-                .last()
-                .map_or(true, |&(ts, _)| ts != tick.timestamp)
+            if equity_curve.is_empty()
+                || equity_curve
+                    .last()
+                    .map_or(false, |&(ts, _)| ts != tick.timestamp)
             {
                 equity_curve.push((tick.timestamp, nav));
             }
@@ -538,7 +544,11 @@ fn compute_sortino(returns: &[f64]) -> f64 {
     }
     let n = returns.len() as f64;
     let mean = returns.iter().sum::<f64>() / n;
-    let downside_sq: f64 = returns.iter().filter(|&&r| r < 0.0).map(|r| r.powi(2)).sum();
+    let downside_sq: f64 = returns
+        .iter()
+        .filter(|&&r| r < 0.0)
+        .map(|r| r.powi(2))
+        .sum();
     let downside_dev = (downside_sq / n).sqrt();
     if downside_dev == 0.0 {
         return if mean > 0.0 { f64::INFINITY } else { 0.0 };
@@ -608,7 +618,10 @@ mod tests {
         let mut engine = BacktestEngine::new(cfg(), ticks);
         let results = engine.run();
 
-        assert_eq!(results.total_trades, 0, "trade should be aborted due to drift");
+        assert_eq!(
+            results.total_trades, 0,
+            "trade should be aborted due to drift"
+        );
         assert_eq!(engine.portfolio.aborted_orders, 1);
     }
 
@@ -668,7 +681,10 @@ mod tests {
         let mut engine = BacktestEngine::new(cfg(), ticks);
         let results = engine.run();
 
-        assert_eq!(engine.portfolio.aborted_orders, 1, "should abort due to drift");
+        assert_eq!(
+            engine.portfolio.aborted_orders, 1,
+            "should abort due to drift"
+        );
         assert_eq!(results.total_trades, 0);
     }
 
@@ -684,7 +700,10 @@ mod tests {
         let mut engine = BacktestEngine::new(cfg(), ticks);
         let results = engine.run();
 
-        assert_eq!(engine.portfolio.total_signals, 0, "no RN1 signals should fire");
+        assert_eq!(
+            engine.portfolio.total_signals, 0,
+            "no RN1 signals should fire"
+        );
         assert_eq!(results.total_trades, 0);
     }
 }

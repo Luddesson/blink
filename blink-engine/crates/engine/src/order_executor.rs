@@ -13,7 +13,7 @@ use hmac::{Hmac, Mac};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use tracing::{info, instrument, warn, error};
+use tracing::{error, info, instrument, warn};
 
 use crate::config::Config;
 use crate::order_signer::SignedOrder;
@@ -59,15 +59,15 @@ pub struct OrderStatus {
 /// request is made.  The engine always sets `dry_run = !live_trading`.
 #[derive(Clone)]
 pub struct OrderExecutor {
-    client:         Client,
-    base_url:       String,
-    maker_address:  String,
-    api_key:        String,
+    client: Client,
+    base_url: String,
+    maker_address: String,
+    api_key: String,
     /// Base64-encoded secret; decoded to raw bytes before HMAC use.
-    api_secret:     String,
-    passphrase:     String,
+    api_secret: String,
+    passphrase: String,
     /// When `true` outbound mutating requests are suppressed.
-    pub dry_run:    bool,
+    pub dry_run: bool,
 }
 
 impl OrderExecutor {
@@ -76,13 +76,13 @@ impl OrderExecutor {
     /// `dry_run` is set to `!config.live_trading` automatically.
     pub fn from_config(config: &Config) -> Self {
         Self {
-            client:        Client::new(),
-            base_url:      "https://clob.polymarket.com".to_string(),
+            client: Client::new(),
+            base_url: "https://clob.polymarket.com".to_string(),
             maker_address: config.funder_address.clone(),
-            api_key:       config.api_key.clone(),
-            api_secret:    config.api_secret.clone(),
-            passphrase:    config.api_passphrase.clone(),
-            dry_run:       !config.live_trading,
+            api_key: config.api_key.clone(),
+            api_secret: config.api_secret.clone(),
+            passphrase: config.api_passphrase.clone(),
+            dry_run: !config.live_trading,
         }
     }
 
@@ -93,10 +93,13 @@ impl OrderExecutor {
     /// Returns the exchange's [`OrderResponse`].  In dry-run mode the order is
     /// logged and a synthetic success response is returned instead.
     #[instrument(skip(self, order), fields(token_id = %order.token_id, side = order.side, dry_run = self.dry_run))]
-    pub async fn submit_order(&self, order: &SignedOrder, time_in_force: TimeInForce) -> Result<OrderResponse> {
+    pub async fn submit_order(
+        &self,
+        order: &SignedOrder,
+        time_in_force: TimeInForce,
+    ) -> Result<OrderResponse> {
         let body = build_order_body(order, &self.maker_address, time_in_force);
-        let body_json =
-            serde_json::to_string(&body).context("failed to serialise order body")?;
+        let body_json = serde_json::to_string(&body).context("failed to serialise order body")?;
 
         if self.dry_run {
             info!(
@@ -104,9 +107,9 @@ impl OrderExecutor {
                 "DRY-RUN: would POST /order (live_trading=false)"
             );
             return Ok(OrderResponse {
-                success:   true,
-                order_id:  Some("dry-run".to_string()),
-                status:    Some("dry_run".to_string()),
+                success: true,
+                order_id: Some("dry-run".to_string()),
+                status: Some("dry_run".to_string()),
                 error_msg: None,
             });
         }
@@ -140,10 +143,11 @@ impl OrderExecutor {
                 &body_json,
             )?;
 
-            let mut req = self.client.post(&url).body(body_json.clone()).header(
-                "Content-Type",
-                "application/json",
-            );
+            let mut req = self
+                .client
+                .post(&url)
+                .body(body_json.clone())
+                .header("Content-Type", "application/json");
             for (k, v) in headers {
                 req = req.header(k, v);
             }
@@ -187,9 +191,8 @@ impl OrderExecutor {
             return Ok(parsed);
         }
 
-        Err(last_err.unwrap_or_else(|| {
-            anyhow::anyhow!("POST /order failed after {MAX_ATTEMPTS} attempts")
-        }))
+        Err(last_err
+            .unwrap_or_else(|| anyhow::anyhow!("POST /order failed after {MAX_ATTEMPTS} attempts")))
     }
 
     // ─── Cancellation ────────────────────────────────────────────────────────
@@ -259,7 +262,10 @@ impl OrderExecutor {
             req = req.header(k, v);
         }
 
-        let resp = req.send().await.context("DELETE /orders/market network error")?;
+        let resp = req
+            .send()
+            .await
+            .context("DELETE /orders/market network error")?;
         let status = resp.status();
 
         if !status.is_success() {
@@ -284,7 +290,7 @@ impl OrderExecutor {
         }
 
         let path = "/heartbeat";
-        let url  = format!("{}{}", self.base_url, path);
+        let url = format!("{}{}", self.base_url, path);
         let body = "{}";
 
         let headers = build_auth_headers(
@@ -306,7 +312,7 @@ impl OrderExecutor {
             req = req.header(k, v);
         }
 
-        let resp   = req.send().await.context("POST /heartbeat network error")?;
+        let resp = req.send().await.context("POST /heartbeat network error")?;
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
@@ -326,7 +332,7 @@ impl OrderExecutor {
         }
 
         let path = "/orders";
-        let url  = format!("{}{}", self.base_url, path);
+        let url = format!("{}{}", self.base_url, path);
 
         let headers = build_auth_headers(
             &self.api_key,
@@ -343,7 +349,7 @@ impl OrderExecutor {
             req = req.header(k, v);
         }
 
-        let resp   = req.send().await.context("DELETE /orders network error")?;
+        let resp = req.send().await.context("DELETE /orders network error")?;
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
@@ -370,7 +376,7 @@ impl OrderExecutor {
         }
 
         let path = "/order/auth-probe";
-        let url  = format!("{}{}", self.base_url, path);
+        let url = format!("{}{}", self.base_url, path);
         let headers = build_auth_headers(
             &self.api_key,
             &self.api_secret,
@@ -392,7 +398,7 @@ impl OrderExecutor {
             .context("GET /order/auth-probe network error — check connectivity")?;
 
         let status = resp.status();
-        let body   = resp.text().await.unwrap_or_default();
+        let body = resp.text().await.unwrap_or_default();
 
         match status.as_u16() {
             // 404 = auth accepted, order simply not found — credentials valid.
@@ -461,13 +467,13 @@ impl OrderExecutor {
 /// Message format: `timestamp + method + path + body`  
 /// The `api_secret` is base64-decoded before use as the HMAC key.
 fn build_auth_headers(
-    api_key:        &str,
-    api_secret:     &str,
-    passphrase:     &str,
-    maker_address:  &str,
-    method:         &str,
-    path:           &str,
-    body:           &str,
+    api_key: &str,
+    api_secret: &str,
+    passphrase: &str,
+    maker_address: &str,
+    method: &str,
+    path: &str,
+    body: &str,
 ) -> Result<Vec<(String, String)>> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -481,19 +487,18 @@ fn build_auth_headers(
         .decode(api_secret)
         .context("POLYMARKET_API_SECRET is not valid base64")?;
 
-    let mut mac =
-        HmacSha256::new_from_slice(&secret_bytes).context("HMAC init failed")?;
+    let mut mac = HmacSha256::new_from_slice(&secret_bytes).context("HMAC init failed")?;
     mac.update(message.as_bytes());
     let mac_bytes = mac.finalize().into_bytes();
 
     let signature = B64.encode(mac_bytes);
 
     Ok(vec![
-        ("POLY-ADDRESS".into(),    maker_address.to_string()),
-        ("POLY-SIGNATURE".into(),  signature),
-        ("POLY-TIMESTAMP".into(),  timestamp),
-        ("POLY-NONCE".into(),      "0".to_string()),
-        ("POLY-API-KEY".into(),    api_key.to_string()),
+        ("POLY-ADDRESS".into(), maker_address.to_string()),
+        ("POLY-SIGNATURE".into(), signature),
+        ("POLY-TIMESTAMP".into(), timestamp),
+        ("POLY-NONCE".into(), "0".to_string()),
+        ("POLY-API-KEY".into(), api_key.to_string()),
         ("POLY-PASSPHRASE".into(), passphrase.to_string()),
     ])
 }
@@ -504,56 +509,56 @@ fn build_auth_headers(
 /// Polymarket CLOB REST API spec.
 #[derive(Debug, Serialize)]
 struct OrderBody {
-    order:      OrderFields,
-    owner:      String,
+    order: OrderFields,
+    owner: String,
     #[serde(rename = "orderType")]
     order_type: String,
     /// `true` = post-only (maker).  **MUST** be `true` to avoid taker fees.
-    maker:      bool,
+    maker: bool,
 }
 
 #[derive(Debug, Serialize)]
 struct OrderFields {
-    salt:                      String,
-    maker:                     String,
-    signer:                    String,
-    taker:                     String,
+    salt: String,
+    maker: String,
+    signer: String,
+    taker: String,
     #[serde(rename = "tokenId")]
-    token_id:                  String,
+    token_id: String,
     #[serde(rename = "makerAmount")]
-    maker_amount:              String,
+    maker_amount: String,
     #[serde(rename = "takerAmount")]
-    taker_amount:              String,
-    expiration:                String,
-    nonce:                     String,
+    taker_amount: String,
+    expiration: String,
+    nonce: String,
     #[serde(rename = "feeRateBps")]
-    fee_rate_bps:              String,
-    side:                      u8,
+    fee_rate_bps: String,
+    side: u8,
     #[serde(rename = "signatureType")]
-    signature_type:            u8,
-    signature:                 String,
+    signature_type: u8,
+    signature: String,
 }
 
 fn build_order_body(order: &SignedOrder, owner: &str, time_in_force: TimeInForce) -> OrderBody {
     OrderBody {
         order: OrderFields {
-            salt:           order.salt.clone(),
-            maker:          order.maker.clone(),
-            signer:         order.signer.clone(),
-            taker:          order.taker.clone(),
-            token_id:       order.token_id.clone(),
-            maker_amount:   order.maker_amount.to_string(),
-            taker_amount:   order.taker_amount.to_string(),
-            expiration:     order.expiration.to_string(),
-            nonce:          order.nonce.to_string(),
-            fee_rate_bps:   order.fee_rate_bps.to_string(),
-            side:           order.side,
+            salt: order.salt.clone(),
+            maker: order.maker.clone(),
+            signer: order.signer.clone(),
+            taker: order.taker.clone(),
+            token_id: order.token_id.clone(),
+            maker_amount: order.maker_amount.to_string(),
+            taker_amount: order.taker_amount.to_string(),
+            expiration: order.expiration.to_string(),
+            nonce: order.nonce.to_string(),
+            fee_rate_bps: order.fee_rate_bps.to_string(),
+            side: order.side,
             signature_type: order.signature_type,
-            signature:      order.signature.clone(),
+            signature: order.signature.clone(),
         },
-        owner:      owner.to_string(),
+        owner: owner.to_string(),
         order_type: time_in_force.to_string(),
-        maker:      true,   // post-only — CRITICAL: prevents paying taker fees
+        maker: true, // post-only — CRITICAL: prevents paying taker fees
     }
 }
 
@@ -566,19 +571,19 @@ mod tests {
 
     fn dummy_order() -> SignedOrder {
         SignedOrder {
-            salt:           "12345".to_string(),
-            maker:          "0x0000000000000000000000000000000000000000".to_string(),
-            signer:         "0x0000000000000000000000000000000000000000".to_string(),
-            taker:          "0x0000000000000000000000000000000000000000".to_string(),
-            token_id:       "99999".to_string(),
-            maker_amount:   10_000_000,
-            taker_amount:   15_384_615,
-            expiration:     0,
-            nonce:          0,
-            fee_rate_bps:   0,
-            side:           0,
+            salt: "12345".to_string(),
+            maker: "0x0000000000000000000000000000000000000000".to_string(),
+            signer: "0x0000000000000000000000000000000000000000".to_string(),
+            taker: "0x0000000000000000000000000000000000000000".to_string(),
+            token_id: "99999".to_string(),
+            maker_amount: 10_000_000,
+            taker_amount: 15_384_615,
+            expiration: 0,
+            nonce: 0,
+            fee_rate_bps: 0,
+            side: 0,
             signature_type: 0,
-            signature:      "0xdeadbeef".to_string(),
+            signature: "0xdeadbeef".to_string(),
         }
     }
 
@@ -604,16 +609,9 @@ mod tests {
         // Smoke-test: verify that build_auth_headers doesn't panic with
         // a well-formed base64 secret.
         let secret_b64 = B64.encode(b"test_secret_32bytes_exactly_ok!!");
-        let headers = build_auth_headers(
-            "key",
-            &secret_b64,
-            "pass",
-            "0xAddr",
-            "POST",
-            "/order",
-            "{}",
-        )
-        .unwrap();
+        let headers =
+            build_auth_headers("key", &secret_b64, "pass", "0xAddr", "POST", "/order", "{}")
+                .unwrap();
 
         let keys: Vec<&str> = headers.iter().map(|(k, _)| k.as_str()).collect();
         assert!(keys.contains(&"POLY-ADDRESS"));

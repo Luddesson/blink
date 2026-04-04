@@ -96,8 +96,8 @@ impl PaperPosition {
     #[inline]
     pub fn unrealized_pnl(&self) -> f64 {
         match self.side {
-            OrderSide::Buy  => (self.current_price - self.entry_price) * self.shares,
-            OrderSide::Sell => (self.entry_price   - self.current_price) * self.shares,
+            OrderSide::Buy => (self.current_price - self.entry_price) * self.shares,
+            OrderSide::Sell => (self.entry_price - self.current_price) * self.shares,
         }
     }
 
@@ -233,15 +233,15 @@ impl PaperPortfolio {
     /// Creates a fresh portfolio with `STARTING_BALANCE_USDC` virtual USDC.
     pub fn new() -> Self {
         Self {
-            cash_usdc:      STARTING_BALANCE_USDC,
-            positions:      Vec::new(),
-            closed_trades:  Vec::new(),
-            total_signals:  0,
-            filled_orders:  0,
+            cash_usdc: STARTING_BALANCE_USDC,
+            positions: Vec::new(),
+            closed_trades: Vec::new(),
+            total_signals: 0,
+            filled_orders: 0,
             aborted_orders: 0,
             skipped_orders: 0,
-            equity_curve:   Vec::with_capacity(EQUITY_CURVE_MAX),
-            next_id:        1,
+            equity_curve: Vec::with_capacity(EQUITY_CURVE_MAX),
+            next_id: 1,
         }
     }
 
@@ -249,7 +249,11 @@ impl PaperPortfolio {
 
     /// Total net asset value: cash + market value of open positions.
     pub fn nav(&self) -> f64 {
-        let haircut = if realism_mode() { exit_haircut_bps() } else { 0.0 };
+        let haircut = if realism_mode() {
+            exit_haircut_bps()
+        } else {
+            0.0
+        };
         let mkt_value: f64 = self
             .positions
             .iter()
@@ -272,7 +276,11 @@ impl PaperPortfolio {
 
     /// Sum of unrealized P&L across all open positions.
     pub fn unrealized_pnl(&self) -> f64 {
-        let haircut = if realism_mode() { exit_haircut_bps() } else { 0.0 };
+        let haircut = if realism_mode() {
+            exit_haircut_bps()
+        } else {
+            0.0
+        };
         self.positions
             .iter()
             .map(|p| {
@@ -318,10 +326,14 @@ impl PaperPortfolio {
             .unwrap_or(8.0)
             .max(min_trade_usdc);
 
-        let raw        = rn1_notional_usdc * size_multiplier;
-        let cap_nav    = self.nav() * max_position_pct;
-        let size       = raw.max(min_floor_usdc).min(cap_nav).min(self.cash_usdc);
-        if size < min_trade_usdc { None } else { Some(size) }
+        let raw = rn1_notional_usdc * size_multiplier;
+        let cap_nav = self.nav() * max_position_pct;
+        let size = raw.max(min_floor_usdc).min(cap_nav).min(self.cash_usdc);
+        if size < min_trade_usdc {
+            None
+        } else {
+            Some(size)
+        }
     }
 
     // ── Mutations ─────────────────────────────────────────────────────────
@@ -331,31 +343,42 @@ impl PaperPortfolio {
     /// Returns the sequential position ID.
     pub fn open_position(
         &mut self,
-        token_id:     String,
-        side:         OrderSide,
-        entry_price:  f64,
-        usdc_size:    f64,
+        token_id: String,
+        side: OrderSide,
+        entry_price: f64,
+        usdc_size: f64,
         rn1_order_id: String,
     ) -> usize {
-        self.open_position_with_meta(token_id, None, None, side, entry_price, usdc_size, rn1_order_id, 0.0, 0, "A")
+        self.open_position_with_meta(
+            token_id,
+            None,
+            None,
+            side,
+            entry_price,
+            usdc_size,
+            rn1_order_id,
+            0.0,
+            0,
+            "A",
+        )
     }
 
     pub fn open_position_with_meta(
         &mut self,
-        token_id:     String,
+        token_id: String,
         market_title: Option<String>,
         market_outcome: Option<String>,
-        side:         OrderSide,
-        entry_price:  f64,
-        usdc_size:    f64,
+        side: OrderSide,
+        entry_price: f64,
+        usdc_size: f64,
         rn1_order_id: String,
         entry_slippage_bps: f64,
         queue_delay_ms: u64,
         experiment_variant: &str,
     ) -> usize {
         let shares = usdc_size / entry_price;
-        let id     = self.next_id;
-        self.next_id   += 1;
+        let id = self.next_id;
+        self.next_id += 1;
         let entry_fee = if realism_mode() {
             usdc_size * (taker_fee_bps() / 10_000.0)
         } else {
@@ -370,9 +393,9 @@ impl PaperPortfolio {
             side,
             entry_price,
             shares,
-            usdc_spent:    usdc_size,
+            usdc_spent: usdc_size,
             current_price: entry_price,
-            opened_at:     Instant::now(),
+            opened_at: Instant::now(),
             rn1_order_id,
             opened_at_wall: chrono::Local::now(),
             entry_slippage_bps,
@@ -431,7 +454,13 @@ impl PaperPortfolio {
                     slippage_bps: pos.entry_slippage_bps,
                     queue_delay_ms: pos.queue_delay_ms,
                     outcome_tags: vec![
-                        if pnl > 0.0 { "profit".to_string() } else if pnl < 0.0 { "loss".to_string() } else { "breakeven".to_string() },
+                        if pnl > 0.0 {
+                            "profit".to_string()
+                        } else if pnl < 0.0 {
+                            "loss".to_string()
+                        } else {
+                            "breakeven".to_string()
+                        },
                         format!("variant:{}", pos.experiment_variant),
                     ],
                 },
@@ -513,7 +542,13 @@ impl PaperPortfolio {
                     slippage_bps: pos.entry_slippage_bps,
                     queue_delay_ms: pos.queue_delay_ms,
                     outcome_tags: vec![
-                        if pnl > 0.0 { "profit".to_string() } else if pnl < 0.0 { "loss".to_string() } else { "breakeven".to_string() },
+                        if pnl > 0.0 {
+                            "profit".to_string()
+                        } else if pnl < 0.0 {
+                            "loss".to_string()
+                        } else {
+                            "breakeven".to_string()
+                        },
                         format!("variant:{}", pos.experiment_variant),
                     ],
                 },
@@ -552,7 +587,13 @@ impl PaperPortfolio {
                 slippage_bps: pos.entry_slippage_bps,
                 queue_delay_ms: pos.queue_delay_ms,
                 outcome_tags: vec![
-                    if pnl > 0.0 { "profit".to_string() } else if pnl < 0.0 { "loss".to_string() } else { "breakeven".to_string() },
+                    if pnl > 0.0 {
+                        "profit".to_string()
+                    } else if pnl < 0.0 {
+                        "loss".to_string()
+                    } else {
+                        "breakeven".to_string()
+                    },
                     format!("variant:{}", pos.experiment_variant),
                 ],
             },
@@ -577,16 +618,23 @@ impl PaperPortfolio {
         let mut peak = f64::NEG_INFINITY;
         let mut max_dd = 0.0f64;
         for &nav in &self.equity_curve {
-            if nav > peak { peak = nav; }
+            if nav > peak {
+                peak = nav;
+            }
             let dd = (peak - nav) / peak * 100.0;
-            if dd > max_dd { max_dd = dd; }
+            if dd > max_dd {
+                max_dd = dd;
+            }
         }
         max_dd
     }
 
     /// Returns the high-water mark NAV from the equity curve.
     pub fn high_water_mark(&self) -> f64 {
-        self.equity_curve.iter().cloned().fold(STARTING_BALANCE_USDC, f64::max)
+        self.equity_curve
+            .iter()
+            .cloned()
+            .fold(STARTING_BALANCE_USDC, f64::max)
     }
 
     /// Records the current NAV as a sparkline sample (capped at 300 entries).
@@ -605,15 +653,15 @@ impl PaperPortfolio {
             std::fs::create_dir_all(parent)?;
         }
         let json = serde_json::to_string_pretty(&persisted)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         std::fs::write(path, json)?;
         Ok(())
     }
 
     pub fn load_from_path(path: &str) -> std::io::Result<Self> {
         let data = std::fs::read_to_string(path)?;
-        let persisted: PersistedPaperPortfolio = serde_json::from_str(&data)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let persisted: PersistedPaperPortfolio =
+            serde_json::from_str(&data).map_err(|e| std::io::Error::other(e.to_string()))?;
         Ok(Self::from(persisted))
     }
 }
@@ -623,36 +671,44 @@ impl From<&PaperPortfolio> for PersistedPaperPortfolio {
         Self {
             schema_version: 2,
             cash_usdc: value.cash_usdc,
-            positions: value.positions.iter().map(|p| PersistedPaperPosition {
-                id: p.id,
-                token_id: p.token_id.clone(),
-                market_title: p.market_title.clone(),
-                market_outcome: p.market_outcome.clone(),
-                side: p.side,
-                entry_price: p.entry_price,
-                shares: p.shares,
-                usdc_spent: p.usdc_spent,
-                current_price: p.current_price,
-                rn1_order_id: p.rn1_order_id.clone(),
-                opened_at_wall_ms: p.opened_at_wall.timestamp_millis(),
-                opened_age_secs: p.opened_at.elapsed().as_secs(),
-                entry_slippage_bps: p.entry_slippage_bps,
-                queue_delay_ms: p.queue_delay_ms,
-                experiment_variant: p.experiment_variant.clone(),
-            }).collect(),
-            closed_trades: value.closed_trades.iter().map(|t| PersistedClosedTrade {
-                token_id: t.token_id.clone(),
-                side: t.side,
-                entry_price: t.entry_price,
-                exit_price: t.exit_price,
-                shares: t.shares,
-                realized_pnl: t.realized_pnl,
-                reason: t.reason.clone(),
-                opened_at_wall_ms: t.opened_at_wall.timestamp_millis(),
-                closed_at_wall_ms: t.closed_at_wall.timestamp_millis(),
-                duration_secs: t.duration_secs,
-                scorecard: t.scorecard.clone(),
-            }).collect(),
+            positions: value
+                .positions
+                .iter()
+                .map(|p| PersistedPaperPosition {
+                    id: p.id,
+                    token_id: p.token_id.clone(),
+                    market_title: p.market_title.clone(),
+                    market_outcome: p.market_outcome.clone(),
+                    side: p.side,
+                    entry_price: p.entry_price,
+                    shares: p.shares,
+                    usdc_spent: p.usdc_spent,
+                    current_price: p.current_price,
+                    rn1_order_id: p.rn1_order_id.clone(),
+                    opened_at_wall_ms: p.opened_at_wall.timestamp_millis(),
+                    opened_age_secs: p.opened_at.elapsed().as_secs(),
+                    entry_slippage_bps: p.entry_slippage_bps,
+                    queue_delay_ms: p.queue_delay_ms,
+                    experiment_variant: p.experiment_variant.clone(),
+                })
+                .collect(),
+            closed_trades: value
+                .closed_trades
+                .iter()
+                .map(|t| PersistedClosedTrade {
+                    token_id: t.token_id.clone(),
+                    side: t.side,
+                    entry_price: t.entry_price,
+                    exit_price: t.exit_price,
+                    shares: t.shares,
+                    realized_pnl: t.realized_pnl,
+                    reason: t.reason.clone(),
+                    opened_at_wall_ms: t.opened_at_wall.timestamp_millis(),
+                    closed_at_wall_ms: t.closed_at_wall.timestamp_millis(),
+                    duration_secs: t.duration_secs,
+                    scorecard: t.scorecard.clone(),
+                })
+                .collect(),
             total_signals: value.total_signals,
             filled_orders: value.filled_orders,
             aborted_orders: value.aborted_orders,
@@ -666,56 +722,68 @@ impl From<&PaperPortfolio> for PersistedPaperPortfolio {
 impl From<PersistedPaperPortfolio> for PaperPortfolio {
     fn from(value: PersistedPaperPortfolio) -> Self {
         let now = Instant::now();
-        let positions = value.positions.into_iter().map(|p| {
-            let opened_at_wall = Local
-                .timestamp_millis_opt(p.opened_at_wall_ms)
-                .single()
-                .unwrap_or_else(Local::now);
-            let opened_at = now
-                .checked_sub(Duration::from_secs(p.opened_age_secs))
-                .unwrap_or(now);
-            PaperPosition {
-                id: p.id,
-                token_id: p.token_id,
-                market_title: p.market_title,
-                market_outcome: p.market_outcome,
-                side: p.side,
-                entry_price: p.entry_price,
-                shares: p.shares,
-                usdc_spent: p.usdc_spent,
-                current_price: p.current_price,
-                opened_at,
-                rn1_order_id: p.rn1_order_id,
-                opened_at_wall,
-                entry_slippage_bps: p.entry_slippage_bps,
-                queue_delay_ms: p.queue_delay_ms,
-                experiment_variant: if p.experiment_variant.is_empty() { "A".to_string() } else { p.experiment_variant },
-            }
-        }).collect();
+        let positions = value
+            .positions
+            .into_iter()
+            .map(|p| {
+                let opened_at_wall = Local
+                    .timestamp_millis_opt(p.opened_at_wall_ms)
+                    .single()
+                    .unwrap_or_else(Local::now);
+                let opened_at = now
+                    .checked_sub(Duration::from_secs(p.opened_age_secs))
+                    .unwrap_or(now);
+                PaperPosition {
+                    id: p.id,
+                    token_id: p.token_id,
+                    market_title: p.market_title,
+                    market_outcome: p.market_outcome,
+                    side: p.side,
+                    entry_price: p.entry_price,
+                    shares: p.shares,
+                    usdc_spent: p.usdc_spent,
+                    current_price: p.current_price,
+                    opened_at,
+                    rn1_order_id: p.rn1_order_id,
+                    opened_at_wall,
+                    entry_slippage_bps: p.entry_slippage_bps,
+                    queue_delay_ms: p.queue_delay_ms,
+                    experiment_variant: if p.experiment_variant.is_empty() {
+                        "A".to_string()
+                    } else {
+                        p.experiment_variant
+                    },
+                }
+            })
+            .collect();
 
-        let closed_trades = value.closed_trades.into_iter().map(|t| {
-            let opened_at_wall = Local
-                .timestamp_millis_opt(t.opened_at_wall_ms)
-                .single()
-                .unwrap_or_else(Local::now);
-            let closed_at_wall = Local
-                .timestamp_millis_opt(t.closed_at_wall_ms)
-                .single()
-                .unwrap_or_else(Local::now);
-            ClosedTrade {
-                token_id: t.token_id,
-                side: t.side,
-                entry_price: t.entry_price,
-                exit_price: t.exit_price,
-                shares: t.shares,
-                realized_pnl: t.realized_pnl,
-                reason: t.reason,
-                opened_at_wall,
-                closed_at_wall,
-                duration_secs: t.duration_secs,
-                scorecard: t.scorecard,
-            }
-        }).collect();
+        let closed_trades = value
+            .closed_trades
+            .into_iter()
+            .map(|t| {
+                let opened_at_wall = Local
+                    .timestamp_millis_opt(t.opened_at_wall_ms)
+                    .single()
+                    .unwrap_or_else(Local::now);
+                let closed_at_wall = Local
+                    .timestamp_millis_opt(t.closed_at_wall_ms)
+                    .single()
+                    .unwrap_or_else(Local::now);
+                ClosedTrade {
+                    token_id: t.token_id,
+                    side: t.side,
+                    entry_price: t.entry_price,
+                    exit_price: t.exit_price,
+                    shares: t.shares,
+                    realized_pnl: t.realized_pnl,
+                    reason: t.reason,
+                    opened_at_wall,
+                    closed_at_wall,
+                    duration_secs: t.duration_secs,
+                    scorecard: t.scorecard,
+                }
+            })
+            .collect();
 
         Self {
             cash_usdc: value.cash_usdc,
@@ -751,10 +819,10 @@ mod tests {
 
     #[test]
     fn size_capped_at_10_pct_nav() {
-        let p = PaperPortfolio::new(); // NAV = 100, cap = 25% = 25
-        // RN1 trades $20,000 → 20% = $4,000, capped at $25
+        let p = PaperPortfolio::new(); // NAV = 100, cap = 20% (SIZE_MULTIPLIER)
+                                       // RN1 trades $20,000 → 20% = $4,000, capped at $20
         let size = p.calculate_size_usdc(20_000.0).unwrap();
-        assert!((size - 25.0).abs() < 1e-9, "size={size}");
+        assert!((size - 20.0).abs() < 1e-9, "size={size}");
     }
 
     #[test]
@@ -778,7 +846,7 @@ mod tests {
         let mut p = PaperPortfolio::new();
         p.open_position("tok".into(), OrderSide::Buy, 0.50, 10.0, "o1".into());
         p.update_price("tok", 0.60); // price up 20 %
-        // shares = 10 / 0.50 = 20 → PnL = (0.60 - 0.50) × 20 = 2.0
+                                     // shares = 10 / 0.50 = 20 → PnL = (0.60 - 0.50) × 20 = 2.0
         assert!((p.unrealized_pnl() - 2.0).abs() < 1e-9);
     }
 }

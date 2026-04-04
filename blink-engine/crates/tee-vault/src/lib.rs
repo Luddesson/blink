@@ -122,9 +122,8 @@ impl SoftwareVault {
                 .with_context(|| format!("invalid hex byte at position {i}"))?;
         }
 
-        let result = Self::new(&bytes);
         // `bytes` is Zeroizing and will be zeroed on drop here.
-        result
+        Self::new(&bytes)
     }
 }
 
@@ -327,8 +326,7 @@ mod tests {
     use super::*;
 
     // A deterministic test key (NOT a real key — just for testing).
-    const TEST_KEY_HEX: &str =
-        "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+    const TEST_KEY_HEX: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
     fn test_key_bytes() -> [u8; 32] {
         let mut bytes = [0u8; 32];

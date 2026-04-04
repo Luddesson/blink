@@ -5,8 +5,8 @@
 //! [`std::sync::Arc`] for cheap sharing across tasks.
 
 use anyhow::{Context, Result};
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const CANONICAL_LIVE_PROFILE: &str = "canonical-v1";
 
@@ -96,7 +96,10 @@ impl fmt::Debug for Config {
             .field("markets", &self.markets)
             .field("log_level", &self.log_level)
             .field("ws_reconnect_debounce_ms", &self.ws_reconnect_debounce_ms)
-            .field("ws_parse_error_preview_chars", &self.ws_parse_error_preview_chars)
+            .field(
+                "ws_parse_error_preview_chars",
+                &self.ws_parse_error_preview_chars,
+            )
             .field("live_trading", &self.live_trading)
             .field("signer_private_key", &"[REDACTED]")
             .field("funder_address", &self.funder_address)
@@ -105,16 +108,34 @@ impl fmt::Debug for Config {
             .field("api_passphrase", &"[REDACTED]")
             .field("polymarket_signature_type", &self.polymarket_signature_type)
             .field("polymarket_order_nonce", &self.polymarket_order_nonce)
-            .field("polymarket_order_expiration", &self.polymarket_order_expiration)
+            .field(
+                "polymarket_order_expiration",
+                &self.polymarket_order_expiration,
+            )
             .field("live_profile", &self.live_profile)
             .field("live_rollout_stage", &self.live_rollout_stage)
-            .field("live_canary_max_order_usdc", &self.live_canary_max_order_usdc)
-            .field("live_canary_max_orders_per_session", &self.live_canary_max_orders_per_session)
+            .field(
+                "live_canary_max_order_usdc",
+                &self.live_canary_max_order_usdc,
+            )
+            .field(
+                "live_canary_max_orders_per_session",
+                &self.live_canary_max_orders_per_session,
+            )
             .field("live_canary_daytime_only", &self.live_canary_daytime_only)
-            .field("live_canary_start_hour_utc", &self.live_canary_start_hour_utc)
+            .field(
+                "live_canary_start_hour_utc",
+                &self.live_canary_start_hour_utc,
+            )
             .field("live_canary_end_hour_utc", &self.live_canary_end_hour_utc)
-            .field("live_canary_max_reject_streak", &self.live_canary_max_reject_streak)
-            .field("live_canary_allowed_markets", &self.live_canary_allowed_markets)
+            .field(
+                "live_canary_max_reject_streak",
+                &self.live_canary_max_reject_streak,
+            )
+            .field(
+                "live_canary_allowed_markets",
+                &self.live_canary_allowed_markets,
+            )
             .finish()
     }
 }
@@ -139,20 +160,18 @@ impl Config {
     /// Returns an error if any required variable is missing or empty.
     #[tracing::instrument(name = "config::from_env")]
     pub fn from_env() -> Result<Self> {
-        let clob_host = std::env::var("CLOB_HOST")
-            .context("CLOB_HOST environment variable not set")?;
+        let clob_host =
+            std::env::var("CLOB_HOST").context("CLOB_HOST environment variable not set")?;
 
-        let ws_url = std::env::var("WS_URL")
-            .context("WS_URL environment variable not set")?;
+        let ws_url = std::env::var("WS_URL").context("WS_URL environment variable not set")?;
 
-        let rn1_wallet_raw = std::env::var("RN1_WALLET")
-            .context("RN1_WALLET environment variable not set")?;
+        let rn1_wallet_raw =
+            std::env::var("RN1_WALLET").context("RN1_WALLET environment variable not set")?;
 
-        let markets_str = std::env::var("MARKETS")
-            .context("MARKETS environment variable not set")?;
+        let markets_str =
+            std::env::var("MARKETS").context("MARKETS environment variable not set")?;
 
-        let log_level = std::env::var("LOG_LEVEL")
-            .unwrap_or_else(|_| "info".to_string());
+        let log_level = std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
         let ws_reconnect_debounce_ms = std::env::var("WS_RECONNECT_DEBOUNCE_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -194,10 +213,11 @@ impl Config {
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(20.0);
-        let live_canary_max_orders_per_session = std::env::var("LIVE_CANARY_MAX_ORDERS_PER_SESSION")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(0);
+        let live_canary_max_orders_per_session =
+            std::env::var("LIVE_CANARY_MAX_ORDERS_PER_SESSION")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0);
         let live_canary_daytime_only = std::env::var("LIVE_CANARY_DAYTIME_ONLY")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);

@@ -35,18 +35,23 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Format check
+        working-directory: blink-engine
         run: cargo fmt --all -- --check
 
       - name: Clippy lint
+        working-directory: blink-engine
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build (release)
+        working-directory: blink-engine
         run: cargo build --release --workspace
 
       - name: Run tests
+        working-directory: blink-engine
         run: cargo test --workspace --all-targets
 
       - name: Doc tests
+        working-directory: blink-engine
         run: cargo test --workspace --doc
 
   # Optional: Foundry fuzz tests (only if forge is available)
@@ -67,7 +72,7 @@ jobs:
         run: |
           if command -v forge &> /dev/null; then
             echo "Foundry detected — running fuzz tests"
-            forge test --root ./formal 2>/dev/null || echo "No Foundry project found; skipping"
+            forge test --root ./blink-engine/formal 2>/dev/null || echo "No Foundry project found; skipping"
           else
             echo "Foundry not installed; skipping fuzz tests"
           fi

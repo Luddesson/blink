@@ -751,6 +751,14 @@ mod tests {
 
     #[test]
     fn size_capped_at_10_pct_nav() {
+        // Force defaults so the test is not affected by ambient PAPER_* env vars.
+        // SAFETY: env mutation is accepted in single-threaded test contexts.
+        unsafe {
+            std::env::set_var("PAPER_SIZE_MULTIPLIER", "0.20");
+            std::env::set_var("PAPER_MAX_POSITION_PCT", "0.25");
+            std::env::set_var("PAPER_MIN_ORDER_FLOOR_USDC", "8");
+            std::env::set_var("PAPER_MIN_TRADE_USDC", "5");
+        }
         let p = PaperPortfolio::new(); // NAV = 100, cap = 25% = 25
         // RN1 trades $20,000 → 20% = $4,000, capped at $25
         let size = p.calculate_size_usdc(20_000.0).unwrap();

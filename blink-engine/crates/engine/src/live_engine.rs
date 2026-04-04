@@ -116,8 +116,13 @@ impl LiveEngine {
                     Some(Arc::new(handle))
                 }
                 Err(e) => {
-                    error!(error = %e, "Failed to initialize TEE vault — live signing disabled");
-                    None
+                    // P1-7: vault init failure is a hard startup error in live mode.
+                    // Silently degrading to dry-run while the operator believes live
+                    // trading is active would be dangerous. Crash immediately.
+                    panic!(
+                        "FATAL: LIVE_TRADING=true but TEE vault failed to initialise: {e}\n\
+                         Fix the SIGNER_PRIVATE_KEY credential and restart."
+                    );
                 }
             }
         } else {
@@ -494,7 +499,7 @@ impl LiveEngine {
         if state.reject_streak >= self.canary_policy.max_reject_streak {
             state.halted = true;
             let _ = std::fs::write(
-                "logs\\CANARY_HALTED.flag",
+                "logs/CANARY_HALTED.flag",
                 format!(
                     "halted=true reject_streak={} threshold={}\n",
                     state.reject_streak, self.canary_policy.max_reject_streak
@@ -510,7 +515,7 @@ impl LiveEngine {
                     log,
                     EntryKind::Warn,
                     format!(
-                        "CANARY HALTED: reject_streak={} threshold={} (logs\\CANARY_HALTED.flag)",
+                        "CANARY HALTED: reject_streak={} threshold={} (logs/CANARY_HALTED.flag)",
                         state.reject_streak, self.canary_policy.max_reject_streak
                     ),
                 );
@@ -785,7 +790,7 @@ impl LiveEngine {
             "reason={reason}\ntimestamp={}\npending_orders_after_cancel={pending}\n",
             chrono::Utc::now()
         );
-        let _ = std::fs::write("logs\\EMERGENCY_STOP.flag", &flag_content);
+        let _ = std::fs::write("logs/EMERGENCY_STOP.flag", &flag_content);
 
         if let Some(ref log) = self.activity {
             log_push(

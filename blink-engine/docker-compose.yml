@@ -1,17 +1,22 @@
 # ============================================================================
-# Blink Engine — Local Development Docker Compose
+# Blink Engine — Docker Compose
 # Owner: AURA-1 (Lead Systems Architect)
 #
-# Usage: docker compose up -d
+# Development (paper mode):
+#   docker compose up -d
+#
+# Live mode (requires credentials in /etc/blink-engine.env):
+#   docker compose --profile live up -d
 # ============================================================================
 
 services:
+  # ── ClickHouse analytics warehouse ──────────────────────────────────────
   clickhouse:
-    image: clickhouse/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:24.3-alpine
     container_name: blink-clickhouse
     ports:
-      - "8123:8123"   # HTTP interface
-      - "9000:9000"   # Native TCP protocol
+      - "127.0.0.1:8123:8123"   # HTTP interface (localhost only)
+      - "127.0.0.1:9000:9000"   # Native TCP (localhost only)
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - clickhouse_logs:/var/log/clickhouse-server
@@ -30,8 +35,68 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  # ── Blink Engine (paper mode — safe default) ─────────────────────────────
+  engine-paper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: blink-engine:latest
+    container_name: blink-engine-paper
+    profiles: ["paper", "default"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file:
+      - .env.example          # base defaults — override with .env
+    environment:
+      PAPER_TRADING: "true"
+      LIVE_TRADING: "false"
+      TUI: "false"
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+    volumes:
+      - engine_logs:/opt/blink/logs
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  # ── Blink Engine (live mode — requires /etc/blink-engine.env) ────────────
+  # WARNING: This submits REAL orders. Ensure credentials and risk limits are
+  # correct before starting. Run --preflight-live first.
+  engine-live:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: blink-engine:latest
+    container_name: blink-engine-live
+    profiles: ["live"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file:
+      - /etc/blink-engine.env   # secrets — never commit this file
+    environment:
+      LIVE_TRADING: "true"
+      PAPER_TRADING: "false"
+      TUI: "false"
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+    volumes:
+      - engine_logs:/opt/blink/logs
+    # Lock to CPU 0 for deterministic latency (requires host cpu isolation)
+    cpuset: "0,1,2,3"
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
 volumes:
   clickhouse_data:
     driver: local
   clickhouse_logs:
+    driver: local
+  engine_logs:
     driver: local

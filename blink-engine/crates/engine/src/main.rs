@@ -75,15 +75,15 @@ async fn main() -> Result<()> {
     
     // ── Tracing: ALWAYS persist logs to disk + per-session file ───────────
     std::fs::create_dir_all("logs").ok();
-    std::fs::create_dir_all("logs\\sessions").ok();
+    std::fs::create_dir_all("logs/sessions").ok();
 
     let session_stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let session_filename = format!("engine-session-{session_stamp}.log");
-    let session_log_path = format!("logs\\sessions\\{session_filename}");
-    let _ = std::fs::write("logs\\LATEST_SESSION_LOG.txt", format!("{session_log_path}\n"));
+    let session_log_path = format!("logs/sessions/{session_filename}");
+    let _ = std::fs::write("logs/LATEST_SESSION_LOG.txt", format!("{session_log_path}\n"));
 
     let engine_file_appender = tracing_appender::rolling::daily("logs", "engine.log");
-    let session_file_appender = tracing_appender::rolling::never("logs\\sessions", &session_filename);
+    let session_file_appender = tracing_appender::rolling::never("logs/sessions", &session_filename);
     let (engine_writer, engine_guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
         .lossy(false)
         .finish(engine_file_appender);
@@ -305,11 +305,11 @@ async fn main() -> Result<()> {
         paper_for_persist = Some(Arc::clone(&paper));
 
         let paper_state_path = std::env::var("PAPER_STATE_PATH")
-            .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());
+            .unwrap_or_else(|_| "logs/paper_portfolio_state.json".to_string());
         let warm_state_path = std::env::var("PAPER_WARM_STATE_PATH")
-            .unwrap_or_else(|_| "logs\\paper_warm_state.json".to_string());
+            .unwrap_or_else(|_| "logs/paper_warm_state.json".to_string());
         let rejection_state_path = std::env::var("PAPER_REJECTIONS_PATH")
-            .unwrap_or_else(|_| "logs\\paper_rejections.json".to_string());
+            .unwrap_or_else(|_| "logs/paper_rejections.json".to_string());
         let reset_paper_state = std::env::var("PAPER_RESET_STATE_ON_START")
             .ok()
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
@@ -736,7 +736,7 @@ async fn main() -> Result<()> {
     let _ = tokio::time::timeout(Duration::from_secs(2), signal_task).await;
     if paper_mode {
         let paper_state_path = std::env::var("PAPER_STATE_PATH")
-            .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());
+            .unwrap_or_else(|_| "logs/paper_portfolio_state.json".to_string());
         if let Some(paper) = paper_for_persist.as_ref() {
             if let Err(e) = paper.save_portfolio(&paper_state_path).await {
                 log_push(&activity, EntryKind::Warn, format!("Failed to save paper state: {e}"));
@@ -746,9 +746,9 @@ async fn main() -> Result<()> {
                 info!(path = %paper_state_path, "Saved paper portfolio state");
             }
             let warm_state_path = std::env::var("PAPER_WARM_STATE_PATH")
-                .unwrap_or_else(|_| "logs\\paper_warm_state.json".to_string());
+                .unwrap_or_else(|_| "logs/paper_warm_state.json".to_string());
             let rejection_state_path = std::env::var("PAPER_REJECTIONS_PATH")
-                .unwrap_or_else(|_| "logs\\paper_rejections.json".to_string());
+                .unwrap_or_else(|_| "logs/paper_rejections.json".to_string());
             let subs = market_subscriptions.lock().unwrap().clone();
             let _ = paper.save_warm_state(&warm_state_path, &subs, &paper_state_path).await;
             let _ = paper.save_rejections(&rejection_state_path).await;
@@ -916,7 +916,7 @@ async fn run_emergency_stop(config: &Config) -> Result<()> {
     }
     std::fs::create_dir_all("logs")?;
     std::fs::write(
-        "logs\\EMERGENCY_STOP.flag",
+        "logs/EMERGENCY_STOP.flag",
         format!("reason=operator_cli\ntimestamp={}\n", chrono::Utc::now()),
     )?;
     eprintln!("📄 Wrote logs/EMERGENCY_STOP.flag");
@@ -1074,7 +1074,7 @@ fn analyze_session_log(path: &str) -> std::io::Result<RunReview> {
 fn write_postrun_review(session_log_path: &str) -> Result<String> {
     let review = analyze_session_log(session_log_path)?;
     let ts = Utc::now().format("%Y%m%d-%H%M%S");
-    let dir = std::env::var("POSTRUN_REVIEW_DIR").unwrap_or_else(|_| "logs\\reports".to_string());
+    let dir = std::env::var("POSTRUN_REVIEW_DIR").unwrap_or_else(|_| "logs/reports".to_string());
     std::fs::create_dir_all(&dir)?;
     let out_path = format!("{dir}\\postrun-review-{ts}.txt");
 
@@ -1117,9 +1117,9 @@ fn write_postrun_review(session_log_path: &str) -> Result<String> {
         _ => 0.0,
     };
     let session_size_bytes = std::fs::metadata(session_log_path).map(|m| m.len()).unwrap_or(0);
-    let paper_state = "logs\\paper_portfolio_state.json";
-    let warm_state = "logs\\paper_warm_state.json";
-    let rej_state = "logs\\paper_rejections.json";
+    let paper_state = "logs/paper_portfolio_state.json";
+    let warm_state = "logs/paper_warm_state.json";
+    let rej_state = "logs/paper_rejections.json";
 
     let mut assumptions: Vec<String> = Vec::new();
     if review.max_gap_secs >= 3 {
@@ -1216,6 +1216,6 @@ fn write_postrun_review(session_log_path: &str) -> Result<String> {
     writeln!(file, "summary.max_log_gap_secs={}", review.max_gap_secs)?;
     writeln!(file, "summary.realism_alert={realism_alert}")?;
 
-    std::fs::write("logs\\LATEST_POSTRUN_REVIEW.txt", format!("{out_path}\n"))?;
+    std::fs::write("logs/LATEST_POSTRUN_REVIEW.txt", format!("{out_path}\n"))?;
     Ok(out_path)
 }

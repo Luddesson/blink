@@ -494,7 +494,7 @@ impl LiveEngine {
         if state.reject_streak >= self.canary_policy.max_reject_streak {
             state.halted = true;
             let _ = std::fs::write(
-                "logs\\CANARY_HALTED.flag",
+                "logs/CANARY_HALTED.flag",
                 format!(
                     "halted=true reject_streak={} threshold={}\n",
                     state.reject_streak, self.canary_policy.max_reject_streak
@@ -510,7 +510,7 @@ impl LiveEngine {
                     log,
                     EntryKind::Warn,
                     format!(
-                        "CANARY HALTED: reject_streak={} threshold={} (logs\\CANARY_HALTED.flag)",
+                        "CANARY HALTED: reject_streak={} threshold={} (logs/CANARY_HALTED.flag)",
                         state.reject_streak, self.canary_policy.max_reject_streak
                     ),
                 );

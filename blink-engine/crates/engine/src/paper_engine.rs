@@ -49,6 +49,8 @@ pub struct PaperEngine {
     signal_meta_cache: Arc<Mutex<HashMap<String, CachedSignalMeta>>>,
     seen_order_ids: Arc<Mutex<HashSet<String>>>,
     token_cooldowns: Arc<Mutex<HashMap<String, Instant>>>,
+    /// Rolling window of recent RN1 signal timestamps per token for momentum scoring.
+    rn1_momentum: Arc<std::sync::Mutex<HashMap<String, VecDeque<Instant>>>>,
 }
 
 /// Snapshot of the currently active fill window, if any.
@@ -287,6 +289,7 @@ impl PaperEngine {
             signal_meta_cache: Arc::new(Mutex::new(HashMap::new())),
             seen_order_ids: Arc::new(Mutex::new(HashSet::with_capacity(512))),
             token_cooldowns: Arc::new(Mutex::new(HashMap::new())),
+            rn1_momentum: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -411,6 +414,22 @@ impl PaperEngine {
             .clamp(0.0, 1.0);
         }
 
+        // Momentum amplifier: if RN1 has signalled this token multiple times
+        // in the last 10 minutes, treat it as a stronger conviction and scale
+        // up the effective notional (capped at 1.5× to prevent overexposure).
+        let momentum_repeat_count = {
+            let m = self.rn1_momentum.lock().unwrap();
+            m.get(&signal.token_id).map(|q| q.len()).unwrap_or(0)
+        };
+        let momentum_multiplier = if momentum_repeat_count >= 4 {
+            1.5
+        } else if momentum_repeat_count >= 2 {
+            1.25
+        } else {
+            1.0
+        };
+        let effective_notional = rn1_notional_usd * momentum_multiplier;
+
         // ── Sizing (brief lock, no await) ─────────────────────────────
         let (size_usdc, current_nav) = {
             let mut p = self.portfolio.lock().await;
@@ -418,7 +437,7 @@ impl PaperEngine {
             // Keep paper marks alive even when WS mark prices are stale/missing.
             // RN1 signal price becomes a fallback mark update for this token.
             p.update_price(&signal.token_id, entry_price);
-            let size = p.calculate_size_usdc(rn1_notional_usd);
+            let size = p.calculate_size_usdc(effective_notional);
             let nav  = p.nav();
             (size, nav)
         };
@@ -899,6 +918,7 @@ impl PaperEngine {
         let shares = signal.size as f64 / 1_000.0;
         let notional = shares * entry_price;
         let recency_ms = signal.detected_at.elapsed().as_millis() as f64;
+
         let mut spread_bps = 0.0;
         let mut depth = 0.0;
         if let Some(book) = self.book_store.get_book_snapshot(&signal.token_id) {
@@ -908,7 +928,41 @@ impl PaperEngine {
                 OrderSide::Sell => book.bids.iter().next_back().map(|(_, s)| *s as f64 / 1_000.0).unwrap_or(0.0),
             };
         }
-        (notional * 0.45) + (depth * 0.30) + ((500.0 - spread_bps).max(0.0) * 0.15) + ((5_000.0 - recency_ms).max(0.0) * 0.10)
+
+        // Price quality: penalise near-binary outcomes (>0.90 or <0.10).
+        // Prediction markets near resolution carry high adverse-selection risk.
+        let price_quality = if entry_price > 0.90 || entry_price < 0.10 {
+            0.5
+        } else if entry_price > 0.80 || entry_price < 0.20 {
+            0.75
+        } else {
+            1.0
+        };
+
+        // RN1 momentum: count how many times RN1 has signalled this token
+        // in the last 10 minutes. More repeats = stronger conviction.
+        let momentum_count = {
+            let mut m = self.rn1_momentum.lock().unwrap();
+            let window = Duration::from_secs(600);
+            let now = Instant::now();
+            let queue = m.entry(signal.token_id.clone()).or_insert_with(VecDeque::new);
+            // Record this signal.
+            queue.push_back(now);
+            // Prune stale entries.
+            while queue.front().map_or(false, |t| now.duration_since(*t) > window) {
+                queue.pop_front();
+            }
+            queue.len()
+        };
+        // Boost score for repeated signals (capped at 4x).
+        let momentum_boost = (1.0 + (momentum_count.saturating_sub(1) as f64) * 0.25).min(2.0);
+
+        let base = (notional * 0.45)
+            + (depth * 0.30)
+            + ((500.0 - spread_bps).max(0.0) * 0.15)
+            + ((5_000.0 - recency_ms).max(0.0) * 0.10);
+
+        base * price_quality * momentum_boost
     }
 
     fn check_liquidity_guard(&self, token_id: &str, side: OrderSide, size_usdc: f64) -> (Option<f64>, &'static str) {

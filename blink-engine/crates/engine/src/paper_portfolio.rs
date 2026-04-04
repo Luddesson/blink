@@ -750,18 +750,39 @@ mod tests {
     }
 
     #[test]
-    fn size_capped_at_10_pct_nav() {
-        let p = PaperPortfolio::new(); // NAV = 100, cap = 25% = 25
-        // RN1 trades $20,000 → 20% = $4,000, capped at $25
-        let size = p.calculate_size_usdc(20_000.0).unwrap();
-        assert!((size - 25.0).abs() < 1e-9, "size={size}");
+    fn size_capped_at_position_pct_nav() {
+        // Run with explicit defaults so the test is env-var-independent.
+        temp_env::with_vars(
+            vec![
+                ("PAPER_SIZE_MULTIPLIER", Some("0.20")),
+                ("PAPER_MAX_POSITION_PCT", Some("0.25")),
+                ("PAPER_MIN_ORDER_FLOOR_USDC", Some("8.0")),
+                ("PAPER_MIN_TRADE_USDC", Some("5.0")),
+            ],
+            || {
+                let p = PaperPortfolio::new(); // NAV = $100, cap = 25% = $25
+                // RN1 trades $20,000 → 20% = $4,000, capped by 25% NAV = $25
+                let size = p.calculate_size_usdc(20_000.0).unwrap();
+                assert!((size - 25.0).abs() < 1e-9, "size={size}");
+            },
+        );
     }
 
     #[test]
     fn size_below_minimum_returns_none() {
-        let p = PaperPortfolio::new();
-        // 20% of $100 = $20, which is above minimum ($5), so should size.
-        assert!(p.calculate_size_usdc(100.0).is_some());
+        temp_env::with_vars(
+            vec![
+                ("PAPER_SIZE_MULTIPLIER", Some("0.20")),
+                ("PAPER_MAX_POSITION_PCT", Some("0.25")),
+                ("PAPER_MIN_ORDER_FLOOR_USDC", Some("8.0")),
+                ("PAPER_MIN_TRADE_USDC", Some("5.0")),
+            ],
+            || {
+                let p = PaperPortfolio::new();
+                // 20% of $100 = $20, which is above minimum ($5), so should size.
+                assert!(p.calculate_size_usdc(100.0).is_some());
+            },
+        );
     }
 
     #[test]

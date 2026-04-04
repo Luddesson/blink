@@ -42,3 +42,4 @@ io_uring = []
 
 [dev-dependencies]
 proptest          = { workspace = true }
+temp-env          = "0.2"

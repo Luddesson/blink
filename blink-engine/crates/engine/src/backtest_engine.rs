@@ -330,7 +330,11 @@ impl BacktestEngine {
 
             // 5. Record equity curve (one point per distinct timestamp).
             let nav = self.portfolio.nav();
-            if equity_curve.is_empty() || equity_curve.last().map_or(false, |&(ts, _)| ts != tick.timestamp) {
+            if equity_curve.is_empty()
+                || equity_curve
+                    .last()
+                    .map_or(false, |&(ts, _)| ts != tick.timestamp)
+            {
                 equity_curve.push((tick.timestamp, nav));
             }
         }

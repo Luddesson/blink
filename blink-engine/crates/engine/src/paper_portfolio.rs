@@ -660,8 +660,8 @@ impl PaperPortfolio {
 
     pub fn load_from_path(path: &str) -> std::io::Result<Self> {
         let data = std::fs::read_to_string(path)?;
-        let persisted: PersistedPaperPortfolio = serde_json::from_str(&data)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let persisted: PersistedPaperPortfolio =
+            serde_json::from_str(&data).map_err(|e| std::io::Error::other(e.to_string()))?;
         Ok(Self::from(persisted))
     }
 }

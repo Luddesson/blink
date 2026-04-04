@@ -46,10 +46,7 @@ impl PositionTracker {
             timestamp: chrono::Utc::now().timestamp(),
         };
 
-        let entry = self
-            .positions
-            .entry(signal.market_id.clone())
-            .or_default();
+        let entry = self.positions.entry(signal.market_id.clone()).or_default();
 
         entry.push_back(pos);
 

@@ -424,20 +424,22 @@ fn tui_loop(
         // ── Poll keyboard (non-blocking) ──────────────────────────────────
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press && handle_key(
-                    key.code,
-                    key.modifiers,
-                    &mut state,
-                    &trading_paused,
-                    &activity,
-                    &shutdown,
-                    &risk_manager,
-                    &book_store,
-                    &markets,
-                    &market_subscriptions,
-                    &ws_force_reconnect,
-                    &experiment_switches,
-                ) {
+                if key.kind == KeyEventKind::Press
+                    && handle_key(
+                        key.code,
+                        key.modifiers,
+                        &mut state,
+                        &trading_paused,
+                        &activity,
+                        &shutdown,
+                        &risk_manager,
+                        &book_store,
+                        &markets,
+                        &market_subscriptions,
+                        &ws_force_reconnect,
+                        &experiment_switches,
+                    )
+                {
                     break;
                 }
             }

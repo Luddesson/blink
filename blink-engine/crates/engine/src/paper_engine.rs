@@ -327,8 +327,8 @@ impl PaperEngine {
             return Ok(false);
         }
         let data = std::fs::read_to_string(path)?;
-        let mut parsed: RejectionAnalytics = serde_json::from_str(&data)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let mut parsed: RejectionAnalytics =
+            serde_json::from_str(&data).map_err(|e| std::io::Error::other(e.to_string()))?;
         if parsed.schema_version == 0 {
             parsed.schema_version = 1;
         }
@@ -1266,8 +1266,8 @@ impl PaperEngine {
         let Some(raw) = read_json_with_fallback(path)? else {
             return Ok(false);
         };
-        let mut state: WarmState = serde_json::from_value(raw)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let mut state: WarmState =
+            serde_json::from_value(raw).map_err(|e| std::io::Error::other(e.to_string()))?;
         let expected = state.checksum;
         state.checksum = 0;
         if warm_state_checksum(&state) != expected {
@@ -1572,8 +1572,8 @@ fn atomic_write_with_backup<T: Serialize>(path: &str, value: &T) -> std::io::Res
     if let Some(parent) = std::path::Path::new(path).parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_vec_pretty(value)
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let json =
+        serde_json::to_vec_pretty(value).map_err(|e| std::io::Error::other(e.to_string()))?;
     let tmp_path = format!("{path}.tmp");
     std::fs::write(&tmp_path, &json)?;
     let backup1 = format!("{path}.bak1");

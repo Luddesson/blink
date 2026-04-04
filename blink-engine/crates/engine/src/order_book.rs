@@ -144,9 +144,7 @@ impl OrderBookStore {
         &self,
         token_id: &str,
     ) -> dashmap::mapref::one::RefMut<'_, String, OrderBook> {
-        self.books
-            .entry(token_id.to_string())
-            .or_default()
+        self.books.entry(token_id.to_string()).or_default()
     }
 
     /// Applies a [`MarketEvent`] to the relevant order book.

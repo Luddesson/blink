@@ -73,9 +73,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 elif [[ "$OSTYPE" == "darwin"* ]]; then
     OS_TYPE="macos"
     log_success "Detected: macOS"
-elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]]; then
+elif [[ "$OSTYPE" == "msys"* ]] || [[ "$OSTYPE" == "cygwin"* ]]; then
     OS_TYPE="windows"
-    log_success "Detected: Windows"
+    log_success "Detected: Windows (Git Bash/Cygwin)"
 else
     log_warn "Unknown OS: $OSTYPE"
     OS_TYPE="unknown"
@@ -95,6 +95,14 @@ if ! command -v rustc &> /dev/null; then
         log_info "Please download and run the installer from: https://rustup.rs/"
         log_info "Or install using: choco install rust"
     else
+        if ! command -v curl &> /dev/null; then
+            log_error "curl is required to install Rust but is not found."
+            log_info "Please install curl first, then run this script again."
+            log_info "Ubuntu/Debian: sudo apt-get install curl"
+            log_info "CentOS/RHEL: sudo yum install curl"
+            log_info "macOS: brew install curl"
+            exit 1
+        fi
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
         source $HOME/.cargo/env
     fi
@@ -117,13 +125,27 @@ log_success "Found: $CARGO_VERSION"
 
 log_info "Verifying Rust version (requires 1.78+)..."
 
-RUST_MINOR=$(rustc --version | sed -E 's/rustc 1\.([0-9]+).*/\1/')
-if [ "$RUST_MINOR" -lt 78 ]; then
-    log_warn "Rust version may be outdated. Updating toolchain..."
-    rustup update stable
-    log_success "Rust toolchain updated"
+RUST_MINOR=$(rustc --version 2>/dev/null | sed -E 's/rustc 1\.([0-9]+).*/\1/' || echo "")
+if [ -z "$RUST_MINOR" ] || ! [[ "$RUST_MINOR" =~ ^[0-9]+$ ]]; then
+    log_warn "Could not parse Rust version. Attempting to update..."
+    if command -v rustup &> /dev/null; then
+        rustup update stable
+        log_success "Rust toolchain updated"
+    else
+        log_warn "rustup not found. Rust was likely installed via distro package."
+        log_warn "Please update manually or reinstall via: https://rustup.rs/"
+    fi
+elif [ "$RUST_MINOR" -lt 78 ]; then
+    log_warn "Rust version is outdated (found 1.$RUST_MINOR, need 1.78+). Updating..."
+    if command -v rustup &> /dev/null; then
+        rustup update stable
+        log_success "Rust toolchain updated"
+    else
+        log_warn "rustup not found. Please install Rust 1.78+ manually from: https://rustup.rs/"
+        exit 1
+    fi
 else
-    log_success "Rust version is up to date"
+    log_success "Rust version is adequate (1.$RUST_MINOR)"
 fi
 
 ###############################################################################
@@ -197,10 +219,17 @@ fi
 ###############################################################################
 
 echo ""
-read -p "Run tests? (y/n) " -n 1 -r
-echo ""
+# Only prompt for tests if running interactively (TTY present)
+if [ -t 0 ]; then
+    read -p "Run tests? (y/n) " -n 1 -r
+    echo ""
+    RUN_TESTS=$REPLY
+else
+    log_warn "Running in non-interactive mode. Skipping tests."
+    RUN_TESTS="n"
+fi
 
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [[ $RUN_TESTS =~ ^[Yy]$ ]]; then
     log_info "Running tests..."
     if cargo test --release 2>&1; then
         log_success "All tests passed"

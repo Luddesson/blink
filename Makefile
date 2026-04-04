@@ -48,11 +48,22 @@ setup: ## Complete setup: check Rust, build project, create .env
 
 setup-check: ## Verify all prerequisites are installed
 	@echo "$(BLUE)Checking prerequisites...$(NC)"
-	@command -v rustc > /dev/null 2>&1 || (echo "$(RED)✗ Rust not found$(NC)" && exit 1) && echo "$(GREEN)✓ Rust$(NC) $$(rustc --version)"
-	@command -v cargo > /dev/null 2>&1 || (echo "$(RED)✗ Cargo not found$(NC)" && exit 1) && echo "$(GREEN)✓ Cargo$(NC) $$(cargo --version)"
-	@command -v git > /dev/null 2>&1 || (echo "$(RED)✗ Git not found$(NC)" && exit 1) && echo "$(GREEN)✓ Git$(NC) $$(git --version | head -1)"
-	@test -f blink-engine/.env && echo "$(GREEN)✓ .env configured$(NC)" || echo "$(YELLOW)⚠ .env not found$(NC)"
-	@echo "$(GREEN)All prerequisites met!$(NC)"
+	@status=0; \
+	command -v rustc > /dev/null 2>&1 && echo "$(GREEN)✓ Rust$(NC) $$(rustc --version)" || (echo "$(RED)✗ Rust not found$(NC)" && status=1); \
+	command -v cargo > /dev/null 2>&1 && echo "$(GREEN)✓ Cargo$(NC) $$(cargo --version)" || (echo "$(RED)✗ Cargo not found$(NC)" && status=1); \
+	command -v git > /dev/null 2>&1 && echo "$(GREEN)✓ Git$(NC) $$(git --version | head -1)" || (echo "$(RED)✗ Git not found$(NC)" && status=1); \
+	if test -f blink-engine/.env; then \
+		echo "$(GREEN)✓ .env configured$(NC)"; \
+	else \
+		echo "$(RED)✗ .env not found$(NC)"; \
+		status=1; \
+	fi; \
+	if [ $$status -eq 0 ]; then \
+		echo "$(GREEN)All prerequisites met!$(NC)"; \
+	else \
+		echo "$(RED)Some prerequisites are missing. Run 'make setup' to fix.$(NC)"; \
+		exit 1; \
+	fi
 
 build: ## Build debug binary (fast compile, slower runtime)
 	@cd blink-engine && cargo build
@@ -105,10 +116,16 @@ run-live: ## CAUTION: Run in live trading mode
 	@echo "$(YELLOW)⚠  Make sure:$(NC)"
 	@echo "  1. You have tested thoroughly in paper mode"
 	@echo "  2. All risk parameters are verified in .env"
-	@echo "  3. TRADING_ENABLED is set to true"
+	@echo "  3. TRADING_ENABLED is set to true in your .env file"
 	@echo "  4. LIVE_TRADING credentials are configured"
 	@echo ""
-	@read -p "Type 'YES' to proceed with live trading: " response; \
+	@trading_enabled=$$(grep '^TRADING_ENABLED=' blink-engine/.env 2>/dev/null | cut -d= -f2 || echo "false"); \
+	if [ "$$trading_enabled" != "true" ]; then \
+		echo "$(RED)Error: TRADING_ENABLED is not set to true in .env$(NC)"; \
+		echo "$(YELLOW)Please enable it in blink-engine/.env before proceeding.$(NC)"; \
+		exit 1; \
+	fi; \
+	read -p "Type 'YES' to proceed with live trading: " response; \
 	if [ "$$response" = "YES" ]; then \
 		cd blink-engine && LIVE_TRADING=true cargo run --release -p engine; \
 	else \

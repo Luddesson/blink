@@ -595,15 +595,15 @@ impl PaperEngine {
         }
 
         // ── Risk check ────────────────────────────────────────────────────
-        if let Err(violation) = self.risk.lock().unwrap().check_pre_order(
-            size_usdc,
-            {
-                let p = self.portfolio.lock().await;
-                p.positions.len()
-            },
-            current_nav,
-            STARTING_BALANCE_USDC,
-        ) {
+        let pos_count = {
+            let p = self.portfolio.lock().await;
+            p.positions.len()
+        };
+        let violation = {
+            let risk = self.risk.lock().unwrap();
+            risk.check_pre_order(size_usdc, pos_count, current_nav, STARTING_BALANCE_USDC)
+        };
+        if let Err(violation) = violation {
             warn!("🛑 Risk check blocked paper order: {violation}");
             if let Some(ref log) = self.activity {
                 log_push(log, EntryKind::Warn, format!("RISK BLOCKED: {violation}"));
@@ -1347,9 +1347,7 @@ impl PaperEngine {
             }
         }
 
-        let Some((title, outcome)) = self.fetch_signal_metadata(token_id, order_id).await else {
-            return None;
-        };
+        let (title, outcome) = self.fetch_signal_metadata(token_id, order_id).await?;
 
         let mut cache = self.signal_meta_cache.lock().await;
         cache.insert(

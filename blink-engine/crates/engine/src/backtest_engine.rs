@@ -289,12 +289,12 @@ impl BacktestEngine {
                 let window_end = tick.timestamp + self.config.fill_window_ms as i64;
                 let mut drift_abort = false;
 
-                for j in (i + 1)..tick_count {
-                    if ticks[j].timestamp > window_end {
+                for tick_j in ticks.iter().skip(i + 1).take(tick_count - i - 1) {
+                    if tick_j.timestamp > window_end {
                         break;
                     }
-                    if ticks[j].token_id == tick.token_id {
-                        let future_price = ticks[j].price as f64 / 1000.0;
+                    if tick_j.token_id == tick.token_id {
+                        let future_price = tick_j.price as f64 / 1000.0;
                         let drift = (future_price - entry_price).abs() / entry_price;
                         if drift > self.config.drift_threshold {
                             drift_abort = true;

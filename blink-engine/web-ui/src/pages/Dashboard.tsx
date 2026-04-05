@@ -1,6 +1,6 @@
 import { useFetch, useWebSocket, postPause } from '../hooks/useApi';
 import { Card, Stat, Badge } from '../components/Card';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
+import { XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
 export default function Dashboard() {
   const { data: status } = useFetch<any>('/api/status', 2000);
@@ -96,7 +96,7 @@ export default function Dashboard() {
                 <Tooltip
                   contentStyle={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 8 }}
                   labelStyle={{ color: '#9ca3af' }}
-                  formatter={(v: number) => [`$${v.toFixed(2)}`, 'NAV']}
+                  formatter={(v) => [`$${Number(v).toFixed(2)}`, 'NAV']}
                 />
                 <Area type="monotone" dataKey="nav" stroke="#10b981" fill="url(#navGrad)" strokeWidth={2} dot={false} />
               </AreaChart>

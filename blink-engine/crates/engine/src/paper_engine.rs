@@ -1354,6 +1354,70 @@ impl PaperEngine {
             }
             info!("{msg}");
         }
+
+        // Close fully resolved positions:
+        //  • price ≥ 0.99  → outcome resolved YES / team won  (harvest full winner)
+        //  • price ≤ 0.01  → outcome resolved NO  / team lost (free trapped capital)
+        let resolved_indexes: Vec<usize> = p.positions
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, pos)| {
+                if pos.current_price >= 0.99 || pos.current_price <= 0.01 {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !resolved_indexes.is_empty() {
+            let n = resolved_indexes.len();
+            let mut total_pnl = 0.0f64;
+            for idx in resolved_indexes.into_iter().rev() {
+                let pos = p.positions.remove(idx);
+                let exit_price = pos.current_price.clamp(0.0, 1.0);
+                let pnl = match pos.side {
+                    OrderSide::Buy => (exit_price - pos.entry_price) * pos.shares,
+                    OrderSide::Sell => (pos.entry_price - exit_price) * pos.shares,
+                };
+                let cash_back = pos.usdc_spent + pnl;
+                p.cash_usdc += cash_back;
+                total_pnl += pnl;
+                let reason = if exit_price >= 0.99 {
+                    "resolved@winner"
+                } else {
+                    "resolved@loser"
+                };
+                p.closed_trades.push(crate::paper_portfolio::ClosedTrade {
+                    token_id: pos.token_id.clone(),
+                    side: pos.side,
+                    entry_price: pos.entry_price,
+                    exit_price,
+                    shares: pos.shares,
+                    realized_pnl: pnl,
+                    reason: reason.to_string(),
+                    opened_at_wall: pos.opened_at_wall,
+                    closed_at_wall: chrono::Local::now(),
+                    duration_secs: pos.opened_at.elapsed().as_secs(),
+                    scorecard: crate::paper_portfolio::ExecutionScorecard {
+                        slippage_bps: pos.entry_slippage_bps,
+                        queue_delay_ms: pos.queue_delay_ms,
+                        outcome_tags: vec![
+                            reason.to_string(),
+                            format!("variant:{}", pos.experiment_variant),
+                        ],
+                    },
+                });
+            }
+            self.risk.lock().unwrap().record_close(total_pnl);
+            let msg = format!(
+                "AUTOCLAIM: {} resolved-event close(s)  total_pnl={:+.2}",
+                n, total_pnl
+            );
+            if let Some(ref log) = self.activity {
+                log_push(log, EntryKind::Engine, msg.clone());
+            }
+            info!("{msg}");
+        }
     }
 }
 

@@ -527,6 +527,38 @@ async fn main() -> Result<()> {
             });
         }
 
+        // ── Periodic autosave ────────────────────────────────────────────
+        // Saves portfolio + warm state + rejections every PAPER_AUTOSAVE_SECS.
+        // Critical: state is otherwise only saved on graceful shutdown, so
+        // kills/crashes lose all session data.
+        {
+            let ps = Arc::clone(&paper);
+            let sd_save = Arc::clone(&shutdown);
+            let subs_save = Arc::clone(&market_subscriptions);
+            let save_interval_secs = std::env::var("PAPER_AUTOSAVE_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(10);
+            let psp = std::env::var("PAPER_STATE_PATH")
+                .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());
+            let wsp = std::env::var("PAPER_WARM_STATE_PATH")
+                .unwrap_or_else(|_| "logs\\paper_warm_state.json".to_string());
+            let rsp = std::env::var("PAPER_REJECTIONS_PATH")
+                .unwrap_or_else(|_| "logs\\paper_rejections.json".to_string());
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(save_interval_secs)).await;
+                    if sd_save.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let _ = ps.save_portfolio(&psp).await;
+                    let subs = subs_save.lock().unwrap().clone();
+                    let _ = ps.save_warm_state(&wsp, &subs, &psp).await;
+                    let _ = ps.save_rejections(&rsp).await;
+                }
+            });
+        }
+
         let tp = Arc::clone(&trading_paused);
         let twin_opt = twin_engine.clone();
         let subs_for_signals = Arc::clone(&market_subscriptions);

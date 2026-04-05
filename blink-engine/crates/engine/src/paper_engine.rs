@@ -370,7 +370,6 @@ impl PaperEngine {
             cooldowns.insert(signal.token_id.clone(), Instant::now());
         }
 
-        self.run_autoclaim().await;
         let now = Instant::now();
 
         {
@@ -606,7 +605,7 @@ impl PaperEngine {
                 variant,
             )
         };
-        // Record fill in risk manager for VaR tracking.
+        // Record fill in risk manager for VaR tracking (does not affect daily P&L).
         self.risk.lock().unwrap().record_fill(size_usdc);
 
         self.shadow_comparator.lock().await.observations.push(ShadowFillObservation {
@@ -713,8 +712,6 @@ impl PaperEngine {
                 }
             }
         }
-
-        self.run_autoclaim().await;
 
         let p         = self.portfolio.lock().await;
         let nav       = p.nav();
@@ -1252,7 +1249,7 @@ impl PaperEngine {
         info!("Daily risk counters reset");
     }
 
-    async fn run_autoclaim(&self) {
+    pub async fn run_autoclaim(&self) {
         let mut enabled = std::env::var("AUTOCLAIM_ENABLED")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(true);
@@ -1295,6 +1292,8 @@ impl PaperEngine {
                 OrderSide::Sell => (pos.entry_price - pos.current_price) * pos.shares,
             };
             p.cash_usdc += pos.usdc_spent + pnl;
+            // Update risk manager with realized P&L from stale close.
+            self.risk.lock().unwrap().record_close(pnl);
             p.closed_trades.push(crate::paper_portfolio::ClosedTrade {
                 token_id: pos.token_id.clone(),
                 side: pos.side,
@@ -1317,8 +1316,15 @@ impl PaperEngine {
             });
         }
 
+        let closed_before = p.closed_trades.len();
         let closed = p.autoclaim_tiered(&tiers);
         if closed > 0 {
+            // Update risk manager with realized P&L from tiered closes.
+            let realized: f64 = p.closed_trades[closed_before..]
+                .iter()
+                .map(|t| t.realized_pnl)
+                .sum();
+            self.risk.lock().unwrap().record_close(realized);
             let msg = format!("AUTOCLAIM: {} tiered close action(s)", closed);
             if let Some(ref log) = self.activity {
                 log_push(log, EntryKind::Engine, msg.clone());

@@ -355,10 +355,10 @@ impl RiskManager {
 
     // ── P&L tracking ─────────────────────────────────────────────────────
 
-    /// Called after an order fills — deducts `usdc_spent` from daily P&L
-    /// and records exposure for VaR tracking.
+    /// Called after an order fills — records exposure for VaR tracking.
+    /// Does NOT affect daily P&L; use [`record_close`] with realized P&L
+    /// when a position is closed.
     pub fn record_fill(&mut self, usdc_spent: f64) {
-        self.daily_pnl -= usdc_spent;
         self.rolling_exposure.push_back(ExposureEntry {
             timestamp: Instant::now(),
             amount_usdc: usdc_spent,
@@ -548,9 +548,9 @@ mod tests {
     #[test]
     fn record_fill_and_close_update_daily_pnl() {
         let mut rm = default_rm();
-        rm.record_fill(10.0); // spent $10 → daily_pnl = -10
-        assert!((rm.daily_pnl() - (-10.0)).abs() < 1e-9);
-        rm.record_close(4.0); // realized $4 → daily_pnl = -6
+        rm.record_fill(10.0); // spent $10 → VaR tracked, daily_pnl unchanged
+        assert!((rm.daily_pnl()).abs() < 1e-9);
+        rm.record_close(-6.0); // realized -$6 loss → daily_pnl = -6
         assert!((rm.daily_pnl() - (-6.0)).abs() < 1e-9);
     }
 
@@ -558,6 +558,7 @@ mod tests {
     fn reset_daily_clears_pnl_and_rate_buffer() {
         let mut rm = default_rm();
         rm.record_fill(5.0);
+        rm.record_close(-5.0); // simulate realized loss
         assert!(rm.check_pre_order(1.0, 0, 100.0, 100.0).is_ok());
         rm.reset_daily();
         assert!((rm.daily_pnl()).abs() < 1e-9);
@@ -724,6 +725,10 @@ mod proptest_risk_verification {
                 match result {
                     Ok(()) => {
                         rm.record_fill(*fill_usdc);
+                        // Simulate position closed at total loss so daily P&L
+                        // tracks realized losses (record_fill no longer moves
+                        // daily_pnl).
+                        rm.record_close(-*fill_usdc);
                     }
                     Err(RiskViolation::DailyLossLimitExceeded { .. }) |
                     Err(RiskViolation::CircuitBreakerTripped { .. }) => {

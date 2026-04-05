@@ -492,6 +492,22 @@ async fn main() -> Result<()> {
             });
         }
 
+        // ── Background autoclaim timer (every 5 s) ──────────────────────
+        // Moved out of the hot signal path to avoid portfolio lock starvation.
+        {
+            let ac = Arc::clone(&paper);
+            let sd_ac = Arc::clone(&shutdown);
+            tokio::spawn(async move {
+                loop {
+                    if sd_ac.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    ac.run_autoclaim().await;
+                }
+            });
+        }
+
         let tp = Arc::clone(&trading_paused);
         let twin_opt = twin_engine.clone();
         let subs_for_signals = Arc::clone(&market_subscriptions);

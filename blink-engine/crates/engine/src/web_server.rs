@@ -393,6 +393,8 @@ async fn build_snapshot(state: &AppState) -> Result<String, ()> {
     // Portfolio summary
     if let Some(ref paper) = state.paper {
         let p = paper.portfolio.lock().await;
+        let attempts = (p.filled_orders + p.aborted_orders + p.skipped_orders).max(1) as f64;
+        let fill_rate_pct = (p.filled_orders as f64 / attempts) * 100.0;
         snapshot["portfolio"] = json!({
             "cash_usdc": p.cash_usdc,
             "nav_usdc": p.nav(),
@@ -403,7 +405,10 @@ async fn build_snapshot(state: &AppState) -> Result<String, ()> {
             "closed_trades": p.closed_trades.len(),
             "total_signals": p.total_signals,
             "filled_orders": p.filled_orders,
-            "equity_curve_last": p.equity_curve.last().copied(),
+            "skipped_orders": p.skipped_orders,
+            "aborted_orders": p.aborted_orders,
+            "fill_rate_pct": fill_rate_pct,
+            "equity_curve": p.equity_curve,
         });
     }
 

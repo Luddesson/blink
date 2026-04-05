@@ -3,17 +3,22 @@ import { Card, Stat, Badge } from '../components/Card';
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
 export default function Dashboard() {
-  const { data: status } = useFetch<any>('/api/status', 2000);
-  const { data: portfolio } = useFetch<any>('/api/portfolio', 2000);
+  const { data: portfolio } = useFetch<any>('/api/portfolio', 3000);
   const { data: activityData } = useFetch<any>('/api/activity', 3000);
   const { snapshot, connected } = useWebSocket();
 
-  const s = snapshot || status;
+  // Live stats (NAV, PnL, etc.) from WebSocket — refreshes every 2s with fresh
+  // backend data. Falls back to polled REST data before first WS message.
+  const liveStats = snapshot?.portfolio ?? portfolio;
+  // Positions table always from REST (WebSocket snapshot has count only).
   const p = portfolio;
-  const equityCurve = p?.equity_curve?.map((v: number, i: number) => ({ i, nav: v })) || [];
+  // Equity curve from WebSocket snapshot (has full array, updated every 1s by
+  // the backend mark-price tick). Falls back to polled data if WS not yet ready.
+  const equityCurveRaw = snapshot?.portfolio?.equity_curve ?? portfolio?.equity_curve;
+  const equityCurve = equityCurveRaw?.map((v: number, i: number) => ({ i, nav: v })) || [];
 
   const handlePause = () => {
-    if (s) postPause(!s.trading_paused);
+    if (snapshot) postPause(!snapshot.trading_paused);
   };
 
   return (
@@ -23,28 +28,28 @@ export default function Dashboard() {
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-bold text-white">Blink Engine</h1>
           <Badge
-            text={s?.ws_connected ? 'WS LIVE' : 'WS DOWN'}
-            variant={s?.ws_connected ? 'green' : 'red'}
+            text={snapshot?.ws_connected ? 'WS LIVE' : 'WS DOWN'}
+            variant={snapshot?.ws_connected ? 'green' : 'red'}
           />
           <Badge
             text={connected ? 'UI CONNECTED' : 'UI DISCONNECTED'}
             variant={connected ? 'green' : 'gray'}
           />
-          {s?.trading_paused && <Badge text="PAUSED" variant="yellow" />}
+          {snapshot?.trading_paused && <Badge text="PAUSED" variant="yellow" />}
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-gray-500">
-            msgs: {(s?.messages_total || 0).toLocaleString()}
+            msgs: {(snapshot?.messages_total || 0).toLocaleString()}
           </span>
           <button
             onClick={handlePause}
             className={`px-3 py-1 rounded text-xs font-semibold border ${
-              s?.trading_paused
+              snapshot?.trading_paused
                 ? 'border-emerald-600 text-emerald-400 hover:bg-emerald-900/30'
                 : 'border-yellow-600 text-yellow-400 hover:bg-yellow-900/30'
             }`}
           >
-            {s?.trading_paused ? 'RESUME' : 'PAUSE'}
+            {snapshot?.trading_paused ? 'RESUME' : 'PAUSE'}
           </button>
         </div>
       </div>
@@ -52,30 +57,30 @@ export default function Dashboard() {
       {/* Portfolio overview */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
         <Card>
-          <Stat label="NAV" value={`$${(p?.nav_usdc || 0).toFixed(2)}`} color="text-white" />
+          <Stat label="NAV" value={`$${(liveStats?.nav_usdc || 0).toFixed(2)}`} color="text-white" />
         </Card>
         <Card>
-          <Stat label="Cash" value={`$${(p?.cash_usdc || 0).toFixed(2)}`} />
+          <Stat label="Cash" value={`$${(liveStats?.cash_usdc || 0).toFixed(2)}`} />
         </Card>
         <Card>
-          <Stat label="Invested" value={`$${(p?.invested_usdc || 0).toFixed(2)}`} />
+          <Stat label="Invested" value={`$${(liveStats?.invested_usdc || 0).toFixed(2)}`} />
         </Card>
         <Card>
           <Stat
             label="Unrealized P&L"
-            value={`${(p?.unrealized_pnl_usdc || 0) >= 0 ? '+' : ''}$${(p?.unrealized_pnl_usdc || 0).toFixed(2)}`}
-            color={(p?.unrealized_pnl_usdc || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}
+            value={`${(liveStats?.unrealized_pnl_usdc || 0) >= 0 ? '+' : ''}$${(liveStats?.unrealized_pnl_usdc || 0).toFixed(2)}`}
+            color={(liveStats?.unrealized_pnl_usdc || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}
           />
         </Card>
         <Card>
           <Stat
             label="Realized P&L"
-            value={`${(p?.realized_pnl_usdc || 0) >= 0 ? '+' : ''}$${(p?.realized_pnl_usdc || 0).toFixed(2)}`}
-            color={(p?.realized_pnl_usdc || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}
+            value={`${(liveStats?.realized_pnl_usdc || 0) >= 0 ? '+' : ''}$${(liveStats?.realized_pnl_usdc || 0).toFixed(2)}`}
+            color={(liveStats?.realized_pnl_usdc || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}
           />
         </Card>
         <Card>
-          <Stat label="Fill Rate" value={`${(p?.fill_rate_pct || 0).toFixed(1)}%`} color="text-cyan-400" />
+          <Stat label="Fill Rate" value={`${(liveStats?.fill_rate_pct || 0).toFixed(1)}%`} color="text-cyan-400" />
         </Card>
       </div>
 
@@ -175,8 +180,8 @@ export default function Dashboard() {
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <Card><Stat label="Total Signals" value={p?.total_signals || 0} /></Card>
-        <Card><Stat label="Filled" value={p?.filled_orders || 0} color="text-emerald-400" /></Card>
+        <Card><Stat label="Total Signals" value={liveStats?.total_signals || 0} /></Card>
+        <Card><Stat label="Filled" value={liveStats?.filled_orders || 0} color="text-emerald-400" /></Card>
         <Card><Stat label="Skipped" value={p?.skipped_orders || 0} color="text-yellow-400" /></Card>
         <Card><Stat label="Aborted" value={p?.aborted_orders || 0} color="text-red-400" /></Card>
         <Card><Stat label="Avg Slippage" value={`${(p?.avg_slippage_bps || 0).toFixed(1)} bps`} /></Card>

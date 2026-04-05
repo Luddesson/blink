@@ -508,6 +508,25 @@ async fn main() -> Result<()> {
             });
         }
 
+        // ── Mark price tick + equity curve (every 1 s) ───────────────────
+        // Updates open position prices from the live order book store and
+        // appends a NAV sample to the equity curve. This makes unrealized PnL
+        // and the equity chart reflect real-time price moves in web mode where
+        // the TUI (which normally drives push_equity_snapshot) is not running.
+        {
+            let pd = Arc::clone(&paper);
+            let sd_mt = Arc::clone(&shutdown);
+            tokio::spawn(async move {
+                loop {
+                    if sd_mt.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    pd.tick_mark_prices().await;
+                }
+            });
+        }
+
         let tp = Arc::clone(&trading_paused);
         let twin_opt = twin_engine.clone();
         let subs_for_signals = Arc::clone(&market_subscriptions);

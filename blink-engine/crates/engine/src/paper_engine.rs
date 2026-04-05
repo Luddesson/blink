@@ -1143,6 +1143,29 @@ impl PaperEngine {
             .map(|p| p as f64 / 1_000.0)
     }
 
+    /// Updates all open position mark prices from the live order book store,
+    /// then appends an equity curve sample. Call from a background timer (every
+    /// ~1 s) to keep unrealized PnL and the equity chart live in web mode.
+    pub async fn tick_mark_prices(&self) {
+        let mut p = self.portfolio.lock().await;
+        if p.positions.is_empty() {
+            p.push_equity_snapshot();
+            return;
+        }
+        let updates: Vec<(String, f64)> = p
+            .positions
+            .iter()
+            .filter_map(|pos| {
+                self.get_market_price(&pos.token_id)
+                    .map(|pr| (pos.token_id.clone(), pr))
+            })
+            .collect();
+        for (token_id, price) in updates {
+            p.update_price(&token_id, price);
+        }
+        p.push_equity_snapshot();
+    }
+
     async fn enrich_signal_metadata(&self, signal: &mut RN1Signal) {
         let title_ok = signal.market_title.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
         let outcome_ok = signal.market_outcome.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);

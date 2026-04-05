@@ -1,6 +1,8 @@
 {
   "dependencies": {
+    "@xterm/xterm": "^6.0.0",
     "alchemy-sdk": "^3.6.5",
-    "ethers": "^5.8.0"
+    "ethers": "^5.8.0",
+    "ttyd": "^1.0.3"
   }
 }

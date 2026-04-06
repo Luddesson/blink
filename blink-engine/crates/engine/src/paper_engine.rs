@@ -53,6 +53,7 @@ pub struct PaperEngine {
     /// Shared subscription list — new token_ids are added here on fill so the WS client
     /// subscribes and `get_market_price()` stays live for the position's lifetime.
     market_subscriptions: Arc<std::sync::Mutex<Vec<String>>>,
+    ws_force_reconnect: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Snapshot of the currently active fill window, if any.
@@ -248,7 +249,7 @@ impl PaperEngine {
     ///
     /// Pass `Some(log)` to feed a TUI activity panel; pass `None` for plain
     /// terminal output.
-    pub fn new(book_store: Arc<OrderBookStore>, activity: Option<ActivityLog>, market_subscriptions: Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+    pub fn new(book_store: Arc<OrderBookStore>, activity: Option<ActivityLog>, market_subscriptions: Arc<std::sync::Mutex<Vec<String>>>, ws_force_reconnect: Arc<std::sync::atomic::AtomicBool>) -> Self {
         if activity.is_none() {
             // Only print the text banner when not in TUI mode.
             println!();
@@ -293,6 +294,7 @@ impl PaperEngine {
             token_cooldowns: Arc::new(Mutex::new(HashMap::new())),
             equity_tick: std::sync::atomic::AtomicU64::new(0),
             market_subscriptions,
+            ws_force_reconnect,
         }
     }
 
@@ -691,6 +693,7 @@ impl PaperEngine {
             let mut subs = self.market_subscriptions.lock().unwrap();
             if !subs.contains(&signal.token_id) {
                 subs.push(signal.token_id.clone());
+                self.ws_force_reconnect.store(true, std::sync::atomic::Ordering::Relaxed);
                 tracing::info!(token_id = %signal.token_id, "📡 Added token to WS subscriptions");
             }
         }

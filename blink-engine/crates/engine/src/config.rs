@@ -157,7 +157,7 @@ impl Config {
             .context("RN1_WALLET environment variable not set")?;
 
         let markets_str = std::env::var("MARKETS")
-            .context("MARKETS environment variable not set")?;
+            .unwrap_or_default();
 
         let log_level = std::env::var("LOG_LEVEL")
             .unwrap_or_else(|_| "info".to_string());
@@ -265,11 +265,13 @@ impl Config {
         let markets: Vec<String> = markets_str
             .split(',')
             .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
             .collect();
 
-        if markets.is_empty() {
-            anyhow::bail!("MARKETS must contain at least one token ID");
+        // In paper/copytrade mode, markets are discovered dynamically from RN1 signals.
+        // Only enforce non-empty markets for live trading.
+        if markets.is_empty() && live_trading {
+            anyhow::bail!("MARKETS must contain at least one token ID for live trading");
         }
 
         Ok(Config {

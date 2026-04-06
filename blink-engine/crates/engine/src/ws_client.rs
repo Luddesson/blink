@@ -249,19 +249,22 @@ async fn connect_and_run(
 
     let (mut write, mut read) = ws_stream.split();
 
-    // Correct Polymarket CLOB WS format: type="market", assets_ids=[...]
-    // No auth required for the public market channel.
-    // initial_dump=false avoids a large burst of 20+ messages that can trigger
-    // Cloudflare throttling on the connection.
-    let sub_payload = serde_json::json!({
-        "type":       "market",
-        "assets_ids": markets,
-    });
-    write
-        .send(Message::Text(sub_payload.to_string().into()))
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to send subscription: {e}"))?;
-    info!("Subscribed to markets");
+    // Only send initial subscription if we have real token IDs.
+    // In copytrade mode, markets start empty and get populated dynamically
+    // as RN1 signals arrive and positions are filled.
+    if !markets.is_empty() {
+        let sub_payload = serde_json::json!({
+            "type":       "market",
+            "assets_ids": markets,
+        });
+        write
+            .send(Message::Text(sub_payload.to_string().into()))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to send subscription: {e}"))?;
+        info!(count = markets.len(), "Subscribed to markets");
+    } else {
+        info!("WS connected — no initial markets; will subscribe dynamically on first fill");
+    }
 
     // Send an immediate PING to establish keepalive pattern right away.
     // Without this, connections die within 2s after the initial dump burst.

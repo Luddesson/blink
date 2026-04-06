@@ -1,7 +1,7 @@
 ﻿# start-blink.ps1
-# Usage: .\start-blink.ps1          (debug build, fast)
-#        .\start-blink.ps1 -Release  (release build, optimized)
-param([switch]$Release)
+# Usage: .\start-blink.ps1          (release build, optimized — default)
+#        .\start-blink.ps1 -Debug    (debug build, fast compile)
+param([switch]$Debug)
 $root = $PSScriptRoot
 $logs = "$root\logs"
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
@@ -31,8 +31,8 @@ Start-Sleep 4
 Write-Host ""
 Write-Host "=== [1/4] Building engine (cargo build) ===" -ForegroundColor Cyan
 Push-Location "$root\blink-engine"
-$cargoArgs = if ($Release) { @("build", "--release") } else { @("build") }
-$buildProfile = if ($Release) { "release" } else { "debug" }
+$cargoArgs = if ($Debug) { @("build") } else { @("build", "--release") }
+$buildProfile = if ($Debug) { "debug" } else { "release" }
 if ($Release) { Write-Host "  Mode: RELEASE (optimized)" -ForegroundColor Yellow }
 $p = Start-Process "cargo" -ArgumentList $cargoArgs -NoNewWindow -Wait -PassThru
 Pop-Location

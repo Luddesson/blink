@@ -304,6 +304,7 @@ async fn main() -> Result<()> {
             Arc::clone(&book_store),
             Some(activity.clone()),
             Arc::clone(&market_subscriptions),
+            Arc::clone(&ws_force_reconnect),
         ));
         paper_for_persist = Some(Arc::clone(&paper));
 

@@ -1,6 +1,6 @@
 # Blink x Polymarket Live Go-Live Masterplan
 
-Status: **Pre-Production / Not Live-Ready Yet**
+Status: **Phase A Complete / Phase B Ready**
 
 Owner: Blink core team
 
@@ -445,11 +445,30 @@ Hard policy:
 
 ## 8) Immediate Next Actions (Priority Queue)
 
-1. Implement P0-1, P0-2, P0-3 in one branch and lock with tests.
-2. Add reconciliation daemon and close-accounting wiring.
-3. Build `--preflight-live` command.
-4. Validate against official Polymarket client behavior (or adopt `rs-clob-client` directly).
-5. Run controlled canary session with minimal capital and full telemetry.
+> **Phase A status (2026-04-06):** All P0 findings have been implemented and tested.
+>
+> Implemented fixes:
+> - P0-1: Fill deferral to reconciliation worker (exchange-first SSOT)
+> - P0-2: Configurable signature type/funder/nonce/expiration via env + validation
+> - P0-3: SELL precision fix (×1e6 lossless conversion, fractional share tests)
+> - P0-4: Full reconciliation loop (Fill/NoFill/SuspectedStale/StillPending)
+> - P0-5: record_close wired via sync_risk_closes_from_portfolio
+> - P0-6: Auth headers with HMAC-SHA256 and retry + timestamp refresh
+> - P0-9: RN1 intent classifier (NewExposure/AddExposure/HedgeOrFlatten/Ambiguous)
+> - P1-7: Vault init hard-fail when LIVE_TRADING=true (panic, not degrade)
+> - P1-8: MAX_SINGLE_ORDER_USDC default aligned to $20 across codebase
+> - P1-10: Failsafe SLO metrics + heartbeat monitoring
+> - P1-11: --preflight-live command with 4-step validation
+> - Canary rollout policy with stage gates and reject-streak halt
+> - Emergency stop with circuit breaker + cancel-all + reconcile
+>
+> **Next: Phase B — Operational Hardening**
+
+1. Run controlled canary session with minimal capital and full telemetry.
+2. Build alerting channels (Slack/Discord/Webhook) for breaker trips and drift.
+3. Expand --preflight-live with on-chain balance/allowance checks.
+4. Add integration test suite with mock CLOB server.
+5. Chaos test: transient 429/5xx/auth errors with backoff validation.
 
 ---
 

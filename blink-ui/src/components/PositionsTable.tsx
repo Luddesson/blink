@@ -13,7 +13,7 @@ interface Props {
 
 type SortKey = 'market_title' | 'shares' | 'entry_price' | 'current_price' | 'unrealized_pnl'
 
-function PositionsTable({ positions, loading, isLive, onRefresh }: Props) {
+function PositionsTable({ positions, loading, onRefresh }: Props) {
   const [sort, setSort] = useState<SortKey>('current_price')
   const [asc, setAsc] = useState(false)
   const [selling, setSelling] = useState<number | null>(null)

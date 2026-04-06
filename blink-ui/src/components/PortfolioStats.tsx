@@ -41,6 +41,7 @@ export default function PortfolioStats({ portfolio }: Props) {
       <div className="space-y-2">
         <StatRow label="Fill rate" value={`${fmt(portfolio.fill_rate_pct, 1)}%`} />
         <StatRow label="Win rate" value={`${fmt(portfolio.win_rate_pct, 1)}%`} />
+        <StatRow label="Fees paid" value={portfolio.fees_paid_usdc > 0 ? `-$${fmt(portfolio.fees_paid_usdc)}` : '$0.00'} />
         <StatRow label="Total signals" value={String(portfolio.total_signals ?? 0)} />
         <StatRow label="Filled / Skipped" value={`${portfolio.filled_orders ?? 0} / ${portfolio.skipped_orders ?? 0}`} />
         {portfolio.avg_slippage_bps != null && (

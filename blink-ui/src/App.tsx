@@ -28,22 +28,6 @@ const EMPTY_RISK: RiskSummary = {
   max_single_order_usdc: 20,
 }
 
-// Paper run ends 2026-04-13T09:34:35Z
-const PAPER_RUN_END = new Date('2026-04-13T09:34:35Z').getTime()
-
-function PaperRunCountdown() {
-  const now = Date.now()
-  const msLeft = PAPER_RUN_END - now
-  if (msLeft <= 0) return <span className="badge badge-ok">Paper run complete</span>
-  const days = Math.floor(msLeft / 86_400_000)
-  const hours = Math.floor((msLeft % 86_400_000) / 3_600_000)
-  return (
-    <span className="badge badge-paper">
-      Paper run: {days}d {hours}h left
-    </span>
-  )
-}
-
 export default function App() {
   const { snapshot, connected, lastMessageAt } = useEngineSocket()
   const { viewMode } = useMode()
@@ -52,106 +36,89 @@ export default function App() {
   const [tradingPaused, setTradingPaused] = useState(false)
   const [cbDismissed, setCbDismissed] = useState(false)
 
-  // Only poll live portfolio when in live view
   const { data: livePortfolio } = usePoll(api.livePortfolio, 5_000, isLive)
 
   const wsPaused = snapshot?.trading_paused ?? tradingPaused
-
   const risk: RiskSummary = snapshot?.risk ?? EMPTY_RISK
-  const portfolioSummary = snapshot?.portfolio
+  const portfolio = snapshot?.portfolio
   const activity = snapshot?.recent_activity ?? []
+  const positions = portfolio?.open_positions ?? []
 
-  // Positions come from WS snapshot (open_positions array)
-  const positions = portfolioSummary?.open_positions ?? []
-  const wsLoading = !snapshot && connected
-
-  const nav = isLive
-    ? (portfolioSummary?.nav_usdc ?? 0)
-    : (portfolioSummary?.nav_usdc ?? 0)
-
+  const nav = portfolio?.nav_usdc ?? 0
   const navDelta = isLive
-    ? (livePortfolio?.daily_pnl_usdc ?? portfolioSummary?.unrealized_pnl_usdc ?? 0)
-    : (portfolioSummary?.unrealized_pnl_usdc ?? 0)
-
+    ? (livePortfolio?.daily_pnl_usdc ?? portfolio?.unrealized_pnl_usdc ?? 0)
+    : (portfolio?.unrealized_pnl_usdc ?? 0)
   const navDeltaPct = nav > 0 ? (navDelta / (nav - navDelta || 1)) * 100 : 0
 
-  const equityCurve = portfolioSummary?.equity_curve ?? []
-  const equityTimestamps = portfolioSummary?.equity_timestamps ?? []
+  const realizedPnl = portfolio?.realized_pnl_usdc ?? 0
+  const unrealizedPnl = portfolio?.unrealized_pnl_usdc ?? 0
+  const feesPaid = portfolio?.fees_paid_usdc ?? 0
+  const netPnl = realizedPnl + unrealizedPnl - feesPaid
+
+  const equityCurve = portfolio?.equity_curve ?? []
+  const equityTimestamps = portfolio?.equity_timestamps ?? []
 
   const showCbAlarm = (risk.circuit_breaker_tripped || (risk as unknown as { circuit_breaker?: boolean }).circuit_breaker) && !cbDismissed
-
-  // WS disconnection banner: show if >15s since last message and was previously connected
   const wsDownSecs = lastMessageAt ? Math.floor((Date.now() - lastMessageAt) / 1000) : 0
   const showWsBanner = !connected && wsDownSecs > 15
 
   return (
-    <div className="min-h-screen bg-surface-950 text-slate-100">
+    <div className="h-screen flex flex-col overflow-hidden bg-surface-950 text-slate-100">
       <Header wsConnected={connected} tradingPaused={wsPaused} />
 
-      {/* WS disconnection banner */}
-      {Boolean(showWsBanner) && (
-        <div className="bg-red-900/80 border-b border-red-600 text-red-200 text-xs flex items-center justify-center gap-2 py-1.5 sticky top-12 z-30">
-          <span className="w-2 h-2 rounded-full bg-red-400 animate-pulse" />
-          WebSocket disconnected — attempting to reconnect ({wsDownSecs}s ago)
+      {showWsBanner && (
+        <div className="bg-red-900/80 border-b border-red-600 text-red-200 text-xs flex items-center justify-center gap-2 py-1 z-30 shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
+          WebSocket disconnected — reconnecting ({wsDownSecs}s ago)
         </div>
       )}
 
-      {/* Circuit breaker full-screen overlay */}
       {showCbAlarm && (
-        <CircuitBreakerAlarm
-          risk={risk}
-          onDismiss={() => setCbDismissed(true)}
-        />
+        <CircuitBreakerAlarm risk={risk} onDismiss={() => setCbDismissed(true)} />
       )}
 
-      {/* Main grid */}
-      <main className="grid grid-cols-[240px_1fr_240px] gap-3 p-4 max-w-[1600px] mx-auto">
-        {/* Left column */}
-        <div className="flex flex-col gap-3">
+      <main className="flex-1 grid grid-cols-[220px_1fr_260px] gap-2 p-2 overflow-hidden min-h-0">
+
+        <aside className="flex flex-col gap-2 overflow-y-auto min-h-0">
+          <ErrorBoundary label="RiskPanel">
+            <RiskPanel risk={risk} />
+          </ErrorBoundary>
+          <ErrorBoundary label="PortfolioStats">
+            <PortfolioStats portfolio={portfolio} />
+          </ErrorBoundary>
+          {isLive && (
+            <ErrorBoundary label="EmergencyStop">
+              <EmergencyStop paused={wsPaused} onToggled={(p) => setTradingPaused(p)} />
+            </ErrorBoundary>
+          )}
+        </aside>
+
+        <section className="flex flex-col gap-2 overflow-y-auto min-h-0">
           <ErrorBoundary label="NavCard">
             <NavCard
               nav={nav}
               navDelta={navDelta}
               navDeltaPct={navDeltaPct}
+              netPnl={netPnl}
+              feesPaid={feesPaid}
               equityCurve={equityCurve}
               equityTimestamps={equityTimestamps}
+              portfolio={portfolio}
             />
           </ErrorBoundary>
-          <ErrorBoundary label="RiskPanel">
-            <RiskPanel risk={risk} />
-          </ErrorBoundary>
-          {!isLive && (
-            <div className="flex justify-center">
-              <PaperRunCountdown />
-            </div>
-          )}
-          {isLive && (
-            <EmergencyStop
-              paused={wsPaused}
-              onToggled={(p) => setTradingPaused(p)}
-            />
-          )}
-        </div>
-
-        {/* Center column */}
-        <div className="flex flex-col gap-3 min-w-0">
           <ErrorBoundary label="PositionsTable">
             <PositionsTable
               positions={positions}
-              loading={wsLoading}
+              loading={!snapshot && connected}
               isLive={isLive}
             />
           </ErrorBoundary>
           <ErrorBoundary label="TradeHistory">
             <TradeHistory />
           </ErrorBoundary>
-        </div>
+        </section>
 
-        {/* Right column */}
-        <div className="flex flex-col gap-3">
-          <ErrorBoundary label="PortfolioStats">
-            <PortfolioStats portfolio={portfolioSummary} />
-          </ErrorBoundary>
+        <aside className="flex flex-col gap-2 overflow-y-auto min-h-0">
           <ErrorBoundary label="ActivityFeed">
             <ActivityFeed wsEntries={activity} />
           </ErrorBoundary>
@@ -161,13 +128,9 @@ export default function App() {
           <ErrorBoundary label="FailsafePanel">
             <FailsafePanel />
           </ErrorBoundary>
-        </div>
-      </main>
+        </aside>
 
-      {/* Footer */}
-      <footer className="text-center text-xs text-slate-700 py-3 border-t border-surface-700 mt-2">
-        Blink HFT Engine — {snapshot ? `${snapshot.messages_total} msgs processed` : 'connecting…'}
-      </footer>
+      </main>
     </div>
   )
 }

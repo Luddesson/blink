@@ -85,6 +85,7 @@ function SellModal({ pos, onClose, onSold }: SellModalProps) {
   };
 
   const title = pos.market_title || pos.token_id.slice(0, 30) + '…';
+  const outcome = pos.market_outcome ? ` — ${pos.market_outcome}` : '';
   const pnlColor = pos.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400';
 
   return (
@@ -94,7 +95,7 @@ function SellModal({ pos, onClose, onSold }: SellModalProps) {
         onClick={e => e.stopPropagation()}
       >
         <h2 className="text-white font-bold text-base mb-1">Sell position #{pos.id}</h2>
-        <p className="text-gray-400 text-xs mb-1 truncate">{title}</p>
+        <p className="text-gray-400 text-xs mb-1 truncate">{title}{outcome}</p>
         <div className="flex gap-3 text-xs mb-4">
           <span className="text-gray-500">Entry <span className="text-white">{pos.entry_price.toFixed(3)}</span></span>
           <span className="text-gray-500">Now <span className="text-white">{pos.current_price.toFixed(3)}</span></span>
@@ -253,7 +254,9 @@ export default function Dashboard() {
   const allPositions: PositionRow[] = ((openPositions ?? []) as PositionRow[]).filter((pos) => (pos.shares as number) >= 0.01);
   const filteredPositions = search
     ? allPositions.filter((pos) =>
-        ((pos.market_title as string | undefined) ?? (pos.token_id as string)).toLowerCase().includes(search.toLowerCase()))
+        `${(pos.market_title as string | undefined) ?? (pos.token_id as string)} ${(pos.market_outcome as string | undefined) ?? ''}`
+          .toLowerCase()
+          .includes(search.toLowerCase()))
     : allPositions;
   const sortedPositions = [...filteredPositions].sort((a, b) => {
     const va = a[sortKey];
@@ -419,7 +422,7 @@ export default function Dashboard() {
                 <thead>
                   <tr className="text-gray-500 border-b border-gray-800">
                     <th className="text-left py-2 px-2 cursor-pointer hover:text-gray-300 select-none" onClick={() => toggleSort('id')}>ID{sortIcon('id')}</th>
-                    <th className="text-left py-2 px-2 cursor-pointer hover:text-gray-300 select-none" onClick={() => toggleSort('market_title')}>Market{sortIcon('market_title')}</th>
+                    <th className="text-left py-2 px-2 cursor-pointer hover:text-gray-300 select-none" onClick={() => toggleSort('market_title')}>Market / Bet{sortIcon('market_title')}</th>
                     <th className="text-left py-2 px-2">Side</th>
                     <th className="text-right py-2 px-2 cursor-pointer hover:text-gray-300 select-none" onClick={() => toggleSort('entry_price')}>Entry{sortIcon('entry_price')}</th>
                     <th className="text-right py-2 px-2 cursor-pointer hover:text-gray-300 select-none" onClick={() => toggleSort('current_price')}>Current{sortIcon('current_price')}</th>
@@ -446,7 +449,12 @@ export default function Dashboard() {
                     return (
                     <tr key={p_id} className="border-b border-gray-800/50 hover:bg-gray-800/30">
                       <td className="py-1.5 px-2 text-gray-400">#{p_id}</td>
-                      <td className="py-1.5 px-2 text-white">{(pos.market_title as string) || (pos.token_id as string).slice(0, 12) + '...'}</td>
+                      <td className="py-1.5 px-2">
+                        <div className="text-white">{(pos.market_title as string) || (pos.token_id as string).slice(0, 12) + '...'}</div>
+                        {(pos.market_outcome as string | undefined) && (
+                          <div className="text-[10px] text-cyan-400">{pos.market_outcome as string}</div>
+                        )}
+                      </td>
                       <td className="py-1.5 px-2">
                         <Badge text={p_side} variant={p_side === 'BUY' ? 'green' : 'red'} />
                       </td>

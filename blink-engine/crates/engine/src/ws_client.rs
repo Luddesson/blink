@@ -256,6 +256,7 @@ async fn connect_and_run(
         let sub_payload = serde_json::json!({
             "type":       "market",
             "assets_ids": markets,
+            "custom_feature_enabled": true,
         });
         write
             .send(Message::Text(sub_payload.to_string().into()))
@@ -365,6 +366,7 @@ async fn connect_and_run(
                                 "type":       "market",
                                 "assets_ids": updated_markets,
                                 "operation":  "subscribe",
+                                "custom_feature_enabled": true,
                             });
                             match write.send(Message::Text(sub_payload.to_string().into())).await {
                                 Ok(()) => {

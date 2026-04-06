@@ -16,13 +16,13 @@ use crate::types::OrderSide;
 pub const STARTING_BALANCE_USDC: f64 = 100.0; // $100 starter bankroll
 
 /// We mirror `SIZE_MULTIPLIER × RN1's notional` as our trade size.
-pub const SIZE_MULTIPLIER: f64 = 0.20; // 20% base for higher participation
+pub const SIZE_MULTIPLIER: f64 = 0.02; // 2% of RN1 notional (conservative)
 
 /// Maximum fraction of current NAV per single trade.
-pub const MAX_POSITION_PCT: f64 = 0.25; // 25% max per trade
+pub const MAX_POSITION_PCT: f64 = 0.08; // 8% max per trade → ~12 concurrent positions
 
 /// Minimum trade size; signals below this are skipped.
-pub const MIN_TRADE_USDC: f64 = 5.0; // $5 minimum to reduce size_or_cash rejections
+pub const MIN_TRADE_USDC: f64 = 2.0; // $2 minimum
 
 /// If price drifts more than this fraction from entry during the fill
 /// window, the order is aborted (simulates an in-play failsafe).
@@ -345,12 +345,16 @@ impl PaperPortfolio {
         let min_floor_usdc = std::env::var("PAPER_MIN_ORDER_FLOOR_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(8.0)
+            .unwrap_or(3.0)
             .max(min_trade_usdc);
 
         let raw        = rn1_notional_usdc * size_multiplier;
         let cap_nav    = self.nav() * max_position_pct;
-        let size       = raw.max(min_floor_usdc).min(cap_nav).min(self.cash_usdc);
+        // Cash reserve: keep 30% of NAV as buffer for future high-quality signals
+        let cash_reserve_pct: f64 = std::env::var("CASH_RESERVE_PCT")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.30);
+        let available_cash = (self.cash_usdc - self.nav() * cash_reserve_pct).max(0.0);
+        let size       = raw.max(min_floor_usdc).min(cap_nav).min(available_cash);
         if size < min_trade_usdc { None } else { Some(size) }
     }
 

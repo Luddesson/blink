@@ -367,19 +367,16 @@ impl PaperEngine {
             }
         }
 
-        // ── Per-token cooldown: 5s between signals for the same token_id ──
+        // ── Per-token dedup: skip if we already hold a position on this token ──
         {
-            let mut cooldowns = self.token_cooldowns.lock().await;
-            if let Some(last) = cooldowns.get(&signal.token_id) {
-                if last.elapsed() < Duration::from_secs(5) {
-                    warn!(token_id = %signal.token_id, "⏭️  Token cooldown active — skipping");
-                    let mut p = self.portfolio.lock().await;
-                    p.skipped_orders += 1;
-                    self.record_rejection("token_cooldown").await;
-                    return;
-                }
+            let mut p = self.portfolio.lock().await;
+            if p.positions.iter().any(|pos| pos.token_id == signal.token_id) {
+                warn!(token_id = %signal.token_id, "⏭️  Already holding position — skipping");
+                p.skipped_orders += 1;
+                drop(p);
+                self.record_rejection("already_holding").await;
+                return;
             }
-            cooldowns.insert(signal.token_id.clone(), Instant::now());
         }
 
         let now = Instant::now();
@@ -436,6 +433,39 @@ impl PaperEngine {
             );
             self.record_rejection("min_notional").await;
             return;
+        }
+
+        // ── Extreme price filter: skip very low or very high odds ──────────
+        // Prices near 0 or 1 have minimal edge and high fee-to-profit ratio.
+        if entry_price < 0.10 || entry_price > 0.95 {
+            let mut p = self.portfolio.lock().await;
+            p.skipped_orders += 1;
+            drop(p);
+            warn!(
+                price = %format!("{:.3}", entry_price),
+                "⏭️  Signal skipped — extreme price (no edge)"
+            );
+            self.record_rejection("extreme_price").await;
+            return;
+        }
+
+        // ── Market category filter: block low-liquidity/esports markets ────
+        {
+            let title_lower = signal.market_title.as_deref().unwrap_or("").to_lowercase();
+            let blocked_keywords = ["esports", "lol:", "cs2:", "cs:go", "dota", "valorant",
+                "league of legends", "counter-strike", "overwatch", "bo3)", "bo5)",
+                "lec ", "lck ", "lpl ", "vct "];
+            if blocked_keywords.iter().any(|kw| title_lower.contains(kw)) {
+                let mut p = self.portfolio.lock().await;
+                p.skipped_orders += 1;
+                drop(p);
+                warn!(
+                    title = %signal.market_title.as_deref().unwrap_or("?"),
+                    "⏭️  Signal skipped — blocked market category (esports)"
+                );
+                self.record_rejection("blocked_category").await;
+                return;
+            }
         }
 
         // ── Sizing (brief lock, no await) ─────────────────────────────
@@ -1470,13 +1500,12 @@ impl PaperEngine {
         }
 
         // ── Stop-loss ────────────────────────────────────────────────────────
-        let stop_loss_enabled = env_flag("STOP_LOSS_ENABLED");
         let stop_loss_pct = std::env::var("STOP_LOSS_PCT")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(35.0)
+            .unwrap_or(25.0)
             .clamp(1.0, 99.0);
-        if stop_loss_enabled {
+        {
             let sl_before = p.closed_trades.len();
             let stopped = p.stop_loss_check(stop_loss_pct);
             if stopped > 0 {

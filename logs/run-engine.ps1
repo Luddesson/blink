@@ -7,4 +7,4 @@ $env:WS_BROADCAST_INTERVAL_SECS = '1'
 $env:VAR_THRESHOLD_PCT = '0.50'
 $env:MIN_SIGNAL_NOTIONAL_USD = '5.0'
 $env:TUI = 'false'
-& '.\target\debug\engine.exe' > 'C:\Users\ludvi\Documents\GitHub\blink\logs\engine-stdout.log' 2>&1
+& '.\target\release\engine.exe' > 'C:\Users\ludvi\Documents\GitHub\blink\logs\engine-stdout.log' 2>&1

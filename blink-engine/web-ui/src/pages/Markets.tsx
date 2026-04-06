@@ -1,14 +1,13 @@
 import { useState } from 'react';
 import { useFetch } from '../hooks/useApi';
 import { Card, Stat } from '../components/Card';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function Markets() {
-  const { data: allBooks } = useFetch<any>('/api/orderbooks', 2000);
+  const { data: allBooks } = useFetch<any>('/api/orderbooks', 5000);
   const [selected, setSelected] = useState<string | null>(null);
   const { data: bookDetail } = useFetch<any>(
     selected ? `/api/orderbook/${selected}` : '/api/status',
-    selected ? 1500 : 999999
+    selected ? 5000 : 999999
   );
 
   const books = allBooks?.orderbooks || [];
@@ -70,26 +69,32 @@ export default function Markets() {
             {/* Bids */}
             <div>
               <h4 className="text-xs text-emerald-400 font-semibold mb-2">BIDS</h4>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={(bookDetail.bids || []).map((b: number[]) => ({ price: b[0].toFixed(3), size: b[1] }))} layout="vertical">
-                  <XAxis type="number" tick={{ fontSize: 10, fill: '#6b7280' }} />
-                  <YAxis dataKey="price" type="category" tick={{ fontSize: 10, fill: '#6b7280' }} width={50} />
-                  <Tooltip contentStyle={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 8 }} />
-                  <Bar dataKey="size" fill="#10b981" />
-                </BarChart>
-              </ResponsiveContainer>
+              <table className="w-full text-xs">
+                <thead><tr className="text-gray-500"><th className="text-right py-1 px-2">Price</th><th className="text-right py-1 px-2">Size</th></tr></thead>
+                <tbody>
+                  {(bookDetail.bids || []).slice(0, 12).map((b: number[], i: number) => (
+                    <tr key={i} className="border-b border-gray-800/40">
+                      <td className="py-0.5 px-2 text-right text-emerald-400">{b[0]?.toFixed(3)}</td>
+                      <td className="py-0.5 px-2 text-right text-gray-300">{b[1]?.toFixed(1)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
             {/* Asks */}
             <div>
               <h4 className="text-xs text-red-400 font-semibold mb-2">ASKS</h4>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={(bookDetail.asks || []).map((a: number[]) => ({ price: a[0].toFixed(3), size: a[1] }))} layout="vertical">
-                  <XAxis type="number" tick={{ fontSize: 10, fill: '#6b7280' }} />
-                  <YAxis dataKey="price" type="category" tick={{ fontSize: 10, fill: '#6b7280' }} width={50} />
-                  <Tooltip contentStyle={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 8 }} />
-                  <Bar dataKey="size" fill="#ef4444" />
-                </BarChart>
-              </ResponsiveContainer>
+              <table className="w-full text-xs">
+                <thead><tr className="text-gray-500"><th className="text-right py-1 px-2">Price</th><th className="text-right py-1 px-2">Size</th></tr></thead>
+                <tbody>
+                  {(bookDetail.asks || []).slice(0, 12).map((a: number[], i: number) => (
+                    <tr key={i} className="border-b border-gray-800/40">
+                      <td className="py-0.5 px-2 text-right text-red-400">{a[0]?.toFixed(3)}</td>
+                      <td className="py-0.5 px-2 text-right text-gray-300">{a[1]?.toFixed(1)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
           <div className="flex gap-6 mt-3 text-xs">

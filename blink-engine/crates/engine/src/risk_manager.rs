@@ -675,6 +675,71 @@ mod tests {
         assert!(rm.check_pre_order(1.0, 0, 100.0, 100.0).is_ok());
         assert!(!rm.is_circuit_breaker_tripped());
     }
+
+    /// P0-5 invariant: daily_pnl equals the sum of all record_close calls.
+    #[test]
+    fn daily_pnl_equals_sum_of_closes() {
+        let mut rm = default_rm();
+
+        // Simulate several fills and closes with varying P&L.
+        rm.record_fill(10.0);
+        rm.record_close(2.5);   // +$2.50
+        rm.record_fill(15.0);
+        rm.record_close(-3.0);  // -$3.00
+        rm.record_fill(5.0);
+        rm.record_close(0.75);  // +$0.75
+
+        // daily_pnl must equal sum of closes, NOT affected by fills.
+        let expected = 2.5 + (-3.0) + 0.75; // 0.25
+        assert!(
+            (rm.daily_pnl() - expected).abs() < 1e-9,
+            "daily_pnl={} expected={}",
+            rm.daily_pnl(), expected
+        );
+    }
+
+    /// P0-1: record_fill only affects rolling exposure, never daily P&L.
+    #[test]
+    fn record_fill_does_not_change_daily_pnl() {
+        let mut rm = default_rm();
+        assert!((rm.daily_pnl() - 0.0).abs() < 1e-9);
+        rm.record_fill(100.0);
+        rm.record_fill(200.0);
+        assert!(
+            (rm.daily_pnl() - 0.0).abs() < 1e-9,
+            "record_fill should not change daily_pnl, got {}",
+            rm.daily_pnl()
+        );
+    }
+
+    /// Rejected orders must not affect risk state (no fill, no exposure).
+    #[test]
+    fn rejected_order_leaves_state_unchanged() {
+        let mut rm = RiskManager::new(RiskConfig {
+            trading_enabled: true,
+            max_single_order_usdc: 10.0,
+            max_orders_per_second: 100,
+            var_threshold_pct: 1.0,
+            ..RiskConfig::default()
+        });
+
+        let pnl_before = rm.daily_pnl();
+        let exposure_before = rm.rolling_exposure_usdc();
+
+        // This order is too large — should be rejected.
+        let result = rm.check_pre_order(50.0, 0, 100.0, 100.0);
+        assert!(matches!(result, Err(RiskViolation::OrderTooLarge { .. })));
+
+        // Risk state must be unchanged after rejection.
+        assert!(
+            (rm.daily_pnl() - pnl_before).abs() < 1e-9,
+            "daily_pnl changed after rejected order"
+        );
+        assert!(
+            (rm.rolling_exposure_usdc() - exposure_before).abs() < 1e-9,
+            "exposure changed after rejected order"
+        );
+    }
 }
 
 // ─── Property-based risk manager verification (proptest, 10 000 iterations) ──

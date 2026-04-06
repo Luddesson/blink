@@ -652,16 +652,22 @@ impl PaperPortfolio {
     }
 
     /// Records the current NAV as a sparkline sample (capped at 300 entries).
-    ///
     /// Called by the TUI loop every ~150 ms to build the equity curve.
     pub fn push_equity_snapshot(&mut self) {
+        let new_nav = self.nav();
+        // Only record a new point if NAV has actually changed — avoids 90%+ duplicate entries.
+        if let Some(&last) = self.equity_curve.last() {
+            if (new_nav - last).abs() < 0.001 {
+                return;
+            }
+        }
         if self.equity_curve.len() >= EQUITY_CURVE_MAX {
             self.equity_curve.remove(0);
             if !self.equity_timestamps.is_empty() {
                 self.equity_timestamps.remove(0);
             }
         }
-        self.equity_curve.push(self.nav());
+        self.equity_curve.push(new_nav);
         self.equity_timestamps.push(chrono::Utc::now().timestamp_millis());
     }
 

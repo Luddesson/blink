@@ -253,7 +253,9 @@ impl RiskManager {
                 self.evict_expired_exposure(now);
                 let rolling_sum: f64 =
                     self.rolling_exposure.iter().map(|e| e.amount_usdc).sum();
-                let threshold_usdc = starting_nav * self.config.var_threshold_pct;
+                // Use current NAV so threshold scales with growth/losses.
+                let effective_nav = if _current_nav > 0.0 { _current_nav } else { starting_nav };
+                let threshold_usdc = effective_nav * self.config.var_threshold_pct;
                 if rolling_sum + size_usdc <= threshold_usdc {
                     // Exposure decayed below threshold — auto-reset.
                     self.circuit_breaker_tripped_at = None;
@@ -331,7 +333,9 @@ impl RiskManager {
         self.evict_expired_exposure(now);
         let rolling_sum: f64 = self.rolling_exposure.iter().map(|e| e.amount_usdc).sum();
         let pending_exposure = rolling_sum + size_usdc;
-        let threshold_usdc = starting_nav * self.config.var_threshold_pct;
+        // Use current NAV so threshold scales with growth/losses, not fixed at start.
+        let effective_nav = if _current_nav > 0.0 { _current_nav } else { starting_nav };
+        let threshold_usdc = effective_nav * self.config.var_threshold_pct;
         if pending_exposure > threshold_usdc {
             // Auto-trip circuit breaker on VaR breach.
             self.circuit_breaker_tripped_at = Some(now);

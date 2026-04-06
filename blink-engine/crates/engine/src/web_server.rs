@@ -108,6 +108,7 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .allow_headers(Any);
 
     let api = Router::new()
+        .route("/health", get(get_health))
         .route("/api/status", get(get_status))
         .route("/api/portfolio", get(get_portfolio))
         .route("/api/history", get(get_history))
@@ -173,6 +174,12 @@ pub async fn run_web_server(
 }
 
 // ─── Handlers ───────────────────────────────────────────────────────────────
+
+async fn get_health(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let uptime_secs = state.started_at.elapsed().as_secs();
+    let mode = if state.paper.is_some() { "paper" } else { "live" };
+    Json(json!({ "status": "ok", "mode": mode, "uptime_secs": uptime_secs }))
+}
 
 async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
     let subs = state.market_subscriptions.lock().unwrap().clone();

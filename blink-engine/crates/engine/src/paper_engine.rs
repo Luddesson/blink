@@ -416,6 +416,22 @@ impl PaperEngine {
             .clamp(0.0, 1.0);
         }
 
+        // ── Min-notional filter (skip micro-signals before sizing) ──────────
+        let min_notional: f64 = std::env::var("MIN_SIGNAL_NOTIONAL_USD")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(5.0);
+        if rn1_notional_usd < min_notional {
+            let mut p = self.portfolio.lock().await;
+            p.skipped_orders += 1;
+            drop(p);
+            warn!(
+                rn1_notional_usd = %format!("${:.2}", rn1_notional_usd),
+                min = %format!("${:.2}", min_notional),
+                "⏭️  Signal skipped — RN1 notional below minimum"
+            );
+            self.record_rejection("min_notional").await;
+            return;
+        }
+
         // ── Sizing (brief lock, no await) ─────────────────────────────
         let (size_usdc, current_nav) = {
             let mut p = self.portfolio.lock().await;

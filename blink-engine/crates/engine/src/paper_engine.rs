@@ -50,6 +50,9 @@ pub struct PaperEngine {
     seen_order_ids: Arc<Mutex<HashSet<String>>>,
     token_cooldowns: Arc<Mutex<HashMap<String, Instant>>>,
     equity_tick: std::sync::atomic::AtomicU64,
+    /// Shared subscription list — new token_ids are added here on fill so the WS client
+    /// subscribes and `get_market_price()` stays live for the position's lifetime.
+    market_subscriptions: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 /// Snapshot of the currently active fill window, if any.
@@ -245,7 +248,7 @@ impl PaperEngine {
     ///
     /// Pass `Some(log)` to feed a TUI activity panel; pass `None` for plain
     /// terminal output.
-    pub fn new(book_store: Arc<OrderBookStore>, activity: Option<ActivityLog>) -> Self {
+    pub fn new(book_store: Arc<OrderBookStore>, activity: Option<ActivityLog>, market_subscriptions: Arc<std::sync::Mutex<Vec<String>>>) -> Self {
         if activity.is_none() {
             // Only print the text banner when not in TUI mode.
             println!();
@@ -289,6 +292,7 @@ impl PaperEngine {
             seen_order_ids: Arc::new(Mutex::new(HashSet::with_capacity(512))),
             token_cooldowns: Arc::new(Mutex::new(HashMap::new())),
             equity_tick: std::sync::atomic::AtomicU64::new(0),
+            market_subscriptions,
         }
     }
 
@@ -630,6 +634,15 @@ impl PaperEngine {
         };
         // Record fill in risk manager for VaR tracking (does not affect daily P&L).
         self.risk.lock().unwrap().record_fill(size_usdc);
+
+        // Ensure this token is subscribed in the WS feed so get_market_price() stays live.
+        {
+            let mut subs = self.market_subscriptions.lock().unwrap();
+            if !subs.contains(&signal.token_id) {
+                subs.push(signal.token_id.clone());
+                tracing::info!(token_id = %signal.token_id, "📡 Added token to WS subscriptions");
+            }
+        }
 
         self.shadow_comparator.lock().await.observations.push(ShadowFillObservation {
             token_id: signal.token_id.clone(),
@@ -1171,7 +1184,7 @@ impl PaperEngine {
     /// ~1 s) to keep unrealized PnL and the equity chart live in web mode.
     pub async fn tick_mark_prices(&self) {
         let tick = self.equity_tick.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let should_push = tick % 10 == 0; // push every 10s
+        let should_push = tick % 1 == 0; // push every tick (called every 1s)
         let mut p = self.portfolio.lock().await;
         if p.positions.is_empty() {
             if should_push { p.push_equity_snapshot(); }

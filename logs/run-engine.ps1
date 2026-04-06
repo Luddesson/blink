@@ -5,5 +5,6 @@ $env:PAPER_TRADING = 'true'
 $env:TRADING_ENABLED = 'true'
 $env:WS_BROADCAST_INTERVAL_SECS = '2'
 $env:VAR_THRESHOLD_PCT = '0.50'
+$env:MIN_SIGNAL_NOTIONAL_USD = '5.0'
 $env:TUI = 'false'
-& '.\target\debug\engine.exe' 2>&1 | Tee-Object -FilePath 'C:\Users\ludvi\Documents\GitHub\blink\logs\engine-stdout.log' -Append
+& '.\target\debug\engine.exe' > 'C:\Users\ludvi\Documents\GitHub\blink\logs\engine-stdout.log' 2>&1

@@ -303,6 +303,7 @@ async fn main() -> Result<()> {
         let paper = Arc::new(PaperEngine::new(
             Arc::clone(&book_store),
             Some(activity.clone()),
+            Arc::clone(&market_subscriptions),
         ));
         paper_for_persist = Some(Arc::clone(&paper));
 

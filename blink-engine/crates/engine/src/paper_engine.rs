@@ -377,6 +377,31 @@ impl PaperEngine {
                 self.record_rejection("already_holding").await;
                 return;
             }
+            // ── Per-match concentration limit: max 2 positions on same event ──
+            let max_per_match: usize = std::env::var("MAX_POSITIONS_PER_MATCH")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+            if let Some(title) = signal.market_title.as_deref() {
+                let match_key = title.split(':').next().unwrap_or(title).trim().to_lowercase();
+                if match_key.len() > 5 {
+                    let same_match = p.positions.iter().filter(|pos| {
+                        pos.market_title.as_deref()
+                            .map(|t| t.split(':').next().unwrap_or(t).trim().to_lowercase() == match_key)
+                            .unwrap_or(false)
+                    }).count();
+                    if same_match >= max_per_match {
+                        warn!(
+                            match_name = %match_key,
+                            count = same_match,
+                            max = max_per_match,
+                            "⏭️  Match concentration limit — skipping"
+                        );
+                        p.skipped_orders += 1;
+                        drop(p);
+                        self.record_rejection("match_concentration").await;
+                        return;
+                    }
+                }
+            }
         }
 
         let now = Instant::now();

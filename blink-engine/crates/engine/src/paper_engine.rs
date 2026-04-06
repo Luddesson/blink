@@ -477,7 +477,11 @@ impl PaperEngine {
             }) {
                 let pos = p.positions.remove(idx);
                 let exit_price = pos.current_price.clamp(0.001, 0.999);
-                let pnl = (exit_price - pos.entry_price) * pos.shares;
+                let fee_bps = std::env::var("PAPER_TAKER_FEE_BPS")
+                    .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(7.0);
+                let exit_fee = (exit_price * pos.shares) * (fee_bps / 10_000.0);
+                let pnl = (exit_price - pos.entry_price) * pos.shares - exit_fee;
+                p.total_fees_paid_usdc += exit_fee;
                 p.cash_usdc += pos.usdc_spent + pnl;
                 let dur = pos.opened_at.elapsed().as_secs();
                 p.closed_trades.push(crate::paper_portfolio::ClosedTrade {
@@ -488,7 +492,7 @@ impl PaperEngine {
                     exit_price,
                     shares: pos.shares,
                     realized_pnl: pnl,
-                    fees_paid_usdc: pos.entry_fee_paid_usdc,
+                    fees_paid_usdc: pos.entry_fee_paid_usdc + exit_fee,
                     reason: "rn1_mirror_exit".to_string(),
                     opened_at_wall: pos.opened_at_wall,
                     closed_at_wall: chrono::Local::now(),
@@ -1418,16 +1422,11 @@ impl PaperEngine {
                 OrderSide::Buy => (pos.current_price - pos.entry_price) * pos.shares,
                 OrderSide::Sell => (pos.entry_price - pos.current_price) * pos.shares,
             };
-            let realism = std::env::var("PAPER_REALISM_MODE")
-                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-                .unwrap_or(false);
-            let exit_fee = if realism {
-                let fee_bps = std::env::var("PAPER_TAKER_FEE_BPS")
-                    .ok()
-                    .and_then(|v| v.parse::<f64>().ok())
-                    .unwrap_or(100.0);
-                (pos.current_price * pos.shares) * (fee_bps / 10_000.0)
-            } else { 0.0 };
+            let fee_bps = std::env::var("PAPER_TAKER_FEE_BPS")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(7.0);
+            let exit_fee = (pos.current_price * pos.shares) * (fee_bps / 10_000.0);
             // Record fees paid and settle cash.
             p.total_fees_paid_usdc += exit_fee;
             p.cash_usdc += pos.usdc_spent + pnl - exit_fee;
@@ -1511,13 +1510,10 @@ impl PaperEngine {
         if !resolved_indexes.is_empty() {
             let n = resolved_indexes.len();
             let mut total_pnl = 0.0f64;
-            let realism = std::env::var("PAPER_REALISM_MODE")
-                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-                .unwrap_or(false);
             let fee_bps = std::env::var("PAPER_TAKER_FEE_BPS")
                 .ok()
                 .and_then(|v| v.parse::<f64>().ok())
-                .unwrap_or(100.0);
+                .unwrap_or(7.0);
             for idx in resolved_indexes.into_iter().rev() {
                 let pos = p.positions.remove(idx);
                 let exit_price = pos.current_price.clamp(0.0, 1.0);
@@ -1525,9 +1521,7 @@ impl PaperEngine {
                     OrderSide::Buy => (exit_price - pos.entry_price) * pos.shares,
                     OrderSide::Sell => (pos.entry_price - exit_price) * pos.shares,
                 };
-                let exit_fee = if realism {
-                    (exit_price * pos.shares) * (fee_bps / 10_000.0)
-                } else { 0.0 };
+                let exit_fee = (exit_price * pos.shares) * (fee_bps / 10_000.0);
                 // Record fees and settle cash.
                 p.total_fees_paid_usdc += exit_fee;
                 p.cash_usdc += pos.usdc_spent + pnl - exit_fee;

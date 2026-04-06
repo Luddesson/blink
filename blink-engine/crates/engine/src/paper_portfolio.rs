@@ -377,11 +377,7 @@ impl PaperPortfolio {
         let shares = usdc_size / entry_price;
         let id     = self.next_id;
         self.next_id   += 1;
-        let entry_fee = if realism_mode() {
-            usdc_size * (taker_fee_bps() / 10_000.0)
-        } else {
-            0.0
-        };
+        let entry_fee = usdc_size * (taker_fee_bps() / 10_000.0);
         self.cash_usdc -= usdc_size + entry_fee;
         // Track entry fee in the global fees counter and per-position for accounting.
         self.total_fees_paid_usdc += entry_fee;

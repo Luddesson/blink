@@ -136,6 +136,27 @@ pub async fn run_ws(
             tokio::time::sleep(cooldown).await;
         }
 
+        // Wait until we have at least one market to subscribe to.
+        // In copytrade mode, tokens are discovered dynamically from RN1 signals.
+        // Connecting without a subscription causes Polymarket to RST the connection.
+        {
+            let has_markets = {
+                let subs = market_subscriptions.lock().unwrap();
+                !subs.is_empty()
+            };
+            if !has_markets && config.markets.is_empty() {
+                info!("WS waiting for first market subscription (copytrade mode)...");
+                loop {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let subs = market_subscriptions.lock().unwrap();
+                    if !subs.is_empty() {
+                        info!(count = subs.len(), "Markets available — connecting WS");
+                        break;
+                    }
+                }
+            }
+        }
+
         let session_start = Instant::now();
 
         match connect_and_run(

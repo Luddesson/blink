@@ -629,7 +629,7 @@ impl PaperEngine {
         let min_trade_usdc = std::env::var("PAPER_MIN_TRADE_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(5.0)
+            .unwrap_or(2.0)
             .max(1.0);
         if size_usdc < min_trade_usdc {
             let mut p = self.portfolio.lock().await;
@@ -1036,7 +1036,7 @@ impl PaperEngine {
         let min_trade_usdc = std::env::var("PAPER_MIN_TRADE_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(5.0)
+            .unwrap_or(2.0)
             .max(1.0);
         let depth_capture_ratio = std::env::var("PAPER_DEPTH_CAPTURE_RATIO")
             .ok()

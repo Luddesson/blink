@@ -106,6 +106,8 @@ impl LiveEngine {
         let executor = OrderExecutor::from_config(&config);
 
         // Initialize the TEE vault for key isolation.
+        // P1-7: When LIVE_TRADING=true, vault init failure is FATAL — the
+        // engine must not silently degrade to dry-run behavior.
         let vault = if config.live_trading && !config.signer_private_key.is_empty() {
             match tee_vault::VaultHandle::spawn(&config.signer_private_key) {
                 Ok(handle) => {
@@ -116,6 +118,12 @@ impl LiveEngine {
                     Some(Arc::new(handle))
                 }
                 Err(e) => {
+                    if config.live_trading {
+                        panic!(
+                            "FATAL: LIVE_TRADING=true but TEE vault initialization failed: {e}. \
+                             Refusing to start — fix vault configuration or disable live trading."
+                        );
+                    }
                     error!(error = %e, "Failed to initialize TEE vault — live signing disabled");
                     None
                 }
@@ -757,6 +765,10 @@ impl LiveEngine {
             heartbeat_ok_count:     m.heartbeat_ok_count,
             heartbeat_fail_count:   m.heartbeat_fail_count,
         }
+    }
+
+    pub async fn pending_orders_count(&self) -> usize {
+        self.pending_orders.lock().await.len()
     }
 
     /// Emergency stop: trips circuit breaker, cancels all open exchange orders,

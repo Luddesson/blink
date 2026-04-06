@@ -16,7 +16,7 @@ pub struct RiskConfig {
     pub max_daily_loss_pct: f64,
     /// Maximum simultaneous open positions (default 5).
     pub max_concurrent_positions: usize,
-    /// Maximum USDC per single order (default $20 with $100 NAV).
+    /// Maximum USDC per single order (default $20).
     pub max_single_order_usdc: f64,
     /// Maximum orders per second (default 3, CLOB rate limit safety).
     pub max_orders_per_second: u32,
@@ -35,7 +35,7 @@ impl Default for RiskConfig {
         Self {
             max_daily_loss_pct: 0.10,
             max_concurrent_positions: 5,
-            max_single_order_usdc: 500.0,
+            max_single_order_usdc: 20.0,
             max_orders_per_second: 3,
             trading_enabled: false,
             var_window: Duration::from_secs(60),
@@ -52,7 +52,7 @@ impl RiskConfig {
     /// |---------------------------|---------|
     /// | `MAX_DAILY_LOSS_PCT`      | 0.10    |
     /// | `MAX_CONCURRENT_POSITIONS`| 5       |
-    /// | `MAX_SINGLE_ORDER_USDC`   | 500.0   |
+    /// | `MAX_SINGLE_ORDER_USDC`   | 20.0    |
     /// | `MAX_ORDERS_PER_SECOND`   | 3       |
     /// | `TRADING_ENABLED`         | false   |
     pub fn from_env() -> Self {
@@ -69,7 +69,7 @@ impl RiskConfig {
         let max_single_order_usdc = std::env::var("MAX_SINGLE_ORDER_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(500.0);
+            .unwrap_or(20.0);
 
         let max_orders_per_second = std::env::var("MAX_ORDERS_PER_SECOND")
             .ok()

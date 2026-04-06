@@ -458,6 +458,11 @@ impl RiskManager {
         self.circuit_breaker_reason.clear();
     }
 
+    /// Returns the reason the circuit breaker was tripped, or empty string if not tripped.
+    pub fn circuit_breaker_reason(&self) -> &str {
+        &self.circuit_breaker_reason
+    }
+
     /// Returns `true` if the circuit breaker is currently tripped.
     pub fn is_circuit_breaker_tripped(&self) -> bool {
         self.circuit_breaker_tripped_at.is_some()

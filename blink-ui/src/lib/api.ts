@@ -40,6 +40,7 @@ export const api = {
   metrics: () => get<MetricsResponse>('/api/metrics'),
   livePortfolio: () => get<LivePortfolio>('/api/live/portfolio'),
   pause: (paused: boolean) => post<{ trading_paused: boolean }>('/api/pause', { paused }),
+  resetCircuitBreaker: () => post<{ ok: boolean }>('/api/risk/reset_circuit_breaker', {}),
   sellPosition: (id: number, fraction = 1.0) =>
     post<{ ok: boolean; realized_pnl: number }>(`/api/positions/${id}/sell`, { fraction }),
   activity: () => get<{ entries: import('../types').ActivityEntry[] }>('/api/activity'),

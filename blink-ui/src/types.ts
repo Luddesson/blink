@@ -92,6 +92,7 @@ export interface RiskSummary {
   trading_enabled: boolean
   circuit_breaker_tripped?: boolean
   circuit_breaker?: boolean
+  circuit_breaker_reason?: string
   daily_pnl: number
   max_daily_loss_pct?: number
   max_concurrent_positions?: number

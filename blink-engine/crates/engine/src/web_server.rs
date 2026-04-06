@@ -125,6 +125,7 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/mode", get(get_mode))
         .route("/api/live/portfolio", get(get_live_portfolio))
         .route("/api/pause", post(post_pause))
+        .route("/api/risk/reset_circuit_breaker", post(post_reset_circuit_breaker))
         .route("/api/debug/seed_position", post(post_seed_position))
         .route("/api/positions/{id}/sell", post(post_sell_position))
         .route("/api/metrics", get(get_metrics))
@@ -416,6 +417,7 @@ async fn get_risk(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({
         "trading_enabled": cfg.trading_enabled,
         "circuit_breaker_tripped": r.is_circuit_breaker_tripped(),
+        "circuit_breaker_reason": r.circuit_breaker_reason(),
         "daily_pnl": r.daily_pnl(),
         "max_daily_loss_pct": cfg.max_daily_loss_pct,
         "max_concurrent_positions": cfg.max_concurrent_positions,
@@ -626,6 +628,15 @@ async fn post_pause(State(state): State<AppState>, body: Json<serde_json::Value>
     let paused = body.get("paused").and_then(|v| v.as_bool()).unwrap_or(false);
     state.trading_paused.store(paused, Ordering::Relaxed);
     Json(json!({ "trading_paused": paused }))
+}
+
+async fn post_reset_circuit_breaker(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let Some(ref risk) = state.risk else {
+        return Json(json!({ "error": "Risk manager not available" }));
+    };
+    risk.lock().unwrap().reset_circuit_breaker();
+    tracing::warn!("Circuit breaker manually reset via API");
+    Json(json!({ "ok": true, "circuit_breaker_tripped": false }))
 }
 
 async fn post_sell_position(

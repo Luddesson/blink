@@ -74,4 +74,5 @@ pub mod tx_router;
 pub mod types;
 pub mod web_server;
 pub mod ws_client;
+pub mod execution_provider;
 

@@ -56,3 +56,42 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --workspace -- --check
+
+  web-ui:
+    name: Web UI Build & Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blink-engine/web-ui
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: blink-engine/web-ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript & Vite build
+        run: npm run build
+
+      - name: ESLint
+        run: npm run lint
+
+  secrets-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified

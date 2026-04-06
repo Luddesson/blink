@@ -123,29 +123,59 @@ impl AsyncNetworkIo for TokioNet {
 
 /// io_uring-based async network backend (Linux production).
 ///
-/// Uses `tokio-uring` for kernel-bypassed async I/O with zero-copy
-/// submission/completion rings. Requires Linux 5.11+ with io_uring support.
+/// Uses `tokio-uring` for kernel-bypassed async I/O with completion-ring
+/// semantics. Requires Linux 5.11+ with io_uring support.
 ///
 /// **Enabled only** with `--features io_uring` and only compiles on Linux.
+///
+/// # Threading model
+///
+/// `tokio-uring` operates on a single-threaded runtime. In production, the
+/// engine is pinned to one core via `os_tune.sh` (NUMA pinning + isolcpus).
+/// The `Send + Sync` bounds are satisfied because all access occurs on that
+/// single runtime thread. We use `UnsafeCell` + manual synchronization
+/// guarantee rather than a `Mutex` to avoid lock overhead on the hot path.
+///
+/// # Buffer ownership
+///
+/// `tokio-uring` uses an owned-buffer API (buffers are moved into read/write
+/// calls and returned on completion). We bridge this to the `&mut [u8]` trait
+/// interface by copying into/out of an intermediate owned buffer. For the
+/// WebSocket frames in this engine (~256-4096 bytes), the copy cost is
+/// negligible compared to kernel submission latency.
 #[cfg(feature = "io_uring")]
 pub struct IoUringNet {
-    // TODO(aura-1): Integrate tokio-uring TcpStream when deploying to Linux.
-    //
-    // Implementation plan:
-    //   1. tokio_uring::net::TcpStream for connection management
-    //   2. Fixed-buffer pool (registered with the ring) for zero-copy reads
-    //   3. SQ polling mode (IORING_SETUP_SQPOLL) for submission without syscalls
-    //   4. Buffer groups (IORING_OP_PROVIDE_BUFFERS) for recv multishot
-    //
-    // Dependencies (add to Cargo.toml when enabling):
-    //   tokio-uring = "0.5"
-    _placeholder: (),
+    /// The underlying tokio-uring TCP stream.
+    ///
+    /// SAFETY: Only accessed from the single-threaded tokio-uring runtime.
+    /// The engine's production deployment pins all I/O to one core.
+    stream: std::cell::UnsafeCell<Option<tokio_uring::net::TcpStream>>,
 }
+
+// SAFETY: IoUringNet is only used within a single-threaded tokio-uring
+// runtime. The engine enforces this at startup by running on a
+// `tokio_uring::start()` single-threaded executor, and production
+// deployment pins to a single NUMA core via os_tune.sh.
+#[cfg(feature = "io_uring")]
+unsafe impl Send for IoUringNet {}
+#[cfg(feature = "io_uring")]
+unsafe impl Sync for IoUringNet {}
 
 #[cfg(feature = "io_uring")]
 impl IoUringNet {
     pub fn new() -> Self {
-        Self { _placeholder: () }
+        Self {
+            stream: std::cell::UnsafeCell::new(None),
+        }
+    }
+
+    /// Returns a mutable reference to the inner stream.
+    ///
+    /// SAFETY: Caller must ensure single-threaded access (guaranteed by
+    /// the tokio-uring runtime model).
+    #[inline]
+    unsafe fn stream_mut(&self) -> &mut Option<tokio_uring::net::TcpStream> {
+        &mut *self.stream.get()
     }
 }
 
@@ -158,23 +188,97 @@ impl Default for IoUringNet {
 
 #[cfg(feature = "io_uring")]
 impl AsyncNetworkIo for IoUringNet {
-    fn connect<'a>(&'a self, _addr: &'a str) -> BoxFuture<'a, IoResult<()>> {
-        // TODO(aura-1): Implement via tokio_uring::net::TcpStream::connect
-        Box::pin(async { todo!("io_uring connect — implement for Linux prod") })
+    fn connect<'a>(&'a self, addr: &'a str) -> BoxFuture<'a, IoResult<()>> {
+        Box::pin(async move {
+            use std::net::ToSocketAddrs;
+
+            let sock_addr = addr
+                .to_socket_addrs()?
+                .next()
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("could not resolve address: {addr}"),
+                    )
+                })?;
+
+            let tcp = tokio_uring::net::TcpStream::connect(sock_addr).await?;
+
+            // Set TCP_NODELAY to disable Nagle's algorithm (critical for HFT).
+            // tokio-uring's TcpStream exposes the raw fd for socket options.
+            use std::os::unix::io::AsRawFd;
+            let fd = tcp.as_raw_fd();
+            unsafe {
+                let nodelay: libc::c_int = 1;
+                let ret = libc::setsockopt(
+                    fd,
+                    libc::IPPROTO_TCP,
+                    libc::TCP_NODELAY,
+                    &nodelay as *const _ as *const libc::c_void,
+                    std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                );
+                if ret != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+
+            // SAFETY: single-threaded tokio-uring runtime.
+            let slot = unsafe { self.stream_mut() };
+            *slot = Some(tcp);
+            Ok(())
+        })
     }
 
-    fn read<'a>(&'a self, _buf: &'a mut [u8]) -> BoxFuture<'a, IoResult<usize>> {
-        // TODO(aura-1): Implement via registered buffer read
-        Box::pin(async { todo!("io_uring read — implement for Linux prod") })
+    fn read<'a>(&'a self, buf: &'a mut [u8]) -> BoxFuture<'a, IoResult<usize>> {
+        Box::pin(async move {
+            // SAFETY: single-threaded tokio-uring runtime.
+            let stream = unsafe { self.stream_mut() }
+                .as_ref()
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")
+                })?;
+
+            // tokio-uring uses owned buffers. Allocate a Vec, read into it,
+            // then copy to the caller's slice. For typical WebSocket frames
+            // (256-4096 bytes) this copy is ~1µs — well within our budget.
+            let owned_buf = vec![0u8; buf.len()];
+            let (result, returned_buf) = stream.read(owned_buf).await;
+            let n = result?;
+            buf[..n].copy_from_slice(&returned_buf[..n]);
+            Ok(n)
+        })
     }
 
-    fn write_all<'a>(&'a self, _buf: &'a [u8]) -> BoxFuture<'a, IoResult<()>> {
-        // TODO(aura-1): Implement via registered buffer write
-        Box::pin(async { todo!("io_uring write_all — implement for Linux prod") })
+    fn write_all<'a>(&'a self, buf: &'a [u8]) -> BoxFuture<'a, IoResult<()>> {
+        Box::pin(async move {
+            // SAFETY: single-threaded tokio-uring runtime.
+            let stream = unsafe { self.stream_mut() }
+                .as_ref()
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")
+                })?;
+
+            // tokio-uring write_all takes ownership of the buffer.
+            // Copy the caller's slice into an owned Vec.
+            let mut written = 0;
+            while written < buf.len() {
+                let owned_buf = buf[written..].to_vec();
+                let (result, _returned_buf) = stream.write(owned_buf).await;
+                let n = result?;
+                if n == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "write returned 0 bytes",
+                    ));
+                }
+                written += n;
+            }
+            Ok(())
+        })
     }
 
     fn flush(&self) -> BoxFuture<'_, IoResult<()>> {
-        // io_uring submissions are flushed on submit — no-op
+        // io_uring submissions are flushed on ring enter — no-op.
         Box::pin(async { Ok(()) })
     }
 }

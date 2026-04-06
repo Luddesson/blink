@@ -147,7 +147,7 @@ async fn main() -> Result<()> {
     let activity       = new_activity_log();
     let shutdown       = Arc::new(AtomicBool::new(false));
     let msg_count      = Arc::new(AtomicU64::new(0));
-    let latency        = Arc::new(Mutex::new(LatencyStats::new(1000)));
+    let latency        = Arc::new(Mutex::new(LatencyStats::new(config.latency_window_size)));
     let risk_status    = Arc::new(Mutex::new("OK".to_string()));
     let market_subscriptions = Arc::new(Mutex::new(markets.clone()));
     let ws_force_reconnect = Arc::new(AtomicBool::new(false));
@@ -290,6 +290,7 @@ async fn main() -> Result<()> {
     // ── Tasks: paper/live engine + optional TUI ─────────────────────────
     let mut tui_thread: Option<std::thread::JoinHandle<()>> = None;
     let mut paper_for_persist: Option<Arc<PaperEngine>> = None;
+    let mut live_for_web: Option<Arc<engine::live_engine::LiveEngine>> = None;
     
     let twin_enabled = env_flag("BLINK_TWIN");
     let twin_engine = if twin_enabled {
@@ -594,6 +595,7 @@ async fn main() -> Result<()> {
             Arc::clone(&book_store),
             Some(activity.clone()),
         ));
+        live_for_web = Some(Arc::clone(&live));
         Arc::clone(&live).spawn_reconciliation_worker();
 
         // Spawn heartbeat — keeps the Polymarket session alive every 29s.
@@ -812,8 +814,12 @@ async fn main() -> Result<()> {
             risk: risk_handle,
             twin_snapshot: None,
             ws_health: None,
+            latency: None,
             market_subscriptions: Arc::clone(&market_subscriptions),
             broadcast_tx,
+            started_at: Arc::new(std::time::Instant::now()),
+            provider: engine::execution_provider::create_provider_from_env(),
+            live_engine: live_for_web.as_ref().map(Arc::clone),
         };
 
         let static_dir = std::env::var("WEB_UI_STATIC_DIR").ok()
@@ -823,8 +829,9 @@ async fn main() -> Result<()> {
             });
 
         let bind = web_bind.clone();
+        let broadcast_secs = config.ws_broadcast_interval_secs;
         tokio::spawn(async move {
-            run_web_server(&bind, web_state, static_dir).await;
+            run_web_server(&bind, web_state, static_dir, broadcast_secs).await;
         });
         log_push(&activity, EntryKind::Engine, format!("Web UI enabled on {web_bind}"));
         info!(bind_addr = %web_bind, "Web UI server enabled");

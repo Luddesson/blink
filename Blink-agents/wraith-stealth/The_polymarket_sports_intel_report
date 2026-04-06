@@ -1,0 +1,42 @@
+THE 2026 POLYMARKET SPORTS INTEL REPORT
+Classification: Technical Market Analysis
+Focus: Algorithmic Execution and CLOB Mechanics
+
+1. The Hybrid-Decentralized Architecture
+Polymarket sports markets do not run entirely on the Polygon blockchain. They utilize a Central Limit Order Book (CLOB).
+
+Off-Chain Matching: When a user (or a bot like RN1) submits an order, it is formatted as an EIP-712 signed message and sent to Polymarket’s centralized, off-chain operator. The operator matches the buyers and sellers in milliseconds.
+
+On-Chain Settlement: Only after the trade is matched off-chain does the exchange contract actually settle the transaction atomically on the Polygon blockchain.
+
+The Engineering Implication: You cannot just monitor the public Polygon mempool for RN1’s sports trades. By the time a trade hits the blockchain, the off-chain order book has already moved. Your Rust engine must plug directly into the CLOB via WebSockets.
+
+2. The 2026 Sports "Meta" and Mechanics
+Instead of traditional odds, sports on Polymarket are traded as binary "Yes/No" event contracts. Prices float between $0.01 and $0.99 based purely on user demand. A price of $0.68 implies the market believes there is a 68% chance of that outcome happening.
+
+However, the platform has introduced specific mechanics that directly impact algorithmic trading:
+
+The 3-Second In-Play Delay: This is the most critical hurdle for your copy-trading bot. To prevent users from front-running the television broadcast during a live game, Polymarket enforces a mandatory 3-second delay on the placement of marketable orders. Your bot cannot simply fire and forget; it must account for this delay in its risk algorithms.
+
+Pre-Game Order Wipes: The moment a game officially begins, Polymarket’s CLOB automatically cancels all outstanding limit orders to clear the book. If your bot is tracking RN1's pre-game limit orders, it must instantly flush its own cache at the starting whistle.
+
+3. The Tech Stack Reality
+The days of using Python for latency-sensitive Polymarket operations are over. The current elite tier of developers are exclusively using Rust.
+
+The SDK: The official polymarket-client-sdk in Rust is currently the weapon of choice. It handles the complex EIP-712 order signing required to authenticate off-chain CLOB trades.
+
+Latency Tiers: The Gamma REST API operates at roughly a 1-second latency—far too slow for what you are building. Your engine must use the WebSocket feeds, which deliver real-time order book updates at roughly 100ms latency.
+
+4. The Threat to Copy Trading: Fees and Rebates
+Polymarket has been rolling out dynamic fee structures to curb toxic arbitrage.
+
+The Maker/Taker Dynamic: Accounts like RN1 generally operate as "Makers"—they provide liquidity to the order book and often receive a rebate (getting paid to trade). If your bot aggressively copies them by crossing the spread and market-buying, you act as a "Taker."
+
+The Margin Killer: Taker fees on highly volatile markets can spike. If you blindly copy RN1, they will profit from the maker rebate while your account bleeds out paying the dynamic taker fees.
+
+The Strategic Takeaway
+Moving your operations out of Lidingö to a co-located server near the Polygon nodes is absolutely the right call to beat the 100ms WebSocket latency. However, pure 1:1 copy trading is mathematically flawed here due to the taker fees and the 3-second in-play delay.
+
+Instead of a pure copy-bot, your architecture needs to function as a "Shadow Maker"—identifying where RN1 places their limit orders and instantly positioning your own limit orders directly adjacent to theirs to capture the same maker rebates.
+
+Given these mechanics, do you want to start mapping out the Rust WebSocket connection to the CLOB, or should we design the mathematical formula that calculates how to price your limit orders around RN1's positions?

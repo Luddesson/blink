@@ -34,8 +34,8 @@ impl Default for RiskConfig {
     fn default() -> Self {
         Self {
             max_daily_loss_pct: 0.10,
-            max_concurrent_positions: 5,
-            max_single_order_usdc: 500.0,
+            max_concurrent_positions: 0, // 0 = unlimited (matches .env.example)
+            max_single_order_usdc: 20.0, // matches .env.example MAX_SINGLE_ORDER_USDC
             max_orders_per_second: 3,
             trading_enabled: false,
             var_window: Duration::from_secs(60),
@@ -51,8 +51,8 @@ impl RiskConfig {
     /// | Variable                  | Default |
     /// |---------------------------|---------|
     /// | `MAX_DAILY_LOSS_PCT`      | 0.10    |
-    /// | `MAX_CONCURRENT_POSITIONS`| 5       |
-    /// | `MAX_SINGLE_ORDER_USDC`   | 500.0   |
+    /// | `MAX_CONCURRENT_POSITIONS`| 0       |
+    /// | `MAX_SINGLE_ORDER_USDC`   | 20.0    |
     /// | `MAX_ORDERS_PER_SECOND`   | 3       |
     /// | `TRADING_ENABLED`         | false   |
     pub fn from_env() -> Self {
@@ -64,12 +64,12 @@ impl RiskConfig {
         let max_concurrent_positions = std::env::var("MAX_CONCURRENT_POSITIONS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(5);
+            .unwrap_or(0); // 0 = unlimited
 
         let max_single_order_usdc = std::env::var("MAX_SINGLE_ORDER_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(500.0);
+            .unwrap_or(20.0);
 
         let max_orders_per_second = std::env::var("MAX_ORDERS_PER_SECOND")
             .ok()
@@ -518,9 +518,60 @@ mod tests {
         assert!(rm.circuit_breaker_tripped_at.is_some());
     }
 
+    /// Validates the $50 kill-switch scenario at paper-trading scale.
+    ///
+    /// With NAV = $252 and max_daily_loss_pct = 10%, the hard limit is $25.20.
+    /// Losses are injected via `record_close` until the threshold is crossed,
+    /// then we verify: (a) the circuit breaker auto-trips, (b) all subsequent
+    /// orders are blocked, and (c) `reset_circuit_breaker` restores trading.
+    #[test]
+    fn kill_switch_trips_at_paper_trading_nav() {
+        let nav = 252.0_f64;
+        let limit = nav * 0.10; // $25.20
+        let mut rm = RiskManager::new(RiskConfig {
+            trading_enabled: true,
+            max_daily_loss_pct: 0.10,
+            max_single_order_usdc: 20.0,
+            var_threshold_pct: 1.0, // permissive for this test
+            ..RiskConfig::default()
+        });
+
+        // Record incremental losses — each $5 realised loss.
+        let loss_per_trade = 5.0_f64;
+        let trades_to_breach = (limit / loss_per_trade).ceil() as usize + 1;
+        for _ in 0..trades_to_breach {
+            rm.record_close(-loss_per_trade);
+        }
+        let current_nav = nav - (loss_per_trade * trades_to_breach as f64);
+
+        // `check_pre_order` detects the loss breach, trips the breaker as a
+        // side-effect, and returns DailyLossLimitExceeded on the first call.
+        let first_err = rm.check_pre_order(1.0, 0, current_nav, nav).unwrap_err();
+        assert!(
+            matches!(first_err, RiskViolation::DailyLossLimitExceeded { .. }),
+            "expected DailyLossLimitExceeded, got {first_err:?}"
+        );
+
+        // Breaker must now be tripped.
+        assert!(rm.is_circuit_breaker_tripped(), "circuit breaker should trip after exceeding ${limit:.2} daily loss");
+
+        // Every subsequent order must now be blocked via CircuitBreakerTripped.
+        let err = rm.check_pre_order(1.0, 0, current_nav, nav).unwrap_err();
+        assert!(matches!(err, RiskViolation::CircuitBreakerTripped { .. }), "expected CircuitBreakerTripped, got {err:?}");
+
+        // Operator reset must restore trading ability.
+        rm.reset_circuit_breaker();
+        assert!(!rm.is_circuit_breaker_tripped());
+    }
+
     #[test]
     fn too_many_positions_blocks() {
-        let mut rm = default_rm(); // max = 5
+        let mut rm = RiskManager::new(RiskConfig {
+            trading_enabled: true,
+            max_concurrent_positions: 5,
+            max_single_order_usdc: 20.0,
+            ..RiskConfig::default()
+        });
         let err = rm.check_pre_order(5.0, 5, 100.0, 100.0).unwrap_err();
         assert!(matches!(err, RiskViolation::TooManyPositions { current: 5, max: 5 }));
     }

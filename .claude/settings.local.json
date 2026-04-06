@@ -10,7 +10,15 @@
       "Read(//c/Users/**)",
       "Bash(cmd.exe /c \"where cargo\")",
       "Read(//e/Blink/blink-engine/$USERPROFILE/.cargo/bin/**)",
-      "Read(//e/Blink/blink-engine/$HOME/.cargo/bin/**)"
+      "Read(//e/Blink/blink-engine/$HOME/.cargo/bin/**)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/api/portfolio)",
+      "Bash(curl -s -w \"\\\\n%{http_code}\" --max-time 3 http://localhost:5173/api/status)",
+      "Bash(curl:*)",
+      "Bash(python3 -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\(f'NAV: {d.get\\(\\\\\"nav_usdc\\\\\",\\\\\"?\\\\\"\\)}, cash: {d.get\\(\\\\\"cash_usdc\\\\\",\\\\\"?\\\\\"\\)}, positions: {len\\(d.get\\(\\\\\"open_positions\\\\\",[]\\)\\)}'\\)\")",
+      "Bash(taskkill:*)",
+      "Bash(netstat -ano)",
+      "Bash(tasklist //FI \"IMAGENAME eq engine.exe\")"
     ]
   }
 }

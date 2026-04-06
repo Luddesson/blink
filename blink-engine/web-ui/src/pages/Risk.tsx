@@ -53,6 +53,9 @@ export default function Risk() {
         <Card>
           <Stat label="VaR Threshold" value={`${(data.var_threshold_pct * 100).toFixed(1)}%`} />
         </Card>
+        <Card>
+          <Stat label="Stop Loss" value={data.stop_loss_enabled ? `-${(data.stop_loss_pct).toFixed(0)}%` : 'Disabled'} color={data.stop_loss_enabled ? 'text-red-400' : 'text-gray-300'} />
+        </Card>
       </div>
 
       {/* Info */}

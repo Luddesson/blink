@@ -341,11 +341,13 @@ impl BacktestEngine {
             self.portfolio.cash_usdc += pos.usdc_spent + pnl;
             self.portfolio.closed_trades.push(ClosedTrade {
                 token_id: pos.token_id.clone(),
+                market_title: pos.market_title.clone(),
                 side: pos.side,
                 entry_price: pos.entry_price,
                 exit_price: pos.current_price,
                 shares: pos.shares,
                 realized_pnl: pnl,
+                fees_paid_usdc: pos.entry_fee_paid_usdc,
                 reason: "backtest-end".to_string(),
                 opened_at_wall: pos.opened_at_wall,
                 closed_at_wall: chrono::Local::now(),

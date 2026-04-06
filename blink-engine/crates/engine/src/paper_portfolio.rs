@@ -28,8 +28,8 @@ pub const MIN_TRADE_USDC: f64 = 5.0; // $5 minimum to reduce size_or_cash reject
 /// window, the order is aborted (simulates an in-play failsafe).
 pub const DRIFT_THRESHOLD: f64 = 0.015; // 1.5 %
 
-/// Maximum number of NAV snapshots kept for the TUI equity curve.
-const EQUITY_CURVE_MAX: usize = 300;
+/// Maximum number of NAV snapshots kept for the equity curve (10s sampling → ~28h).
+const EQUITY_CURVE_MAX: usize = 10_080;
 
 fn env_flag(name: &str) -> bool {
     std::env::var(name)
@@ -75,6 +75,8 @@ pub struct PaperPosition {
     pub shares: f64,
     /// USDC committed to this position (entry_price × shares).
     pub usdc_spent: f64,
+    /// Entry fee paid (USDC) at open — tracked per-position for accounting.
+    pub entry_fee_paid_usdc: f64,
     /// Latest known market price from the live order book.
     pub current_price: f64,
     /// Wall-clock time when the position was opened.
@@ -124,11 +126,15 @@ impl PaperPosition {
 #[derive(Debug, Clone)]
 pub struct ClosedTrade {
     pub token_id: String,
+    #[allow(dead_code)]
+    pub market_title: Option<String>,
     pub side: OrderSide,
     pub entry_price: f64,
     pub exit_price: f64,
     pub shares: f64,
     pub realized_pnl: f64,
+    /// Total fees (entry + exit) attributed to this closed portion, in USDC.
+    pub fees_paid_usdc: f64,
     pub reason: String,
     /// Wall-clock time when the position was opened.
     pub opened_at_wall: chrono::DateTime<chrono::Local>,
@@ -157,6 +163,8 @@ pub struct ExecutionScorecard {
 pub struct PaperPortfolio {
     /// Available virtual USDC (starts at `STARTING_BALANCE_USDC`).
     pub cash_usdc: f64,
+    /// Cumulative fees paid (entry + exit) in USDC.
+    pub total_fees_paid_usdc: f64,
     /// Currently open positions.
     pub positions: Vec<PaperPosition>,
     /// History of closed trades.
@@ -169,8 +177,10 @@ pub struct PaperPortfolio {
     pub aborted_orders: usize,
     /// Orders skipped because size < `MIN_TRADE_USDC` or no cash.
     pub skipped_orders: usize,
-    /// NAV samples for the TUI equity sparkline (newest at the end, max 300).
+    /// NAV samples for the equity curve (10s sampling, newest at end, max ~28h).
     pub equity_curve: Vec<f64>,
+    /// Unix-ms timestamp for each equity_curve sample.
+    pub equity_timestamps: Vec<i64>,
     next_id: usize,
 }
 
@@ -191,6 +201,8 @@ struct PersistedPaperPosition {
     opened_at_wall_ms: i64,
     opened_age_secs: u64,
     #[serde(default)]
+    entry_fee_paid_usdc: f64,
+    #[serde(default)]
     entry_slippage_bps: f64,
     #[serde(default)]
     queue_delay_ms: u64,
@@ -201,11 +213,15 @@ struct PersistedPaperPosition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedClosedTrade {
     token_id: String,
+    #[serde(default)]
+    market_title: Option<String>,
     side: OrderSide,
     entry_price: f64,
     exit_price: f64,
     shares: f64,
     realized_pnl: f64,
+    #[serde(default)]
+    fees_paid_usdc: f64,
     reason: String,
     opened_at_wall_ms: i64,
     closed_at_wall_ms: i64,
@@ -219,6 +235,7 @@ struct PersistedPaperPortfolio {
     #[serde(default)]
     schema_version: u32,
     cash_usdc: f64,
+    total_fees_paid_usdc: f64,
     positions: Vec<PersistedPaperPosition>,
     closed_trades: Vec<PersistedClosedTrade>,
     total_signals: usize,
@@ -226,6 +243,8 @@ struct PersistedPaperPortfolio {
     aborted_orders: usize,
     skipped_orders: usize,
     equity_curve: Vec<f64>,
+    #[serde(default)]
+    equity_timestamps: Vec<i64>,
     next_id: usize,
 }
 
@@ -234,13 +253,15 @@ impl PaperPortfolio {
     pub fn new() -> Self {
         Self {
             cash_usdc:      STARTING_BALANCE_USDC,
+            total_fees_paid_usdc: 0.0,
             positions:      Vec::new(),
             closed_trades:  Vec::new(),
             total_signals:  0,
             filled_orders:  0,
             aborted_orders: 0,
             skipped_orders: 0,
-            equity_curve:   Vec::with_capacity(EQUITY_CURVE_MAX),
+            equity_curve:       Vec::with_capacity(EQUITY_CURVE_MAX),
+            equity_timestamps:  Vec::with_capacity(EQUITY_CURVE_MAX),
             next_id:        1,
         }
     }
@@ -362,6 +383,8 @@ impl PaperPortfolio {
             0.0
         };
         self.cash_usdc -= usdc_size + entry_fee;
+        // Track entry fee in the global fees counter and per-position for accounting.
+        self.total_fees_paid_usdc += entry_fee;
         self.positions.push(PaperPosition {
             id,
             token_id,
@@ -371,6 +394,7 @@ impl PaperPortfolio {
             entry_price,
             shares,
             usdc_spent:    usdc_size,
+            entry_fee_paid_usdc: entry_fee,
             current_price: entry_price,
             opened_at:     Instant::now(),
             rn1_order_id,
@@ -415,14 +439,19 @@ impl PaperPortfolio {
             } else {
                 0.0
             };
+            // Attribute per-position entry fee and record exit fee.
+            let entry_fee_portion = pos.entry_fee_paid_usdc;
+            self.total_fees_paid_usdc += exit_fee;
             self.cash_usdc += pos.usdc_spent + pnl - exit_fee;
             self.closed_trades.push(ClosedTrade {
                 token_id: pos.token_id.clone(),
+                market_title: pos.market_title.clone(),
                 side: pos.side,
                 entry_price: pos.entry_price,
                 exit_price: pos.current_price,
                 shares: pos.shares,
                 realized_pnl: pnl,
+                fees_paid_usdc: entry_fee_portion + exit_fee,
                 reason: format!("autoclaim@{:.0}%", target_pnl_pct),
                 opened_at_wall: pos.opened_at_wall,
                 closed_at_wall: chrono::Local::now(),
@@ -477,7 +506,29 @@ impl PaperPortfolio {
         actions
     }
 
-    fn close_position_fraction(&mut self, idx: usize, fraction: f64, reason: String) -> bool {
+    /// Closes any open position whose unrealized P&L has fallen below
+    /// `-loss_threshold_pct` percent (e.g. pass `35.0` to cut at -35%).
+    ///
+    /// Returns the number of positions closed.
+    pub fn stop_loss_check(&mut self, loss_threshold_pct: f64) -> usize {
+        let mut actions = 0usize;
+        let mut i = 0usize;
+        while i < self.positions.len() {
+            if self.positions[i].unrealized_pnl_pct() <= -loss_threshold_pct.abs() {
+                let reason = format!("stop_loss@-{:.0}%", loss_threshold_pct.abs());
+                let removed = self.close_position_fraction(i, 1.0, reason);
+                actions += 1;
+                if !removed {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        actions
+    }
+
+    pub fn close_position_fraction(&mut self, idx: usize, fraction: f64, reason: String) -> bool {
         if idx >= self.positions.len() {
             return false;
         }
@@ -497,14 +548,19 @@ impl PaperPortfolio {
             } else {
                 0.0
             };
+            let entry_fee_portion = pos.entry_fee_paid_usdc;
+            // Record exit fee in global counter and settle cash.
+            self.total_fees_paid_usdc += exit_fee;
             self.cash_usdc += pos.usdc_spent + pnl - exit_fee;
             self.closed_trades.push(ClosedTrade {
                 token_id: pos.token_id.clone(),
+                market_title: pos.market_title.clone(),
                 side: pos.side,
                 entry_price: pos.entry_price,
                 exit_price: pos.current_price,
                 shares: pos.shares,
                 realized_pnl: pnl,
+                fees_paid_usdc: entry_fee_portion + exit_fee,
                 reason,
                 opened_at_wall: pos.opened_at_wall,
                 closed_at_wall: chrono::Local::now(),
@@ -536,14 +592,19 @@ impl PaperPortfolio {
         } else {
             0.0
         };
+        let entry_fee_portion = pos.entry_fee_paid_usdc * fraction;
+        // Record exit fee and attribute entry fee portion to this closed slice.
+        self.total_fees_paid_usdc += exit_fee;
         self.cash_usdc += close_usdc_spent + pnl - exit_fee;
         self.closed_trades.push(ClosedTrade {
             token_id: pos.token_id.clone(),
+            market_title: pos.market_title.clone(),
             side: pos.side,
             entry_price: pos.entry_price,
             exit_price: pos.current_price,
             shares: close_shares,
             realized_pnl: pnl,
+            fees_paid_usdc: entry_fee_portion + exit_fee,
             reason,
             opened_at_wall: pos.opened_at_wall,
             closed_at_wall: chrono::Local::now(),
@@ -560,7 +621,8 @@ impl PaperPortfolio {
 
         pos.shares -= close_shares;
         pos.usdc_spent -= close_usdc_spent;
-        if pos.shares <= 1e-9 || pos.usdc_spent <= 1e-9 {
+        pos.entry_fee_paid_usdc -= entry_fee_portion;
+        if pos.shares <= 0.01 || pos.usdc_spent <= 0.001 {
             let _ = self.positions.remove(idx);
             return true;
         }
@@ -595,8 +657,12 @@ impl PaperPortfolio {
     pub fn push_equity_snapshot(&mut self) {
         if self.equity_curve.len() >= EQUITY_CURVE_MAX {
             self.equity_curve.remove(0);
+            if !self.equity_timestamps.is_empty() {
+                self.equity_timestamps.remove(0);
+            }
         }
         self.equity_curve.push(self.nav());
+        self.equity_timestamps.push(chrono::Utc::now().timestamp_millis());
     }
 
     pub fn save_to_path(&self, path: &str) -> std::io::Result<()> {
@@ -623,6 +689,7 @@ impl From<&PaperPortfolio> for PersistedPaperPortfolio {
         Self {
             schema_version: 2,
             cash_usdc: value.cash_usdc,
+            total_fees_paid_usdc: value.total_fees_paid_usdc,
             positions: value.positions.iter().map(|p| PersistedPaperPosition {
                 id: p.id,
                 token_id: p.token_id.clone(),
@@ -636,17 +703,20 @@ impl From<&PaperPortfolio> for PersistedPaperPortfolio {
                 rn1_order_id: p.rn1_order_id.clone(),
                 opened_at_wall_ms: p.opened_at_wall.timestamp_millis(),
                 opened_age_secs: p.opened_at.elapsed().as_secs(),
+                entry_fee_paid_usdc: p.entry_fee_paid_usdc,
                 entry_slippage_bps: p.entry_slippage_bps,
                 queue_delay_ms: p.queue_delay_ms,
                 experiment_variant: p.experiment_variant.clone(),
             }).collect(),
             closed_trades: value.closed_trades.iter().map(|t| PersistedClosedTrade {
                 token_id: t.token_id.clone(),
+                market_title: t.market_title.clone(),
                 side: t.side,
                 entry_price: t.entry_price,
                 exit_price: t.exit_price,
                 shares: t.shares,
                 realized_pnl: t.realized_pnl,
+                fees_paid_usdc: t.fees_paid_usdc,
                 reason: t.reason.clone(),
                 opened_at_wall_ms: t.opened_at_wall.timestamp_millis(),
                 closed_at_wall_ms: t.closed_at_wall.timestamp_millis(),
@@ -658,6 +728,7 @@ impl From<&PaperPortfolio> for PersistedPaperPortfolio {
             aborted_orders: value.aborted_orders,
             skipped_orders: value.skipped_orders,
             equity_curve: value.equity_curve.clone(),
+            equity_timestamps: value.equity_timestamps.clone(),
             next_id: value.next_id,
         }
     }
@@ -684,6 +755,7 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
                 shares: p.shares,
                 usdc_spent: p.usdc_spent,
                 current_price: p.current_price,
+                entry_fee_paid_usdc: p.entry_fee_paid_usdc,
                 opened_at,
                 rn1_order_id: p.rn1_order_id,
                 opened_at_wall,
@@ -704,11 +776,13 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
                 .unwrap_or_else(Local::now);
             ClosedTrade {
                 token_id: t.token_id,
+                market_title: t.market_title,
                 side: t.side,
                 entry_price: t.entry_price,
                 exit_price: t.exit_price,
                 shares: t.shares,
                 realized_pnl: t.realized_pnl,
+                fees_paid_usdc: t.fees_paid_usdc,
                 reason: t.reason,
                 opened_at_wall,
                 closed_at_wall,
@@ -719,6 +793,7 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
 
         Self {
             cash_usdc: value.cash_usdc,
+            total_fees_paid_usdc: value.total_fees_paid_usdc,
             positions,
             closed_trades,
             total_signals: value.total_signals,
@@ -726,6 +801,7 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
             aborted_orders: value.aborted_orders,
             skipped_orders: value.skipped_orders,
             equity_curve: value.equity_curve,
+            equity_timestamps: value.equity_timestamps,
             next_id: value.next_id.max(1),
         }
     }

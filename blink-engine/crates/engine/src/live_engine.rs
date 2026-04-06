@@ -116,10 +116,21 @@ impl LiveEngine {
                     Some(Arc::new(handle))
                 }
                 Err(e) => {
-                    error!(error = %e, "Failed to initialize TEE vault — live signing disabled");
-                    None
+                    // LIVE_TRADING=true with a vault failure is fatal — the engine
+                    // must NOT silently fall back to dry-run while the operator
+                    // believes live orders are being submitted.
+                    panic!(
+                        "FATAL: LIVE_TRADING=true but TEE vault failed to initialize: {e}\n\
+                         Fix SIGNER_PRIVATE_KEY or vault configuration before retrying."
+                    );
                 }
             }
+        } else if config.live_trading && config.signer_private_key.is_empty() {
+            // No key provided at all — hard fail immediately.
+            panic!(
+                "FATAL: LIVE_TRADING=true but SIGNER_PRIVATE_KEY is empty.\n\
+                 Set SIGNER_PRIVATE_KEY before starting the engine in live mode."
+            );
         } else {
             None
         };
@@ -757,6 +768,11 @@ impl LiveEngine {
             heartbeat_ok_count:     m.heartbeat_ok_count,
             heartbeat_fail_count:   m.heartbeat_fail_count,
         }
+    }
+
+    /// Returns the number of unreconciled pending orders currently tracked.
+    pub async fn pending_orders_count(&self) -> usize {
+        self.pending_orders.lock().await.len()
     }
 
     /// Emergency stop: trips circuit breaker, cancels all open exchange orders,

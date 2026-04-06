@@ -40,7 +40,10 @@ tower-http        = { workspace = true }
 default = []
 # Enable io_uring network backend (Linux production only).
 # Off by default — uses tokio on all platforms including Windows/macOS.
-io_uring = []
+io_uring = ["dep:tokio-uring"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio-uring = { version = "0.5", optional = true }
 
 [dev-dependencies]
 proptest          = { workspace = true }

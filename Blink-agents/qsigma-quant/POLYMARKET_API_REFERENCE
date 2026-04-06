@@ -1,0 +1,283 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║               BLINK HFT — POLYMARKET API REFERENCE                         ║
+║          All endpoints, WebSocket channels, and data structures              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+BASE URLS
+─────────
+  CLOB REST API:        https://clob.polymarket.com
+  Gamma Markets API:    https://gamma-api.polymarket.com
+  WebSocket (live):     wss://ws-live-data.polymarket.com
+  Chain ID (Polygon):   137
+
+AUTHENTICATION
+──────────────
+Polymarket uses a two-layer auth system:
+
+  Layer 1: API Keys (L1 credentials)
+    Derived deterministically from your wallet's private key via EIP-712 signature.
+    Never expire. Never regenerate unless wallet changes.
+    Header format: POLY-API-KEY, POLY-SIGNATURE, POLY-TIMESTAMP, POLY-PASSPHRASE
+
+  Layer 2: EIP-712 Order Signatures (per-order)
+    Every order is individually signed with your wallet key.
+    Signature is embedded in the order payload — no separate auth step.
+
+Signature Types:
+  0 = EOA wallet (MetaMask, hardware wallet)
+  1 = Email/Magic wallet (delegated signing)
+  2 = Browser wallet proxy (smart contract wallet)
+
+Key derivation (do this ONCE and store the keys):
+  POST /auth/api-key  { Body: EIP-712 signed message }
+  OR use createOrDeriveApiKey() — always prefer this
+
+═══════════════════════════════════════════════════════════════
+REST API ENDPOINTS — CLOB (clob.polymarket.com)
+═══════════════════════════════════════════════════════════════
+
+HEALTH & STATUS
+───────────────
+GET  /                     → "OK" — basic health check
+GET  /time                 → Server timestamp (sync your clock to this!)
+
+MARKET DATA (no auth required)
+───────────────────────────────
+GET  /markets                         → List all markets
+GET  /markets/{condition_id}          → Single market by condition ID
+GET  /order-book/{token_id}           → Full order book snapshot
+GET  /order-books                     → Multiple order books
+     Query: token_id (comma-separated)
+GET  /midpoint?token_id={id}          → Best-bid/ask midpoint
+GET  /price?token_id={id}&side={BUY|SELL} → Current best price
+GET  /spread?token_id={id}            → Current bid-ask spread
+GET  /last-trade-price?token_id={id}  → Last traded price
+GET  /prices-history?token_id={id}    → Historical price data
+     Query: interval (1m/5m/1h/1d), fidelity
+
+IMPORTANT — Order Book Response Structure:
+{
+  "market": "condition_id",
+  "asset_id": "token_id",
+  "bids": [{"price": "0.65", "size": "1500"}, ...],   // sorted desc
+  "asks": [{"price": "0.66", "size": "800"}, ...],    // sorted asc
+  "hash": "..."
+}
+
+ORDER MANAGEMENT (auth required)
+──────────────────────────────────
+POST   /order                    → Place a new order
+DELETE /order/{order_id}         → Cancel single order
+DELETE /orders                   → Cancel multiple orders (body: [order_id, ...])
+DELETE /orders/market/{market_id} → Cancel all orders for a market ← USE THIS FOR GAME-START WIPE
+GET    /order/{order_id}         → Get order status
+GET    /orders?market={id}       → Get open orders (optionally filtered by market)
+GET    /trades                   → Get trade history
+GET    /trades?maker_address={addr} → Get trades by maker wallet ← USE TO TRACK RN1
+
+POST /order Request Body:
+{
+  "order": {
+    "salt":          "random_uint256_as_string",
+    "maker":         "0xYOUR_ADDRESS",
+    "signer":        "0xYOUR_SIGNING_KEY",
+    "taker":         "0x0000000000000000000000000000000000000000",
+    "tokenId":       "token_id_uint256",
+    "makerAmount":   "collateral_amount_in_usdc_6decimals",
+    "takerAmount":   "shares_amount",
+    "expiration":    "0",                           // 0 = GTC
+    "nonce":         "0",
+    "feeRateBps":    "0",
+    "side":          0,                             // 0=BUY, 1=SELL
+    "signatureType": 0,
+    "signature":     "0xEIP712_SIGNATURE"
+  },
+  "owner": "0xYOUR_ADDRESS",
+  "orderType": "GTC",                               // GTC | FOK | FAK | GTD
+  "maker": true                                     // POST-ONLY FLAG ← CRITICAL
+}
+
+IMPORTANT: makerAmount vs takerAmount:
+  BUY  order: makerAmount = USDC to spend, takerAmount = shares to receive
+  SELL order: makerAmount = shares to sell, takerAmount = USDC to receive
+  USDC amounts use 6 decimal precision (1.00 USDC = 1000000)
+  Share amounts use integer representation
+
+Order Types:
+  GTC = Good-Til-Cancelled (stays in book until manually cancelled or filled)
+  FOK = Fill-Or-Kill (fill completely at price or cancel immediately)
+  FAK = Fill-And-Kill (fill available, cancel remainder) ← safer for thin markets
+  GTD = Good-Til-Date (expires at unix timestamp)
+
+════════════════════════════════════════════════════════════
+REST API ENDPOINTS — GAMMA MARKETS (gamma-api.polymarket.com)
+════════════════════════════════════════════════════════════
+
+MARKET DISCOVERY
+─────────────────
+GET  /events                          → All events (grouped markets)
+     ?active=true&closed=false        → Active only
+     ?order=volume_24hr&ascending=false → Sort by 24h volume
+     ?limit=100&offset=0             → Pagination
+     ?tag_id={id}                    → Filter by sport/category
+     ?slug={slug}                    → Single event by slug (from URL)
+
+GET  /markets                         → Individual markets
+     ?slug={slug}                    → Single market by slug
+     ?tag_id={id}                    → Markets in category
+
+GET  /tags                            → All available tags (categories)
+GET  /sports                          → Sports-specific metadata
+                                        Returns: tag IDs, images, resolution sources
+
+Sport Tag IDs (examples — verify current IDs via GET /sports):
+  Soccer/Football  → check GET /sports response
+  Basketball/NBA   → check GET /sports response
+  CS:GO            → check GET /sports response
+  Tennis           → check GET /sports response
+
+Useful event fields in response:
+{
+  "id":          "event_id",
+  "slug":        "team-a-vs-team-b-2026-04-01",
+  "title":       "Will Team A win?",
+  "active":      true,
+  "closed":      false,
+  "volume_24hr": 125000.50,
+  "liquidity":   45000.00,
+  "markets": [{
+    "condition_id": "0x...",
+    "tokens": [{"token_id": "...", "outcome": "Yes"}, ...],
+    "tick_size": "0.01",
+    "neg_risk":  false
+  }]
+}
+
+════════════════════════════════════════════════════════════
+WEBSOCKET — LIVE DATA (wss://ws-live-data.polymarket.com)
+════════════════════════════════════════════════════════════
+
+Connection Flow:
+  1. Connect: wss://ws-live-data.polymarket.com
+  2. Subscribe to channels by sending subscription messages
+  3. Keep alive with ping frames every 30 seconds
+
+Subscription Message Format:
+{
+  "auth": {
+    "apiKey":    "YOUR_API_KEY",
+    "secret":    "YOUR_API_SECRET",
+    "passphrase":"YOUR_PASSPHRASE"
+  },
+  "type":    "subscribe",
+  "channel": "live_activity",
+  "markets": ["token_id_1", "token_id_2"]
+}
+
+Available Channels:
+  live_activity  → All order book activity (new orders, fills, cancels)
+  user           → Your own order updates (auth required)
+
+Order Book Update Message (delta):
+{
+  "event_type": "book",
+  "market":     "token_id",
+  "asset_id":   "token_id",
+  "buys":  [{"price": "0.65", "size": "1500"}],  // size=0 means level removed
+  "sells": [{"price": "0.66", "size": "0"}],
+  "timestamp": "1711900000000",
+  "hash": "..."
+}
+
+Trade Execution Message:
+{
+  "event_type":   "last_trade_price",
+  "market":       "token_id",
+  "price":        "0.65",
+  "size":         "500",
+  "side":         "BUY",
+  "timestamp":    "1711900000000"
+}
+
+Order Placed Message (THIS IS WHAT WE SNIFF FOR RN1):
+{
+  "event_type":  "order",
+  "market":      "token_id",
+  "order_id":    "uuid",
+  "owner":       "0xWALLET_ADDRESS",   ← filter for RN1 here
+  "side":        "BUY",
+  "price":       "0.65",
+  "size_matched":"0",
+  "original_size":"50000",
+  "type":        "LIMIT",
+  "created_at":  "1711900000000"
+}
+
+CRITICAL: When we detect RN1's order, we have milliseconds to respond.
+The decision pipeline must be:
+  Parse message → verify owner == RN1 → extract (token_id, side, price, size)
+  → calculate our size → build our EIP-712 order → sign → POST /order
+
+Maximum acceptable latency for this pipeline: 5ms end-to-end.
+
+════════════════════════════════════════════════════════════
+RATE LIMITS
+════════════════════════════════════════════════════════════
+REST API:   ~100 requests/second (unverified — test experimentally)
+WebSocket:  1 connection per market subscription recommended
+Order submission: No hard published limit, but aggressive behavior
+            will result in temporary IP bans. Keep to < 5 orders/second.
+
+Best practices to avoid rate limiting:
+  1. Cache order book state locally — never poll GET /order-book on hot path
+  2. Use WebSocket for real-time data, REST only for order submission
+  3. Implement exponential backoff on 429 responses
+  4. Use a single persistent reqwest::Client (connection pooling)
+
+════════════════════════════════════════════════════════════
+USDC TOKEN ADDRESSES (Polygon)
+════════════════════════════════════════════════════════════
+USDC (native):  0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174
+USDC.e:         0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359
+
+CTF Exchange:   0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E
+NegRisk Exchange: 0xC5d563A36AE78145C45a50134d48A1215220f80a
+
+Token allowances must be set on CTF Exchange before first order.
+Use Foundry / alloy to call approve() on USDC contract.
+
+════════════════════════════════════════════════════════════
+IMPORTANT EDGE CASES & GOTCHAS
+════════════════════════════════════════════════════════════
+
+1. TICK SIZES vary per market. Always fetch tick_size from GET /markets.
+   Common values: 0.01, 0.001. Orders priced outside tick increments are rejected.
+
+2. NEGATIVE RISK MARKETS (negRisk: true):
+   These are multi-outcome markets (e.g., "Which team wins the tournament?")
+   They use a different CTF contract address (NegRisk Exchange above).
+   Handle separately — different order book mechanics.
+
+3. PRE-GAME ORDER WIPE:
+   The moment a game starts, ALL open orders for that market are cancelled by
+   the exchange. Your bot must:
+     a) Subscribe to game start events
+     b) Cancel orders 5 seconds before expected game start as a safety buffer
+     c) Flush local order cache immediately on receiving the wipe event
+
+4. 3-SECOND IN-PLAY DELAY:
+   During active game: marketable orders face a 3-second placement delay.
+   Your bot submits the order → it enters a queue → either executes or
+   gets cancelled by our failsafe if odds move.
+   NON-marketable (Post-Only) orders may not face this delay — verify this
+   experimentally before relying on it.
+
+5. PRICE REPRESENTATION:
+   Prices are $0.01 to $0.99 (binary outcomes).
+   $0.65 = 65% implied probability = 1.538x payout if correct.
+   Always treat prices as decimal strings from the API ("0.65"), not floats.
+   Parse to u64 (multiply by 1000) to avoid floating point errors.
+
+6. ORDER SCORING:
+   GET /are-orders-scoring?ids=... tells you if your orders are eligible for
+   maker rebates. Check this to confirm Post-Only orders are scoring.

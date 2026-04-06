@@ -37,6 +37,14 @@ pub struct Config {
     /// Max raw payload preview length logged on WS parse failures.
     pub ws_parse_error_preview_chars: usize,
 
+    /// How often the web UI WebSocket broadcasts state snapshots (seconds).
+    /// Default: 10. Lower = faster UI updates, more CPU.
+    pub ws_broadcast_interval_secs: u64,
+
+    /// Rolling window size for the latency tracker (number of samples).
+    /// Default: 2000.
+    pub latency_window_size: usize,
+
     // ── Live-trading credentials ────────────────────────────────────────────
     /// When `true` the engine will submit real orders via the CLOB REST API.
     /// Defaults to `false` (paper/dry-run mode). Set `LIVE_TRADING=true` to
@@ -161,6 +169,16 @@ impl Config {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(120);
+        let ws_broadcast_interval_secs = std::env::var("WS_BROADCAST_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(10)
+            .clamp(1, 60);
+        let latency_window_size = std::env::var("LATENCY_WINDOW_SIZE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(2_000)
+            .clamp(100, 100_000);
 
         // ── Live-trading credentials (optional; validated below) ────────────
         let live_trading = std::env::var("LIVE_TRADING")
@@ -263,6 +281,8 @@ impl Config {
             log_level,
             ws_reconnect_debounce_ms,
             ws_parse_error_preview_chars,
+            ws_broadcast_interval_secs,
+            latency_window_size,
             live_trading,
             signer_private_key,
             funder_address,
@@ -325,6 +345,10 @@ impl Config {
         anyhow::ensure!(
             self.live_canary_max_reject_streak > 0,
             "LIVE_CANARY_MAX_REJECT_STREAK must be > 0"
+        );
+        anyhow::ensure!(
+            !self.signer_private_key.is_empty(),
+            "LIVE_TRADING=true requires SIGNER_PRIVATE_KEY to be set"
         );
         if self.polymarket_order_expiration != 0 {
             let now = SystemTime::now()

@@ -72,8 +72,9 @@ Set-Location '$root\blink-engine'
 `$env:TRADING_ENABLED = 'true'
 `$env:WS_BROADCAST_INTERVAL_SECS = '2'
 `$env:VAR_THRESHOLD_PCT = '0.50'
+`$env:MIN_SIGNAL_NOTIONAL_USD = '5.0'
 `$env:TUI = 'false'
-& '.\target\$buildProfile\engine.exe' 2>&1 | Tee-Object -FilePath '$engineLog' -Append
+& '.\target\$buildProfile\engine.exe' > '$engineLog' 2>&1
 "@ | Set-Content $engineLauncher
 
 # Check if port 3030 is already in use (e.g., from a previous run that wasn't stopped)

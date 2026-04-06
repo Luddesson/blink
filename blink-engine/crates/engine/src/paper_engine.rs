@@ -467,6 +467,55 @@ impl PaperEngine {
             ));
         }
 
+        // ── Mirror RN1 exit: SELL signal → close our matching BUY position ──
+        // RN1 exiting a position is the primary signal to exit. We close the
+        // matching open BUY at current price rather than trying to open a short.
+        if signal.side == OrderSide::Sell {
+            let mut p = self.portfolio.lock().await;
+            if let Some(idx) = p.positions.iter().position(|pos| {
+                pos.token_id == signal.token_id && pos.side == OrderSide::Buy
+            }) {
+                let pos = p.positions.remove(idx);
+                let exit_price = pos.current_price.clamp(0.001, 0.999);
+                let pnl = (exit_price - pos.entry_price) * pos.shares;
+                p.cash_usdc += pos.usdc_spent + pnl;
+                let dur = pos.opened_at.elapsed().as_secs();
+                p.closed_trades.push(crate::paper_portfolio::ClosedTrade {
+                    token_id: pos.token_id.clone(),
+                    market_title: pos.market_title.clone(),
+                    side: pos.side,
+                    entry_price: pos.entry_price,
+                    exit_price,
+                    shares: pos.shares,
+                    realized_pnl: pnl,
+                    fees_paid_usdc: pos.entry_fee_paid_usdc,
+                    reason: "rn1_mirror_exit".to_string(),
+                    opened_at_wall: pos.opened_at_wall,
+                    closed_at_wall: chrono::Local::now(),
+                    duration_secs: dur,
+                    scorecard: crate::paper_portfolio::ExecutionScorecard {
+                        slippage_bps: pos.entry_slippage_bps,
+                        queue_delay_ms: pos.queue_delay_ms,
+                        outcome_tags: vec!["rn1_mirror_exit".to_string()],
+                    },
+                });
+                self.risk.lock().unwrap().record_close(pnl);
+                if let Some(ref log) = self.activity {
+                    log_push(log, EntryKind::Fill, format!(
+                        "RN1 EXIT: closed BUY @{:.3} (entry={:.3})  pnl={:+.3}  dur={}s",
+                        exit_price, pos.entry_price, pnl, dur,
+                    ));
+                }
+                info!(token_id = %pos.token_id, exit_price, pnl, "🔴 RN1 mirror-exit: closed BUY position");
+            } else {
+                // RN1 selling a token we don't hold — skip rather than open a short.
+                p.skipped_orders += 1;
+                drop(p);
+                self.record_rejection("sell_no_position").await;
+            }
+            return;
+        }
+
         let size_usdc = match size_usdc {
             Some(s) => s,
             None => {
@@ -1339,17 +1388,24 @@ impl PaperEngine {
         // If a position's market is no longer live (no book price), close it to
         // avoid stale overnight carry. This preserves the user's rule: keep open
         // positions only while event data remains live.
-        // Only close as "market_not_live" if the position has been held for at
-        // least 30 seconds — avoids closing freshly filled positions before the
-        // WS order-book has a chance to populate a price for the token.
-        let stale_min_age = Duration::from_secs(30);
+        // Only close as "market_not_live" if:
+        //   1. The WS book has no price AND the CLOB hasn't moved the price from entry, AND
+        //   2. The position has been held longer than STALE_CLOSE_SECS (default 5 min).
+        // This prevents premature 30-second closes that destroy copytrading PnL.
+        let stale_min_age = Duration::from_secs(
+            std::env::var("STALE_CLOSE_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(300),
+        );
         let stale_indexes: Vec<usize> = p.positions
             .iter()
             .enumerate()
             .filter_map(|(idx, pos)| {
-                if self.get_market_price(&pos.token_id).is_none()
-                    && pos.opened_at.elapsed() >= stale_min_age
-                {
+                // Consider the market "live" if WS book has a price OR CLOB has moved the price.
+                let has_fresh_price = self.get_market_price(&pos.token_id).is_some()
+                    || (pos.current_price - pos.entry_price).abs() > 0.001;
+                if !has_fresh_price && pos.opened_at.elapsed() >= stale_min_age {
                     Some(idx)
                 } else {
                     None

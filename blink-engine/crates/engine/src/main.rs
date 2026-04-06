@@ -421,7 +421,7 @@ async fn main() -> Result<()> {
                                 Err(_) => {} // Silently skip — WS/order-book still primary
                             }
                         }
-                        tokio::time::sleep(Duration::from_secs(10)).await;
+                        tokio::time::sleep(Duration::from_secs(3)).await;
                     }
                 });
             }

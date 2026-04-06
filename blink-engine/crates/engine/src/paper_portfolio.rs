@@ -16,10 +16,10 @@ use crate::types::OrderSide;
 pub const STARTING_BALANCE_USDC: f64 = 100.0; // $100 starter bankroll
 
 /// We mirror `SIZE_MULTIPLIER × RN1's notional` as our trade size.
-pub const SIZE_MULTIPLIER: f64 = 0.02; // 2% of RN1 notional (conservative)
+pub const SIZE_MULTIPLIER: f64 = 0.05; // 5% of RN1 notional
 
 /// Maximum fraction of current NAV per single trade.
-pub const MAX_POSITION_PCT: f64 = 0.08; // 8% max per trade → ~12 concurrent positions
+pub const MAX_POSITION_PCT: f64 = 0.12; // 12% max per trade → ~8 concurrent positions
 
 /// Minimum trade size; signals below this are skipped.
 pub const MIN_TRADE_USDC: f64 = 2.0; // $2 minimum
@@ -42,20 +42,67 @@ fn realism_mode() -> bool {
     env_flag("PAPER_REALISM_MODE")
 }
 
-fn taker_fee_rate() -> f64 {
-    std::env::var("POLYMARKET_FEE_RATE")
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(0.05) // "Other/General" default; crypto=0.072, sports=0.03
-        .clamp(0.0, 0.20)
+/// Detect Polymarket fee category from market title.
+/// Returns (category_name, fee_rate) per https://docs.polymarket.com/trading/fees
+pub fn detect_fee_category(title: &str) -> (&'static str, f64) {
+    let t = title.to_lowercase();
+    // Geopolitics — 0% fee
+    if t.contains("geopolit") || t.contains("sanction") || t.contains("nato")
+        || t.contains("war ") || t.contains("military") || t.contains("treaty")
+        || t.contains("united nations") || t.contains("diplomacy")
+    {
+        return ("geopolitics", 0.00);
+    }
+    // Sports — 3%
+    if t.contains("win on 2") || t.contains("o/u ") || t.contains("over/under")
+        || t.contains(" vs ") || t.contains(" vs. ") || t.contains("afc")
+        || t.contains(" fc ") || t.contains("nba") || t.contains("nfl")
+        || t.contains("mlb") || t.contains("nhl") || t.contains("soccer")
+        || t.contains("tennis") || t.contains("golf") || t.contains("boxing")
+        || t.contains("ufc") || t.contains("mma") || t.contains("f1 ")
+        || t.contains("formula") || t.contains("grand prix")
+        || t.contains("serie a") || t.contains("la liga") || t.contains("bundesliga")
+        || t.contains("premier league") || t.contains("ligue 1")
+        || t.contains("campinas") || t.contains("linz") || t.contains("open:")
+        || t.contains("championship") || t.contains("cup ")
+    {
+        return ("sports", 0.03);
+    }
+    // Politics — 4%
+    if t.contains("president") || t.contains("election") || t.contains("congress")
+        || t.contains("senate") || t.contains("governor") || t.contains("democrat")
+        || t.contains("republican") || t.contains("trump") || t.contains("biden")
+        || t.contains("poll") || t.contains("vote") || t.contains("party")
+        || t.contains("legislation") || t.contains("bill ")
+    {
+        return ("politics", 0.04);
+    }
+    // Crypto — 7.2%
+    if t.contains("bitcoin") || t.contains("btc") || t.contains("ethereum")
+        || t.contains("eth ") || t.contains("crypto") || t.contains("solana")
+        || t.contains("token") || t.contains("defi") || t.contains("nft")
+    {
+        return ("crypto", 0.072);
+    }
+    // Default / Other — 5%
+    ("other", 0.05)
 }
 
 /// Polymarket taker fee: `shares × feeRate × p × (1 - p)`
 /// Peaks at p=0.50, drops to near-zero at extremes (p→0 or p→1).
 pub fn polymarket_taker_fee(shares: f64, price: f64) -> f64 {
-    let rate = taker_fee_rate();
+    let rate = std::env::var("POLYMARKET_FEE_RATE")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.05)
+        .clamp(0.0, 0.20);
     let fee = shares * rate * price * (1.0 - price);
-    // Round to 5 decimal places per Polymarket spec
+    (fee * 100_000.0).round() / 100_000.0
+}
+
+/// Category-aware taker fee using detected rate.
+pub fn polymarket_taker_fee_with_rate(shares: f64, price: f64, fee_rate: f64) -> f64 {
+    let fee = shares * fee_rate * price * (1.0 - price);
     (fee * 100_000.0).round() / 100_000.0
 }
 
@@ -90,6 +137,10 @@ pub struct PaperPosition {
     pub current_price: f64,
     /// Highest price seen since entry (for trailing stop).
     pub peak_price: f64,
+    /// Fee category detected from market title (e.g. "sports", "geopolitics").
+    pub fee_category: String,
+    /// Fee rate for this position's category.
+    pub fee_rate: f64,
     /// Wall-clock time when the position was opened.
     pub opened_at: Instant,
     /// The RN1 order ID that triggered this position.
@@ -219,6 +270,10 @@ struct PersistedPaperPosition {
     queue_delay_ms: u64,
     #[serde(default)]
     experiment_variant: String,
+    #[serde(default)]
+    fee_category: String,
+    #[serde(default)]
+    fee_rate: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -347,14 +402,14 @@ impl PaperPortfolio {
         let min_floor_usdc = std::env::var("PAPER_MIN_ORDER_FLOOR_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(3.0)
+            .unwrap_or(5.0)
             .max(min_trade_usdc);
 
         let raw        = rn1_notional_usdc * size_multiplier;
         let cap_nav    = self.nav() * max_position_pct;
         // Cash reserve: keep 30% of NAV as buffer for future high-quality signals
         let cash_reserve_pct: f64 = std::env::var("CASH_RESERVE_PCT")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.30);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.25);
         let available_cash = (self.cash_usdc - self.nav() * cash_reserve_pct).max(0.0);
         let size       = raw.max(min_floor_usdc).min(cap_nav).min(available_cash);
         if size < min_trade_usdc { None } else { Some(size) }
@@ -392,7 +447,10 @@ impl PaperPortfolio {
         let shares = usdc_size / entry_price;
         let id     = self.next_id;
         self.next_id   += 1;
-        let entry_fee = polymarket_taker_fee(shares, entry_price);
+        let (fee_cat, fee_rate) = detect_fee_category(
+            market_title.as_deref().unwrap_or(""),
+        );
+        let entry_fee = polymarket_taker_fee_with_rate(shares, entry_price, fee_rate);
         self.cash_usdc -= usdc_size + entry_fee;
         // Track entry fee in the global fees counter and per-position for accounting.
         self.total_fees_paid_usdc += entry_fee;
@@ -408,6 +466,8 @@ impl PaperPortfolio {
             entry_fee_paid_usdc: entry_fee,
             current_price: entry_price,
             peak_price: entry_price,
+            fee_category: fee_cat.to_string(),
+            fee_rate,
             opened_at:     Instant::now(),
             rn1_order_id,
             opened_at_wall: chrono::Local::now(),
@@ -449,7 +509,7 @@ impl PaperPortfolio {
                 OrderSide::Buy => (pos.current_price - pos.entry_price) * pos.shares,
                 OrderSide::Sell => (pos.entry_price - pos.current_price) * pos.shares,
             };
-            let exit_fee = polymarket_taker_fee(pos.shares, pos.current_price);
+            let exit_fee = polymarket_taker_fee_with_rate(pos.shares, pos.current_price, pos.fee_rate);
             let entry_fee_portion = pos.entry_fee_paid_usdc;
             self.total_fees_paid_usdc += exit_fee;
             self.cash_usdc += pos.usdc_spent + pnl - exit_fee;
@@ -553,7 +613,7 @@ impl PaperPortfolio {
                 OrderSide::Buy => (pos.current_price - pos.entry_price) * pos.shares,
                 OrderSide::Sell => (pos.entry_price - pos.current_price) * pos.shares,
             };
-            let exit_fee = polymarket_taker_fee(pos.shares, pos.current_price);
+            let exit_fee = polymarket_taker_fee_with_rate(pos.shares, pos.current_price, pos.fee_rate);
             let entry_fee_portion = pos.entry_fee_paid_usdc;
             // Record exit fee in global counter and settle cash.
             self.total_fees_paid_usdc += exit_fee;
@@ -593,7 +653,7 @@ impl PaperPortfolio {
             OrderSide::Buy => (pos.current_price - pos.entry_price) * close_shares,
             OrderSide::Sell => (pos.entry_price - pos.current_price) * close_shares,
         };
-        let exit_fee = polymarket_taker_fee(close_shares, pos.current_price);
+        let exit_fee = polymarket_taker_fee_with_rate(close_shares, pos.current_price, pos.fee_rate);
         let entry_fee_portion = pos.entry_fee_paid_usdc * fraction;
         // Record exit fee and attribute entry fee portion to this closed slice.
         self.total_fees_paid_usdc += exit_fee;
@@ -715,6 +775,8 @@ impl From<&PaperPortfolio> for PersistedPaperPortfolio {
                 entry_slippage_bps: p.entry_slippage_bps,
                 queue_delay_ms: p.queue_delay_ms,
                 experiment_variant: p.experiment_variant.clone(),
+                fee_category: p.fee_category.clone(),
+                fee_rate: p.fee_rate,
             }).collect(),
             closed_trades: value.closed_trades.iter().map(|t| PersistedClosedTrade {
                 token_id: t.token_id.clone(),
@@ -771,6 +833,8 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
                 entry_slippage_bps: p.entry_slippage_bps,
                 queue_delay_ms: p.queue_delay_ms,
                 experiment_variant: if p.experiment_variant.is_empty() { "A".to_string() } else { p.experiment_variant },
+                fee_rate: if p.fee_rate == 0.0 && p.fee_category.is_empty() { 0.05 } else { p.fee_rate },
+                fee_category: if p.fee_category.is_empty() { "other".to_string() } else { p.fee_category },
             }
         }).collect();
 

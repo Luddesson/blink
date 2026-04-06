@@ -421,7 +421,7 @@ impl PaperEngine {
 
         // ── Min-notional filter (skip micro-signals before sizing) ──────────
         let min_notional: f64 = std::env::var("MIN_SIGNAL_NOTIONAL_USD")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(5.0);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(10.0);
         if rn1_notional_usd < min_notional {
             let mut p = self.portfolio.lock().await;
             p.skipped_orders += 1;
@@ -436,7 +436,6 @@ impl PaperEngine {
         }
 
         // ── Extreme price filter: skip very low or very high odds ──────────
-        // Prices near 0 or 1 have minimal edge and high fee-to-profit ratio.
         if entry_price < 0.10 || entry_price > 0.95 {
             let mut p = self.portfolio.lock().await;
             p.skipped_orders += 1;
@@ -449,9 +448,10 @@ impl PaperEngine {
             return;
         }
 
-        // ── Market category filter: block low-liquidity/esports markets ────
+        // ── Market category filter: block esports + fee-aware gating ────
+        let title_str = signal.market_title.as_deref().unwrap_or("");
         {
-            let title_lower = signal.market_title.as_deref().unwrap_or("").to_lowercase();
+            let title_lower = title_str.to_lowercase();
             let blocked_keywords = ["esports", "lol:", "cs2:", "cs:go", "dota", "valorant",
                 "league of legends", "counter-strike", "overwatch", "bo3)", "bo5)",
                 "lec ", "lck ", "lpl ", "vct "];
@@ -460,10 +460,52 @@ impl PaperEngine {
                 p.skipped_orders += 1;
                 drop(p);
                 warn!(
-                    title = %signal.market_title.as_deref().unwrap_or("?"),
+                    title = %title_str,
                     "⏭️  Signal skipped — blocked market category (esports)"
                 );
                 self.record_rejection("blocked_category").await;
+                return;
+            }
+        }
+
+        // ── Fee category detection & cash-aware preference ────────────────
+        let (fee_category, fee_rate) = crate::paper_portfolio::detect_fee_category(title_str);
+        {
+            let p = self.portfolio.lock().await;
+            let cash_pct = p.cash_usdc / p.nav();
+            drop(p);
+            // When cash is tight (<50% NAV), only take low-fee markets
+            if cash_pct < 0.50 && fee_rate > 0.04 {
+                let mut p = self.portfolio.lock().await;
+                p.skipped_orders += 1;
+                drop(p);
+                warn!(
+                    category = %fee_category,
+                    fee_rate = %format!("{:.1}%", fee_rate * 100.0),
+                    cash_pct = %format!("{:.0}%", cash_pct * 100.0),
+                    "⏭️  Signal skipped — high-fee category while cash is low"
+                );
+                self.record_rejection("high_fee_low_cash").await;
+                return;
+            }
+        }
+
+        // ── Fee-to-edge filter: skip if fee would eat >60% of expected gain ──
+        {
+            let est_shares = rn1_notional_usd * 0.05 / entry_price; // estimated shares at 5% multiplier
+            let est_fee = est_shares * fee_rate * entry_price * (1.0 - entry_price);
+            let est_edge = rn1_notional_usd * 0.05 * 0.05; // assume ~5% price movement
+            if est_fee > est_edge * 0.60 && fee_rate > 0.0 {
+                let mut p = self.portfolio.lock().await;
+                p.skipped_orders += 1;
+                drop(p);
+                warn!(
+                    fee = %format!("${:.3}", est_fee),
+                    edge = %format!("${:.3}", est_edge),
+                    category = %fee_category,
+                    "⏭️  Signal skipped — fee exceeds 60% of estimated edge"
+                );
+                self.record_rejection("fee_exceeds_edge").await;
                 return;
             }
         }
@@ -749,6 +791,8 @@ impl PaperEngine {
                 usdc_spent     = %format!("${:.2}", size_usdc),
                 cash_remaining = %format!("${:.2}", p.cash_usdc),
                 nav            = %format!("${:.2}", p.nav()),
+                fee_cat        = %fee_category,
+                fee_rate       = %format!("{:.1}%", fee_rate * 100.0),
                 "✅ Paper order FILLED"
             );
             if let Some(ref log) = self.activity {

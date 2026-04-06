@@ -1,4 +1,4 @@
-# start-blink.ps1
+﻿# start-blink.ps1
 # Usage: .\start-blink.ps1          (debug build, fast)
 #        .\start-blink.ps1 -Release  (release build, optimized)
 param([switch]$Release)
@@ -47,7 +47,7 @@ Write-Host ""
 Write-Host "=== [2/4] Frontend dependencies ===" -ForegroundColor Cyan
 if (-not (Test-Path "$root\blink-ui\node_modules")) {
     Push-Location "$root\blink-ui"
-    $p2 = Start-Process "npm" -ArgumentList "install" -NoNewWindow -Wait -PassThru
+    $p2 = Start-Process "cmd" -ArgumentList "/c npm install" -NoNewWindow -Wait -PassThru
     Pop-Location
     if ($p2.ExitCode -ne 0) {
         Write-Host "ERROR: npm install failed" -ForegroundColor Red
@@ -61,23 +61,35 @@ Write-Host ""
 Write-Host "=== [3/4] Starting engine ===" -ForegroundColor Cyan
 $engineLog = "$logs\engine-stdout.log"
 "" | Set-Content $engineLog
-$engineArgs = "-NoProfile -Command " +
-    "Set-Location '$root\blink-engine'; " +
-    "`$env:WEB_UI='true'; `$env:WEB_UI_PORT='3030'; " +
-    "`$env:PAPER_TRADING='true'; `$env:TUI='false'; " +
-    ".\target\$buildProfile\engine.exe >> '$engineLog' 2>&1"
-$ep = Start-Process powershell -ArgumentList $engineArgs -WindowStyle Hidden -PassThru
-$ep.Id | Out-File "$logs\engine.pid"
+
+# Write a tiny launcher script so env vars are set reliably
+$engineLauncher = "$logs\run-engine.ps1"
+@"
+Set-Location '$root\blink-engine'
+`$env:WEB_UI = 'true'
+`$env:WEB_UI_PORT = '3030'
+`$env:PAPER_TRADING = 'true'
+`$env:TUI = 'false'
+& '.\target\$buildProfile\engine.exe' 2>&1 | Tee-Object -FilePath '$engineLog' -Append
+"@ | Set-Content $engineLauncher
+
+# Check if port 3030 is already in use (e.g., from a previous run that wasn't stopped)
+$portInUse = (netstat -an | Select-String "0.0.0.0:3030.*LISTENING") -ne $null
+if ($portInUse) {
+    Write-Host "  Port 3030 already in use — skipping engine launch (already running?)" -ForegroundColor Yellow
+} else {
+    $ep = Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$engineLauncher`"" -WindowStyle Hidden -PassThru
+    $ep.Id | Out-File "$logs\engine.pid"
+}
 
 # ── [4/4] Start Vite ──────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== [4/4] Starting Web UI ===" -ForegroundColor Cyan
 $viteLog = "$logs\vite-stdout.log"
 "" | Set-Content $viteLog
-$viteArgs = "-NoProfile -Command " +
-    "Set-Location '$root\blink-ui'; " +
-    "npm run dev >> '$viteLog' 2>&1"
-$vp = Start-Process powershell -ArgumentList $viteArgs -WindowStyle Hidden -PassThru
+$viteBat = "$logs\run-vite.bat"
+"@echo off`ncd /d `"$root\blink-ui`"`nnpm run dev >> `"$viteLog`" 2>&1" | Set-Content $viteBat
+$vp = Start-Process "cmd" -ArgumentList "/c `"$viteBat`"" -WindowStyle Hidden -PassThru
 $vp.Id | Out-File "$logs\vite.pid"
 
 # ── Wait for engine ───────────────────────────────────────────────────────────
@@ -87,7 +99,7 @@ $ready = $false
 for ($i = 0; $i -lt 60; $i++) {
     Start-Sleep 2
     try {
-        $null = Invoke-RestMethod "http://localhost:3030/api/status" -TimeoutSec 2
+        $null = Invoke-RestMethod "http://localhost:3030/api/status" -TimeoutSec 10
         $ready = $true
         break
     } catch {}

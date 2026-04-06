@@ -69,6 +69,8 @@ Set-Location '$root\blink-engine'
 `$env:WEB_UI = 'true'
 `$env:WEB_UI_PORT = '3030'
 `$env:PAPER_TRADING = 'true'
+`$env:TRADING_ENABLED = 'true'
+`$env:WS_BROADCAST_INTERVAL_SECS = '2'
 `$env:TUI = 'false'
 & '.\target\$buildProfile\engine.exe' 2>&1 | Tee-Object -FilePath '$engineLog' -Append
 "@ | Set-Content $engineLauncher

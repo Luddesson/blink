@@ -88,6 +88,8 @@ pub struct PaperPosition {
     pub entry_fee_paid_usdc: f64,
     /// Latest known market price from the live order book.
     pub current_price: f64,
+    /// Highest price seen since entry (for trailing stop).
+    pub peak_price: f64,
     /// Wall-clock time when the position was opened.
     pub opened_at: Instant,
     /// The RN1 order ID that triggered this position.
@@ -405,6 +407,7 @@ impl PaperPortfolio {
             usdc_spent:    usdc_size,
             entry_fee_paid_usdc: entry_fee,
             current_price: entry_price,
+            peak_price: entry_price,
             opened_at:     Instant::now(),
             rn1_order_id,
             opened_at_wall: chrono::Local::now(),
@@ -421,6 +424,9 @@ impl PaperPortfolio {
         for pos in &mut self.positions {
             if pos.token_id == token_id {
                 pos.current_price = new_price;
+                if new_price > pos.peak_price {
+                    pos.peak_price = new_price;
+                }
             }
         }
     }
@@ -757,6 +763,7 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
                 shares: p.shares,
                 usdc_spent: p.usdc_spent,
                 current_price: p.current_price,
+                peak_price: p.current_price.max(p.entry_price),
                 entry_fee_paid_usdc: p.entry_fee_paid_usdc,
                 opened_at,
                 rn1_order_id: p.rn1_order_id,

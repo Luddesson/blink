@@ -1519,6 +1519,107 @@ impl PaperEngine {
             }
         }
 
+        // ── Trailing stop: once up 15%+, close if price drops 10% from peak ──
+        {
+            let trail_activate_pct: f64 = std::env::var("TRAILING_STOP_ACTIVATE_PCT")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(15.0);
+            let trail_drop_pct: f64 = std::env::var("TRAILING_STOP_DROP_PCT")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(10.0);
+            let trail_indexes: Vec<usize> = p.positions.iter().enumerate().filter_map(|(idx, pos)| {
+                let gain_from_entry = (pos.peak_price - pos.entry_price) / pos.entry_price * 100.0;
+                if gain_from_entry >= trail_activate_pct {
+                    let drop_from_peak = (pos.peak_price - pos.current_price) / pos.peak_price * 100.0;
+                    if drop_from_peak >= trail_drop_pct {
+                        return Some(idx);
+                    }
+                }
+                None
+            }).collect();
+            for idx in trail_indexes.into_iter().rev() {
+                let pos = p.positions.remove(idx);
+                let pnl = (pos.current_price - pos.entry_price) * pos.shares;
+                let exit_fee = polymarket_taker_fee(pos.shares, pos.current_price);
+                p.total_fees_paid_usdc += exit_fee;
+                p.cash_usdc += pos.usdc_spent + pnl - exit_fee;
+                self.risk.lock().unwrap().record_close(pnl - exit_fee);
+                let msg = format!("TRAILING-STOP: closed #{} peak={:.3} now={:.3} pnl={:+.2}",
+                    pos.id, pos.peak_price, pos.current_price, pnl - exit_fee);
+                if let Some(ref log) = self.activity {
+                    log_push(log, EntryKind::Engine, msg.clone());
+                }
+                info!("{msg}");
+                p.closed_trades.push(crate::paper_portfolio::ClosedTrade {
+                    token_id: pos.token_id.clone(),
+                    market_title: pos.market_title.clone(),
+                    side: pos.side,
+                    entry_price: pos.entry_price,
+                    exit_price: pos.current_price,
+                    shares: pos.shares,
+                    realized_pnl: pnl - exit_fee,
+                    fees_paid_usdc: pos.entry_fee_paid_usdc + exit_fee,
+                    reason: "trailing_stop".to_string(),
+                    opened_at_wall: pos.opened_at_wall,
+                    closed_at_wall: chrono::Local::now(),
+                    duration_secs: pos.opened_at.elapsed().as_secs(),
+                    scorecard: crate::paper_portfolio::ExecutionScorecard {
+                        slippage_bps: pos.entry_slippage_bps,
+                        queue_delay_ms: pos.queue_delay_ms,
+                        outcome_tags: vec!["trailing_stop".to_string()],
+                    },
+                });
+            }
+        }
+
+        // ── Time-based exit: close stagnant positions after 30 min ──────────
+        {
+            let stagnant_max_secs: u64 = std::env::var("STAGNANT_EXIT_SECS")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(1800);
+            let stagnant_threshold_pct: f64 = std::env::var("STAGNANT_THRESHOLD_PCT")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(5.0);
+            let stagnant_indexes: Vec<usize> = p.positions.iter().enumerate().filter_map(|(idx, pos)| {
+                if pos.opened_at.elapsed().as_secs() >= stagnant_max_secs {
+                    let move_pct = ((pos.current_price - pos.entry_price) / pos.entry_price * 100.0).abs();
+                    if move_pct < stagnant_threshold_pct {
+                        return Some(idx);
+                    }
+                }
+                None
+            }).collect();
+            for idx in stagnant_indexes.into_iter().rev() {
+                let pos = p.positions.remove(idx);
+                let pnl = (pos.current_price - pos.entry_price) * pos.shares;
+                let exit_fee = polymarket_taker_fee(pos.shares, pos.current_price);
+                p.total_fees_paid_usdc += exit_fee;
+                p.cash_usdc += pos.usdc_spent + pnl - exit_fee;
+                self.risk.lock().unwrap().record_close(pnl - exit_fee);
+                let msg = format!("STAGNANT-EXIT: closed #{} after {}s  pnl={:+.2}",
+                    pos.id, pos.opened_at.elapsed().as_secs(), pnl - exit_fee);
+                if let Some(ref log) = self.activity {
+                    log_push(log, EntryKind::Engine, msg.clone());
+                }
+                info!("{msg}");
+                p.closed_trades.push(crate::paper_portfolio::ClosedTrade {
+                    token_id: pos.token_id.clone(),
+                    market_title: pos.market_title.clone(),
+                    side: pos.side,
+                    entry_price: pos.entry_price,
+                    exit_price: pos.current_price,
+                    shares: pos.shares,
+                    realized_pnl: pnl - exit_fee,
+                    fees_paid_usdc: pos.entry_fee_paid_usdc + exit_fee,
+                    reason: "stagnant_exit".to_string(),
+                    opened_at_wall: pos.opened_at_wall,
+                    closed_at_wall: chrono::Local::now(),
+                    duration_secs: pos.opened_at.elapsed().as_secs(),
+                    scorecard: crate::paper_portfolio::ExecutionScorecard {
+                        slippage_bps: pos.entry_slippage_bps,
+                        queue_delay_ms: pos.queue_delay_ms,
+                        outcome_tags: vec!["stagnant_exit".to_string()],
+                    },
+                });
+            }
+        }
+
         // Close fully resolved positions:
         //  • price ≥ 0.99  → outcome resolved YES / team won  (harvest full winner)
         //  • price ≤ 0.01  → outcome resolved NO  / team lost (free trapped capital)

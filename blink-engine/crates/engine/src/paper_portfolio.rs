@@ -42,12 +42,21 @@ fn realism_mode() -> bool {
     env_flag("PAPER_REALISM_MODE")
 }
 
-fn taker_fee_bps() -> f64 {
-    std::env::var("PAPER_TAKER_FEE_BPS")
+fn taker_fee_rate() -> f64 {
+    std::env::var("POLYMARKET_FEE_RATE")
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(7.0)
-        .clamp(0.0, 500.0)
+        .unwrap_or(0.05) // "Other/General" default; crypto=0.072, sports=0.03
+        .clamp(0.0, 0.20)
+}
+
+/// Polymarket taker fee: `shares × feeRate × p × (1 - p)`
+/// Peaks at p=0.50, drops to near-zero at extremes (p→0 or p→1).
+pub fn polymarket_taker_fee(shares: f64, price: f64) -> f64 {
+    let rate = taker_fee_rate();
+    let fee = shares * rate * price * (1.0 - price);
+    // Round to 5 decimal places per Polymarket spec
+    (fee * 100_000.0).round() / 100_000.0
 }
 
 fn exit_haircut_bps() -> f64 {
@@ -377,7 +386,7 @@ impl PaperPortfolio {
         let shares = usdc_size / entry_price;
         let id     = self.next_id;
         self.next_id   += 1;
-        let entry_fee = usdc_size * (taker_fee_bps() / 10_000.0);
+        let entry_fee = polymarket_taker_fee(shares, entry_price);
         self.cash_usdc -= usdc_size + entry_fee;
         // Track entry fee in the global fees counter and per-position for accounting.
         self.total_fees_paid_usdc += entry_fee;
@@ -430,12 +439,7 @@ impl PaperPortfolio {
                 OrderSide::Buy => (pos.current_price - pos.entry_price) * pos.shares,
                 OrderSide::Sell => (pos.entry_price - pos.current_price) * pos.shares,
             };
-            let exit_fee = if realism_mode() {
-                (pos.current_price * pos.shares) * (taker_fee_bps() / 10_000.0)
-            } else {
-                0.0
-            };
-            // Attribute per-position entry fee and record exit fee.
+            let exit_fee = polymarket_taker_fee(pos.shares, pos.current_price);
             let entry_fee_portion = pos.entry_fee_paid_usdc;
             self.total_fees_paid_usdc += exit_fee;
             self.cash_usdc += pos.usdc_spent + pnl - exit_fee;
@@ -539,11 +543,7 @@ impl PaperPortfolio {
                 OrderSide::Buy => (pos.current_price - pos.entry_price) * pos.shares,
                 OrderSide::Sell => (pos.entry_price - pos.current_price) * pos.shares,
             };
-            let exit_fee = if realism_mode() {
-                (pos.current_price * pos.shares) * (taker_fee_bps() / 10_000.0)
-            } else {
-                0.0
-            };
+            let exit_fee = polymarket_taker_fee(pos.shares, pos.current_price);
             let entry_fee_portion = pos.entry_fee_paid_usdc;
             // Record exit fee in global counter and settle cash.
             self.total_fees_paid_usdc += exit_fee;
@@ -583,11 +583,7 @@ impl PaperPortfolio {
             OrderSide::Buy => (pos.current_price - pos.entry_price) * close_shares,
             OrderSide::Sell => (pos.entry_price - pos.current_price) * close_shares,
         };
-        let exit_fee = if realism_mode() {
-            (pos.current_price * close_shares) * (taker_fee_bps() / 10_000.0)
-        } else {
-            0.0
-        };
+        let exit_fee = polymarket_taker_fee(close_shares, pos.current_price);
         let entry_fee_portion = pos.entry_fee_paid_usdc * fraction;
         // Record exit fee and attribute entry fee portion to this closed slice.
         self.total_fees_paid_usdc += exit_fee;

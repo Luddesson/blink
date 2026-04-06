@@ -20,7 +20,7 @@ use tracing::{info, warn};
 use crate::activity_log::{ActivityLog, EntryKind, push as log_push};
 use crate::latency_tracker::LatencyStats;
 use crate::order_book::{OrderBook, OrderBookStore};
-use crate::paper_portfolio::{DRIFT_THRESHOLD, PaperPortfolio, STARTING_BALANCE_USDC};
+use crate::paper_portfolio::{DRIFT_THRESHOLD, PaperPortfolio, STARTING_BALANCE_USDC, polymarket_taker_fee};
 use crate::risk_manager::{RiskConfig, RiskManager};
 use crate::types::{OrderSide, RN1Signal, format_price};
 
@@ -477,9 +477,7 @@ impl PaperEngine {
             }) {
                 let pos = p.positions.remove(idx);
                 let exit_price = pos.current_price.clamp(0.001, 0.999);
-                let fee_bps = std::env::var("PAPER_TAKER_FEE_BPS")
-                    .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(7.0);
-                let exit_fee = (exit_price * pos.shares) * (fee_bps / 10_000.0);
+                let exit_fee = polymarket_taker_fee(pos.shares, exit_price);
                 let pnl = (exit_price - pos.entry_price) * pos.shares - exit_fee;
                 p.total_fees_paid_usdc += exit_fee;
                 p.cash_usdc += pos.usdc_spent + pnl;
@@ -1422,11 +1420,7 @@ impl PaperEngine {
                 OrderSide::Buy => (pos.current_price - pos.entry_price) * pos.shares,
                 OrderSide::Sell => (pos.entry_price - pos.current_price) * pos.shares,
             };
-            let fee_bps = std::env::var("PAPER_TAKER_FEE_BPS")
-                .ok()
-                .and_then(|v| v.parse::<f64>().ok())
-                .unwrap_or(7.0);
-            let exit_fee = (pos.current_price * pos.shares) * (fee_bps / 10_000.0);
+            let exit_fee = polymarket_taker_fee(pos.shares, pos.current_price);
             // Record fees paid and settle cash.
             p.total_fees_paid_usdc += exit_fee;
             p.cash_usdc += pos.usdc_spent + pnl - exit_fee;
@@ -1510,10 +1504,6 @@ impl PaperEngine {
         if !resolved_indexes.is_empty() {
             let n = resolved_indexes.len();
             let mut total_pnl = 0.0f64;
-            let fee_bps = std::env::var("PAPER_TAKER_FEE_BPS")
-                .ok()
-                .and_then(|v| v.parse::<f64>().ok())
-                .unwrap_or(7.0);
             for idx in resolved_indexes.into_iter().rev() {
                 let pos = p.positions.remove(idx);
                 let exit_price = pos.current_price.clamp(0.0, 1.0);
@@ -1521,7 +1511,7 @@ impl PaperEngine {
                     OrderSide::Buy => (exit_price - pos.entry_price) * pos.shares,
                     OrderSide::Sell => (pos.entry_price - exit_price) * pos.shares,
                 };
-                let exit_fee = (exit_price * pos.shares) * (fee_bps / 10_000.0);
+                let exit_fee = polymarket_taker_fee(pos.shares, exit_price);
                 // Record fees and settle cash.
                 p.total_fees_paid_usdc += exit_fee;
                 p.cash_usdc += pos.usdc_spent + pnl - exit_fee;

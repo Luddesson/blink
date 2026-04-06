@@ -18,6 +18,7 @@ const LEVEL_COLORS: Record<string, string> = {
 
 export default function ActivityFeed({ wsEntries }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const [allEntries, setAllEntries] = useState<ActivityEntry[]>([])
 
   // Poll /api/activity (100 entries) as supplement to WS 5-entry truncation
@@ -40,8 +41,14 @@ export default function ActivityFeed({ wsEntries }: Props) {
     return [...base, ...wsEntries].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
   })()
 
+  // Only auto-scroll if user is near the bottom (within 80px)
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = scrollRef.current
+    if (!el) return
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (distFromBottom <= 80) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [merged.length])
 
   return (
@@ -49,7 +56,7 @@ export default function ActivityFeed({ wsEntries }: Props) {
       <span className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-2 shrink-0">
         Activity Feed
       </span>
-      <div className="flex-1 overflow-y-auto max-h-64 space-y-0.5 font-mono text-xs">
+      <div className="flex-1 overflow-y-auto max-h-64 space-y-0.5 font-mono text-xs" ref={scrollRef}>
         {merged.length === 0 && (
           <p className="text-slate-600 text-center py-4">No recent activity</p>
         )}

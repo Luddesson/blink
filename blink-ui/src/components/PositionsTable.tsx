@@ -87,7 +87,7 @@ function PositionsTable({ positions, loading, isLive, onRefresh }: Props) {
                     {label} <SortIcon k={k} />
                   </th>
                 ))}
-                {isLive && <th className="pb-2 text-right font-normal">Action</th>}
+                <th className="pb-2 text-right font-normal">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -102,17 +102,15 @@ function PositionsTable({ positions, loading, isLive, onRefresh }: Props) {
                   <td className={`py-2 pr-3 font-mono font-semibold ${pnlClass(p.unrealized_pnl)}`}>
                     {fmtPnl(p.unrealized_pnl)}
                   </td>
-                  {isLive && (
-                    <td className="py-2 text-right">
-                      <button
-                        onClick={() => handleSell(p.id)}
-                        disabled={selling === p.id}
-                        className="px-2 py-1 rounded text-xs bg-red-900/50 text-red-300 hover:bg-red-800 disabled:opacity-40"
-                      >
-                        {selling === p.id ? '...' : 'Sell'}
-                      </button>
-                    </td>
-                  )}
+                  <td className="py-2 text-right">
+                    <button
+                      onClick={() => handleSell(p.id)}
+                      disabled={selling === p.id}
+                      className="px-2 py-1 rounded text-xs bg-red-900/50 text-red-300 hover:bg-red-800 disabled:opacity-40"
+                    >
+                      {selling === p.id ? '...' : 'Sell'}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

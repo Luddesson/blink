@@ -1310,11 +1310,21 @@ impl PaperEngine {
         // If a position's market is no longer live (no book price), close it to
         // avoid stale overnight carry. This preserves the user's rule: keep open
         // positions only while event data remains live.
+        // Only close as "market_not_live" if the position has been held for at
+        // least 30 seconds — avoids closing freshly filled positions before the
+        // WS order-book has a chance to populate a price for the token.
+        let stale_min_age = Duration::from_secs(30);
         let stale_indexes: Vec<usize> = p.positions
             .iter()
             .enumerate()
             .filter_map(|(idx, pos)| {
-                if self.get_market_price(&pos.token_id).is_none() { Some(idx) } else { None }
+                if self.get_market_price(&pos.token_id).is_none()
+                    && pos.opened_at.elapsed() >= stale_min_age
+                {
+                    Some(idx)
+                } else {
+                    None
+                }
             })
             .collect();
         for idx in stale_indexes.into_iter().rev() {

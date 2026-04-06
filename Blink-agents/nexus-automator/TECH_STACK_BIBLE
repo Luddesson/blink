@@ -1,0 +1,203 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                  BLINK HFT — TECH STACK BIBLE                               ║
+║          Authoritative reference for every tool, crate, and service         ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+CRITICAL DECISION: LANGUAGE CHOICE
+────────────────────────────────────
+The execution engine is written in RUST. No Python, no Node.js, no exceptions.
+
+Reason: Python GIL prevents true parallelism. Node.js has V8 GC pauses.
+Rust offers: zero-cost abstractions, no garbage collector, fearless concurrency,
+SIMD intrinsics, and direct control over memory layout.
+
+However, for tooling, prototyping, and the ML pipeline, Python is acceptable.
+For API key setup and one-off scripts, TypeScript with @polymarket/clob-client
+is the fastest path.
+
+════════════════════════════════════════════════════════════
+TIER 1 — CORE RUST ENGINE CRATES
+════════════════════════════════════════════════════════════
+
+┌─────────────────────┬──────────────────────────────────────────────────────┐
+│ CRATE               │ PURPOSE                                              │
+├─────────────────────┼──────────────────────────────────────────────────────┤
+│ tokio               │ Async runtime. Use work_stealing scheduler.          │
+│                     │ Feature flags: full, rt-multi-thread, macros         │
+├─────────────────────┼──────────────────────────────────────────────────────┤
+│ tokio-tungstenite   │ Async WebSocket client over tokio.                   │
+│                     │ Feature: rustls-tls (avoid openssl dependency)       │
+│                     │ CRITICAL: set TCP_NODELAY=true (Nagle off)           │
+├─────────────────────┼──────────────────────────────────────────────────────┤
+│ simd-json           │ SIMD-accelerated JSON parser (AVX2).                 │
+│                     │ 20-40% faster than serde_json on x86_64.             │
+│                     │ NOTE: Requires mutable byte slice — plan accordingly │
+├─────────────────────┼──────────────────────────────────────────────────────┤
+│ alloy               │ Next-gen Ethereum library (successor to ethers-rs).  │
+│                     │ Use for: EIP-712 signing, wallet management,         │
+│                     │ Polygon RPC calls, ABI encoding/decoding             │
+│                     │ Key feature: alloy::signers::local::PrivateKeySigner │
+├─────────────────────┼──────────────────────────────────────────────────────┤
+│ crossbeam           │ Lock-free concurrent data structures.                │
+│                     │ Use crossbeam::channel for SPSC queues between       │
+│                     │ WebSocket thread and execution thread.               │
+│                     │ ArrayQueue for bounded, zero-alloc message passing.  │
+├─────────────────────┼──────────────────────────────────────────────────────┤
+│ jemallocator        │ jemalloc memory allocator. Reduces heap              │
+│                     │ fragmentation under high-frequency alloc/dealloc.   │
+│                     │ Add: #[global_allocator] static ALLOC: Jemalloc...  │
+├─────────────────────┼──────────────────────────────────────────────────────┤
+│ reqwest             │ Async HTTP client for CLOB REST API calls.           │
+│                     │ Use connection pooling. Reuse client across calls.  │
+│                     │ Feature: rustls-tls, json                            │
+├─────────────────────┼──────────────────────────────────────────────────────┤
+│ serde / serde_json  │ JSON serialization for order structs.                │
+│                     │ Use for non-hot-path serialization only.             │
+├─────────────────────┼──────────────────────────────────────────────────────┤
+│ dashmap             │ Concurrent HashMap — tracks open orders by market_id │
+├─────────────────────┼──────────────────────────────────────────────────────┤
+│ tracing             │ Structured, async-aware logging and telemetry.       │
+│                     │ tracing-subscriber for log output to ClickHouse.     │
+├─────────────────────┼──────────────────────────────────────────────────────┤
+│ thiserror           │ Ergonomic error types. Never use Box<dyn Error>      │
+│                     │ in hot paths — use typed enums for zero-cost errors. │
+├─────────────────────┼──────────────────────────────────────────────────────┤
+│ config              │ Configuration management. Load from .env and         │
+│                     │ TOML files. Never hardcode addresses or keys.        │
+├─────────────────────┼──────────────────────────────────────────────────────┤
+│ tokio-uring         │ io_uring-based I/O for Linux. Use on production      │
+│                     │ server for zero-copy network I/O.                    │
+│                     │ NOTE: Linux 5.1+ kernel required.                    │
+└─────────────────────┴──────────────────────────────────────────────────────┘
+
+Example Cargo.toml (core dependencies):
+
+[dependencies]
+tokio = { version = "1", features = ["full", "rt-multi-thread"] }
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
+alloy = { version = "0.3", features = ["full"] }
+simd-json = "0.13"
+crossbeam = "0.8"
+jemallocator = "0.5"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dashmap = "6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json"] }
+thiserror = "1"
+config = "0.14"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+════════════════════════════════════════════════════════════
+TIER 2 — INFRASTRUCTURE & OPERATIONS
+════════════════════════════════════════════════════════════
+
+┌──────────────────────┬─────────────────────────────────────────────────────┐
+│ TOOL / SERVICE       │ PURPOSE                                             │
+├──────────────────────┼─────────────────────────────────────────────────────┤
+│ Reth (Rust Ethereum) │ Full Polygon node. Rust-native. Faster sync and     │
+│                      │ lower latency than Erigon. Memory-mapped NVMe state.│
+│                      │ Endpoint: http://127.0.0.1:8545 (local RPC)         │
+├──────────────────────┼─────────────────────────────────────────────────────┤
+│ ClickHouse           │ Columnar database for tick data storage.             │
+│                      │ Handles billions of rows. Query in microseconds.     │
+│                      │ Use MergeTree engine for time-series order book data.│
+├──────────────────────┼─────────────────────────────────────────────────────┤
+│ OpenOnload (Solarflare│ Kernel-bypass networking driver. Sends data from   │
+│ NIC)                 │ NIC directly to userspace without OS interrupt.     │
+├──────────────────────┼─────────────────────────────────────────────────────┤
+│ chronyd + PTP        │ Hardware-timestamped time sync. Achieves ~1μs       │
+│                      │ accuracy. Required for accurate trade attribution.  │
+├──────────────────────┼─────────────────────────────────────────────────────┤
+│ eBPF / bpftrace      │ Linux kernel probes — trace packet latency without  │
+│                      │ adding overhead to the trading path itself.         │
+├──────────────────────┼─────────────────────────────────────────────────────┤
+│ Foundry (Forge/Cast) │ Smart contract testing framework. Fuzz testing,     │
+│                      │ invariant testing, and fork testing against mainnet. │
+├──────────────────────┼─────────────────────────────────────────────────────┤
+│ AWS Nitro Enclaves   │ TEE for private key storage. The Rust engine sends  │
+│                      │ unsigned order data to the enclave, which returns   │
+│                      │ only the signed bytes. Keys never leave the enclave.│
+├──────────────────────┼─────────────────────────────────────────────────────┤
+│ Docker / Compose     │ Local dev: Reth, ClickHouse, and eBPF tooling        │
+│                      │ containerized for reproducible setup.               │
+├──────────────────────┼─────────────────────────────────────────────────────┤
+│ GitHub Actions       │ CI/CD: compile → fuzz test → dry-run on Reth fork   │
+│                      │ → deploy to prod server only if all pass.           │
+└──────────────────────┴─────────────────────────────────────────────────────┘
+
+════════════════════════════════════════════════════════════
+TIER 3 — POLYMARKET-SPECIFIC TOOLING
+════════════════════════════════════════════════════════════
+
+Official SDKs (for reference and prototyping):
+  TypeScript: @polymarket/clob-client (npm)
+              Install: npm install @polymarket/clob-client ethers
+  Python:     py-clob-client (pypi)
+              Install: pip install py-clob-client
+
+IMPORTANT: There is NO official Rust SDK for Polymarket as of 2026.
+Our Rust engine implements the CLOB protocol from scratch using:
+  - reqwest for REST calls
+  - tokio-tungstenite for WebSocket
+  - alloy for EIP-712 signing
+
+Polymarket EIP-712 Domain:
+  name:              "Polymarket CTF Exchange"
+  version:           "1"
+  chainId:           137  (Polygon mainnet)
+  verifyingContract: 0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E
+
+Order type hash fields:
+  maker      address
+  taker      address
+  tokenId    uint256
+  makerAmount uint256
+  takerAmount uint256
+  expiration  uint256
+  nonce       uint256
+  feeRateBps  uint256
+  side        uint8   (0=BUY, 1=SELL)
+  signatureType uint8
+
+════════════════════════════════════════════════════════════
+TIER 4 — DEVELOPMENT ENVIRONMENT (LOCAL)
+════════════════════════════════════════════════════════════
+
+OS:          Windows 11 with WSL2 (Ubuntu 22.04 LTS)
+             All Rust development happens inside WSL2.
+IDE:         Cursor (VS Code fork with full-project AI context)
+             Install rust-analyzer extension for LSP support.
+Rust:        rustup with stable toolchain + nightly for SIMD intrinsics
+             rustup target add x86_64-unknown-linux-gnu
+
+Key WSL2 performance tips:
+  1. Place code on WSL2 native filesystem (/home/...), NOT /mnt/c/
+     (Windows filesystem mounts are ~10x slower for compilation)
+  2. Increase WSL2 memory in .wslconfig:
+     [wsl2]
+     memory=16GB
+     processors=8
+  3. Use "code ." inside WSL2 terminal — Cursor/VSCode will use remote mode
+
+════════════════════════════════════════════════════════════
+DECISION LOG — KEY CHOICES MADE
+════════════════════════════════════════════════════════════
+
+| Decision                | Choice           | Alternative        | Reason              |
+|-------------------------|------------------|--------------------|---------------------|
+| Blockchain node         | Reth             | Erigon             | Rust-native, faster |
+| TLS library             | rustls           | openssl            | Pure Rust, no C dep |
+| Ethereum lib            | alloy-rs         | ethers-rs          | Active, modern API  |
+| Memory allocator        | jemalloc         | system alloc       | Less fragmentation  |
+| JSON parser (hot path)  | simd-json        | serde_json         | 20-40% faster       |
+| Key storage             | AWS Nitro Enclave| HSM / env var      | TEE = tamperproof   |
+| DB for tick data        | ClickHouse       | PostgreSQL/TimescaleDB | Columnar, faster |
+| WebSocket               | tokio-tungstenite| async-tungstenite  | tokio native        |
+| CI/CD                   | GitHub Actions   | Jenkins            | Free, cloud-based   |

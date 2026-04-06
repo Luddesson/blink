@@ -49,6 +49,7 @@ pub struct PaperEngine {
     signal_meta_cache: Arc<Mutex<HashMap<String, CachedSignalMeta>>>,
     seen_order_ids: Arc<Mutex<HashSet<String>>>,
     token_cooldowns: Arc<Mutex<HashMap<String, Instant>>>,
+    equity_tick: std::sync::atomic::AtomicU64,
 }
 
 /// Snapshot of the currently active fill window, if any.
@@ -287,11 +288,16 @@ impl PaperEngine {
             signal_meta_cache: Arc::new(Mutex::new(HashMap::new())),
             seen_order_ids: Arc::new(Mutex::new(HashSet::with_capacity(512))),
             token_cooldowns: Arc::new(Mutex::new(HashMap::new())),
+            equity_tick: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
     pub fn twin_health_handle(&self) -> Arc<Mutex<TwinHealth>> {
         Arc::clone(&self.twin_health)
+    }
+
+    pub fn rejection_analytics_handle(&self) -> Arc<Mutex<RejectionAnalytics>> {
+        Arc::clone(&self.rejection_analytics)
     }
 
     pub fn risk_status(&self) -> String {
@@ -505,7 +511,7 @@ impl PaperEngine {
 
         // Twin-based throttle (shared health signal).
         {
-            let th = self.twin_health.lock().await.clone();
+            let th = self.twin_health.lock().await;
             let throttle = if th.abort_rate > 0.70 && th.close_rate < 0.05 {
                 0.4
             } else if th.abort_rate > 0.50 {
@@ -513,6 +519,7 @@ impl PaperEngine {
             } else {
                 1.0
             };
+            drop(th);
             size_usdc *= throttle;
         }
 
@@ -1147,9 +1154,11 @@ impl PaperEngine {
     /// then appends an equity curve sample. Call from a background timer (every
     /// ~1 s) to keep unrealized PnL and the equity chart live in web mode.
     pub async fn tick_mark_prices(&self) {
+        let tick = self.equity_tick.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let should_push = tick % 10 == 0; // push every 10s
         let mut p = self.portfolio.lock().await;
         if p.positions.is_empty() {
-            p.push_equity_snapshot();
+            if should_push { p.push_equity_snapshot(); }
             return;
         }
         let updates: Vec<(String, f64)> = p
@@ -1163,7 +1172,7 @@ impl PaperEngine {
         for (token_id, price) in updates {
             p.update_price(&token_id, price);
         }
-        p.push_equity_snapshot();
+        if should_push { p.push_equity_snapshot(); }
     }
 
     async fn enrich_signal_metadata(&self, signal: &mut RN1Signal) {
@@ -1314,16 +1323,30 @@ impl PaperEngine {
                 OrderSide::Buy => (pos.current_price - pos.entry_price) * pos.shares,
                 OrderSide::Sell => (pos.entry_price - pos.current_price) * pos.shares,
             };
-            p.cash_usdc += pos.usdc_spent + pnl;
+            let realism = std::env::var("PAPER_REALISM_MODE")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false);
+            let exit_fee = if realism {
+                let fee_bps = std::env::var("PAPER_TAKER_FEE_BPS")
+                    .ok()
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(100.0);
+                (pos.current_price * pos.shares) * (fee_bps / 10_000.0)
+            } else { 0.0 };
+            // Record fees paid and settle cash.
+            p.total_fees_paid_usdc += exit_fee;
+            p.cash_usdc += pos.usdc_spent + pnl - exit_fee;
             // Update risk manager with realized P&L from stale close.
-            self.risk.lock().unwrap().record_close(pnl);
+            self.risk.lock().unwrap().record_close(pnl - exit_fee);
             p.closed_trades.push(crate::paper_portfolio::ClosedTrade {
                 token_id: pos.token_id.clone(),
+                market_title: pos.market_title.clone(),
                 side: pos.side,
                 entry_price: pos.entry_price,
                 exit_price: pos.current_price,
                 shares: pos.shares,
-                realized_pnl: pnl,
+                realized_pnl: pnl - exit_fee,
+                fees_paid_usdc: pos.entry_fee_paid_usdc + exit_fee,
                 reason: "autoclaim@market_not_live".to_string(),
                 opened_at_wall: pos.opened_at_wall,
                 closed_at_wall: chrono::Local::now(),
@@ -1355,6 +1378,27 @@ impl PaperEngine {
             info!("{msg}");
         }
 
+        // ── Stop-loss ────────────────────────────────────────────────────────
+        let stop_loss_enabled = env_flag("STOP_LOSS_ENABLED");
+        let stop_loss_pct = std::env::var("STOP_LOSS_PCT")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(35.0)
+            .clamp(1.0, 99.0);
+        if stop_loss_enabled {
+            let sl_before = p.closed_trades.len();
+            let stopped = p.stop_loss_check(stop_loss_pct);
+            if stopped > 0 {
+                let realized: f64 = p.closed_trades[sl_before..].iter().map(|t| t.realized_pnl).sum();
+                self.risk.lock().unwrap().record_close(realized);
+                let msg = format!("STOP-LOSS: {} position(s) cut at -{:.0}%  pnl={:+.2}", stopped, stop_loss_pct, realized);
+                if let Some(ref log) = self.activity {
+                    log_push(log, EntryKind::Warn, msg.clone());
+                }
+                warn!("{msg}");
+            }
+        }
+
         // Close fully resolved positions:
         //  • price ≥ 0.99  → outcome resolved YES / team won  (harvest full winner)
         //  • price ≤ 0.01  → outcome resolved NO  / team lost (free trapped capital)
@@ -1372,6 +1416,13 @@ impl PaperEngine {
         if !resolved_indexes.is_empty() {
             let n = resolved_indexes.len();
             let mut total_pnl = 0.0f64;
+            let realism = std::env::var("PAPER_REALISM_MODE")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false);
+            let fee_bps = std::env::var("PAPER_TAKER_FEE_BPS")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(100.0);
             for idx in resolved_indexes.into_iter().rev() {
                 let pos = p.positions.remove(idx);
                 let exit_price = pos.current_price.clamp(0.0, 1.0);
@@ -1379,9 +1430,13 @@ impl PaperEngine {
                     OrderSide::Buy => (exit_price - pos.entry_price) * pos.shares,
                     OrderSide::Sell => (pos.entry_price - exit_price) * pos.shares,
                 };
-                let cash_back = pos.usdc_spent + pnl;
-                p.cash_usdc += cash_back;
-                total_pnl += pnl;
+                let exit_fee = if realism {
+                    (exit_price * pos.shares) * (fee_bps / 10_000.0)
+                } else { 0.0 };
+                // Record fees and settle cash.
+                p.total_fees_paid_usdc += exit_fee;
+                p.cash_usdc += pos.usdc_spent + pnl - exit_fee;
+                total_pnl += pnl - exit_fee;
                 let reason = if exit_price >= 0.99 {
                     "resolved@winner"
                 } else {
@@ -1389,11 +1444,13 @@ impl PaperEngine {
                 };
                 p.closed_trades.push(crate::paper_portfolio::ClosedTrade {
                     token_id: pos.token_id.clone(),
+                    market_title: pos.market_title.clone(),
                     side: pos.side,
                     entry_price: pos.entry_price,
                     exit_price,
                     shares: pos.shares,
-                    realized_pnl: pnl,
+                    realized_pnl: pnl - exit_fee,
+                    fees_paid_usdc: pos.entry_fee_paid_usdc + exit_fee,
                     reason: reason.to_string(),
                     opened_at_wall: pos.opened_at_wall,
                     closed_at_wall: chrono::Local::now(),

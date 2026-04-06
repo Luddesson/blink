@@ -1,0 +1,203 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║          BLINK HFT SYSTEM — MASTER DEVELOPMENT ROADMAP                      ║
+║          Shadow Maker Engine for Polymarket Sports Markets                   ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+STRATEGIC OBJECTIVE
+────────────────────
+Build an ultra-low-latency copy-trading engine that identifies when target
+wallet RN1 places limit orders on Polymarket sports markets, and instantly
+positions our own Post-Only limit orders adjacent to theirs — earning maker
+rebates while minimizing taker fee exposure and slippage risk.
+
+═══════════════════════════════════════════════════════════════
+PHASE 0 — FOUNDATIONS & RESEARCH  (CURRENT PHASE)
+═══════════════════════════════════════════════════════════════
+Goal: Zero ambiguity before writing a single line of production code.
+
+[ ] 0.1  Read all existing agent blueprints (Aura, Q-Sigma, Wraith, Nexus, Sentinel)
+[ ] 0.2  Finalize tech stack decisions (see TECH_STACK_BIBLE)
+[ ] 0.3  Map all Polymarket API endpoints used by the engine (see POLYMARKET_API_REFERENCE)
+[ ] 0.4  Define target wallet (RN1) monitoring strategy
+[ ] 0.5  Establish local development environment on Windows (Cursor + WSL2 + Rust toolchain)
+[ ] 0.6  Set up test Polymarket account with paper-trading mode
+[ ] 0.7  Validate WebSocket connectivity to wss://ws-live-data.polymarket.com
+
+Deliverables:  This MASTER_ROADMAP, TECH_STACK_BIBLE, POLYMARKET_API_REFERENCE,
+               RUST_HFT_TIPS_AND_TRICKS, INFRASTRUCTURE_SETUP_GUIDE
+
+═══════════════════════════════════════════════════════════════
+PHASE 1 — LOCAL PROTOTYPE (RUST + WEBSOCKET SNIFFER)
+═══════════════════════════════════════════════════════════════
+Goal: A working Rust binary that connects to Polymarket CLOB WebSocket and
+correctly parses real-time order book updates, filtering for RN1 activity.
+
+[ ] 1.1  Initialize Rust workspace (Cargo.toml with all required crates)
+[ ] 1.2  Implement WebSocket connection manager (tokio + tokio-tungstenite)
+         — Auto-reconnect with exponential backoff
+         — Heartbeat/ping-pong loop to keep connection alive
+[ ] 1.3  Implement CLOB message parser using simd-json
+         — Parse order book delta messages
+         — Parse trade execution messages
+[ ] 1.4  Implement in-memory order book (BTreeMap, L1-cache-aligned)
+         — Buy side: max-heap semantics
+         — Sell side: min-heap semantics
+         — Microsecond-latency best-bid/best-ask lookup
+[ ] 1.5  Implement RN1 wallet sniffer
+         — Filter all incoming EIP-712 signed messages by maker address
+         — Detect: token_id, side (BUY/SELL), price, size
+[ ] 1.6  Log all detected RN1 trades to ClickHouse (local Docker instance)
+[ ] 1.7  Unit tests for all parsing and order book logic
+
+Deliverables:  /src/ws_client.rs, /src/order_book.rs, /src/sniffer.rs
+
+═══════════════════════════════════════════════════════════════
+PHASE 2 — ORDER EXECUTION ENGINE
+═══════════════════════════════════════════════════════════════
+Goal: The engine can sign and submit Post-Only limit orders to the CLOB,
+mirroring RN1's positions with correct sizing.
+
+[ ] 2.1  Integrate alloy-rs for EIP-712 local signing
+         — Load private key from TEE/env (never hardcode)
+         — Implement Polymarket-specific EIP-712 domain separator
+         — Sign LimitOrderData structs locally (zero API round-trips for signing)
+[ ] 2.2  Implement order sizing algorithm
+         — SIZE_MULTIPLIER logic: Your_Size = RN1_Size × 0.02
+         — Liquidity cap: never exceed top-of-book available liquidity × 0.05
+         — Hard cap: max $1,000 per order
+[ ] 2.3  Implement order submission via CLOB REST API
+         — POST /order endpoint
+         — Append Post-Only flag (maker: true in order params)
+         — If order would cross spread (taker), drop it silently — DO NOT submit
+[ ] 2.4  Implement order cancellation
+         — DELETE /order/{order_id}
+         — Batch cancel via DELETE /orders (for game-start order wipe)
+[ ] 2.5  FOK/FAK order support for aggressive entries
+[ ] 2.6  Integration test against Polymarket testnet/sandbox
+
+Deliverables:  /src/signer.rs, /src/order_builder.rs, /src/clob_client.rs
+
+═══════════════════════════════════════════════════════════════
+PHASE 3 — SPORTS-SPECIFIC LOGIC & FAILSAFES
+═══════════════════════════════════════════════════════════════
+Goal: Implement all mechanics specific to live sports markets.
+
+[ ] 3.1  3-Second In-Play Delay Handler
+         — When order enters 3-second countdown, spawn a watchdog task
+         — Watchdog polls GET /price at 100ms intervals
+         — If implied probability shifts >1.5% → fire CancelOrder immediately
+         — Use tokio::time::timeout to enforce hard deadline
+[ ] 3.2  Pre-Game Order Wipe Listener
+         — Subscribe to game-start events from sports data API
+         — At game_start signal: cancel ALL open orders for that market_id
+         — Flush local order cache
+[ ] 3.3  Sports Market Discovery
+         — Gamma API: GET /sports for available sports tags
+         — GET /events?tag_id=X&active=true&closed=false for active markets
+         — Filter for markets where RN1 has shown historical activity
+[ ] 3.4  Volatility Filter
+         — Track implied probability change rate (Δprice / Δtime) per market
+         — Refuse to enter positions in markets with Δ > 5% in last 30 seconds
+[ ] 3.5  Negative Risk (-Risk) market support
+         — negRisk=true markets use different settlement logic
+         — Implement separate tick size handling
+
+Deliverables:  /src/sports_handler.rs, /src/failsafe.rs, /src/market_scanner.rs
+
+═══════════════════════════════════════════════════════════════
+PHASE 4 — RISK & SENTINEL INTEGRATION
+═══════════════════════════════════════════════════════════════
+Goal: Enforce hard financial safety limits. Capital preservation is absolute.
+
+[ ] 4.1  Dynamic Value-at-Risk (VaR) Calculator
+         — Rolling 60-second exposure tracking
+         — If outstanding orders > 5% of portfolio NAV → kill all positions
+[ ] 4.2  Circuit Breakers
+         — Max daily loss limit: configurable (default 2% of NAV)
+         — Max single-order size: $1,000
+         — Max concurrent open orders: 10
+         — Max orders per second: 3 (to avoid CLOB rate limits)
+[ ] 4.3  TEE Key Management
+         — Private keys in AWS Nitro Enclave or Intel SGX
+         — Rust engine requests signatures from enclave via vsock
+         — Keys never appear in RAM or logs
+[ ] 4.4  Emergency Kill Switch
+         — Hardware kill switch endpoint (separate process)
+         — Cancel all open orders + disconnect all WebSocket streams
+[ ] 4.5  Formal verification of Solidity contracts (Foundry + Halmos)
+
+Deliverables:  /src/risk_manager.rs, /src/circuit_breaker.rs, enclave/
+
+═══════════════════════════════════════════════════════════════
+PHASE 5 — INFRASTRUCTURE & PRODUCTION DEPLOYMENT
+═══════════════════════════════════════════════════════════════
+Goal: Move from local dev to co-located production server with full
+kernel-level latency optimizations.
+
+[ ] 5.1  Provision bare-metal server (AWS US-East-1 / Frankfurt)
+         — 32-core CPU, 128GB RAM, 2TB NVMe SSD
+         — Solarflare XtremeScale NIC with OpenOnload driver
+[ ] 5.2  OS-level tuning (see INFRASTRUCTURE_SETUP_GUIDE)
+         — Disable hyperthreading, C-states, CPU frequency scaling
+         — NUMA pinning: bind trading process to cores sharing same memory node as NIC
+         — io_uring for asynchronous disk and network I/O
+[ ] 5.3  Deploy Reth full node on the same machine
+         — Configure Reth to use NVMe-backed memory-mapped state
+         — Sync to Polygon mainnet (chain ID 137)
+[ ] 5.4  PTP time synchronization
+         — chronyd with hardware timestamping
+         — Target: microsecond-level clock accuracy
+[ ] 5.5  Deploy eBPF telemetry probes (Nexus)
+         — Measure: network stack latency, Rust app processing time
+         — Alert on any packet path > 500 microseconds
+[ ] 5.6  Deploy ClickHouse for tick data storage
+[ ] 5.7  Set up GitHub Actions CI/CD pipeline
+
+Deliverables:  /infra/setup.sh, /infra/reth_config.toml, /infra/ebpf/
+
+═══════════════════════════════════════════════════════════════
+PHASE 6 — MEV PROTECTION & TRANSACTION ROUTING (WRAITH)
+═══════════════════════════════════════════════════════════════
+Goal: Make our on-chain settlements invisible to MEV bots.
+
+[ ] 6.1  Integrate Flashbots / bloXroute Builder API
+         — Route signed bundles via eth_sendBundle (bypass public mempool)
+[ ] 6.2  Implement dynamic EIP-1559 gas pricing
+         — Formula: Priority_Fee = (Expected_Profit × 0.10) / Gas_Limit
+[ ] 6.3  Set strict block.timestamp deadlines on all Solidity calls
+         — Invalidate trades that are delayed by malicious builders
+[ ] 6.4  MEV-Share hints: publish minimum information about intent
+
+Deliverables:  /src/tx_router.rs, /src/gas_oracle.rs
+
+═══════════════════════════════════════════════════════════════
+PHASE 7 — BACKTESTING, ML & OPTIMIZATION (NEXUS)
+═══════════════════════════════════════════════════════════════
+Goal: Continuously measure, learn, and improve profitability.
+
+[ ] 7.1  Historical backtester against ClickHouse tick data
+[ ] 7.2  Reinforcement learning model for gas price prediction
+[ ] 7.3  Optimize SIZE_MULTIPLIER dynamically based on realized P&L
+[ ] 7.4  A/B test different order placement strategies
+[ ] 7.5  Quarterly review of RN1 strategy — detect if their edge is decaying
+
+Deliverables:  /analytics/, /ml/
+
+═══════════════════════════════════════════════════════════════
+SUCCESS METRICS
+═══════════════════════════════════════════════════════════════
+- Order submission latency: < 5ms from RN1 detection to order on CLOB
+- WebSocket parse latency: < 100μs per message
+- 3-second failsafe accuracy: 100% (zero missed cancellations)
+- Daily max drawdown: < 2% of NAV
+- Maker fill rate: > 80% (we are making the market, not taking it)
+- Uptime SLA: 99.9%
+
+═══════════════════════════════════════════════════════════════
+AGENT RESPONSIBILITY MATRIX
+═══════════════════════════════════════════════════════════════
+Aura-1 (AURA_ARCHITECT)   → Phase 5 infrastructure, OS tuning, Reth node
+Q-Sigma (QSIGMA_QUANT)    → Phase 1, 2, 3 Rust engine code
+Wraith (WRAITH_STEALTH)   → Phase 6 MEV protection and tx routing
+Nexus (NEXUS_AUTOMATOR)   → Phase 5 telemetry, Phase 7 ML/backtesting
+Sentinel (SENTINEL_RISK)  → Phase 4 risk management, key security

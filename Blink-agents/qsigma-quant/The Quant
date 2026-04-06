@@ -1,0 +1,39 @@
+Pivoting to the sports and e-sports markets is the exact right move. It bypasses the predatory dynamic fees associated with high-frequency crypto pairs and targets inefficiencies in real-world event latency.
+
+To execute this, we need to add a highly specialized document to your Execution Engine Core folder. Polymarket handles sports differently than static crypto markets—it uses a hybrid system with a Central Limit Order Book (CLOB) where orders are matched off-chain and settled on-chain.
+
+Here is the blueprint for your sports-specific execution engine. You can copy this into your project folder.
+
+📂 HFT_ULTRA_LATENCY_PROJECT_V1.0
+📁 DEPARTMENT 2: THE QUANT (Math & Execution Logic)
+📄 Doc 2.2: The Sports & E-Sports Execution Protocol
+Author: Q-Sigma (Strategy Lead)
+Objective: Exploit order book dynamics in low-liquidity, high-volatility sports markets.
+
+This document dictates how the bot translates RN1's sports trades into actionable, profitable orders without getting crushed by slippage in thin order books.
+
+Phase 1: The WebSocket Data Pipeline (Rust)
+You cannot rely on the standard blockchain mempool for sports markets because Polymarket matches these trades off-chain first.
+
+The CLOB Connection: Your Rust engine must establish a persistent, multi-threaded WebSocket connection directly to wss://ws-live-data.polymarket.com and wss://sports-api.polymarket.com/ws.
+
+The Sniffer: The engine filters the live firehose of data strictly for RN1’s proxy wallet address. The millisecond an EIP-712 signed message from RN1 hits the CLOB, your engine parses the target market ID (token_id), the side (BUY/SELL), and the price.
+
+Phase 2: Dynamic Sizing & Slippage Control
+E-sports and niche sports (like minor tennis qualifiers or CS:GO matches) have vastly thinner liquidity than a Bitcoin market. If RN1 drops a $50,000 order, copying that exact size will push the price up against you, causing massive slippage.
+
+The Order Builder: Your bot must ping the GET /price endpoint via the CLOB API concurrently.
+
+The Multiplier Logic: Instead of copying the raw dollar amount, the bot calculates the available liquidity at the top of the order book and applies a SIZE_MULTIPLIER (e.g., copying exactly 5% of RN1's trade size or capping the max order at $1,000).
+
+Phase 3: FOK & FAK Execution
+In the sports meta, the score of a game can change while your transaction is in flight. You must never use standard Good-Til-Cancelled (GTC) limit orders.
+
+Fill-Or-Kill (FOK): If your bot calculates that it can get the exact same entry price as RN1, it submits an FOK order. If the liquidity has already shifted even a single cent, the Polymarket Exchange contract automatically kills your trade, saving your capital.
+
+Fill-And-Kill (FAK): If you are willing to tolerate a micro-amount of slippage, you use an FAK order. It fills whatever shares are available at your specified price ceiling and immediately cancels the rest, preventing your order from sitting "live" on the order book where MEV bots can attack it.
+
+Phase 4: The In-Play Delay Failsafe
+Polymarket enforces specific mechanics during live matches to prevent people from front-running the television feed.
+
+The 3-Second Rule: Marketable orders placed while a game is actively live often face a built-in 3-second placement delay before matching. Your Rust engine must calculate this delay window into its mathematical profitability model; if the market is too volatile, it must abort the copy-trade.

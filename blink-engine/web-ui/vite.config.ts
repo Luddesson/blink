@@ -7,8 +7,12 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:3030',
-      '/ws': { target: 'ws://localhost:3030', ws: true },
+      '/api': {
+        target: 'http://localhost:3030',
+        changeOrigin: true,
+      },
+      // NOTE: WebSocket proxy removed — causes ECONNRESET crashes.
+      // The app connects to the backend WS directly (see useApi.ts).
     },
   },
 })

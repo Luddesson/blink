@@ -48,7 +48,6 @@ pub struct PaperEngine {
     rn1_wallet: String,
     signal_meta_cache: Arc<Mutex<HashMap<String, CachedSignalMeta>>>,
     seen_order_ids: Arc<Mutex<HashSet<String>>>,
-    token_cooldowns: Arc<Mutex<HashMap<String, Instant>>>,
     equity_tick: std::sync::atomic::AtomicU64,
     /// Shared subscription list — new token_ids are added here on fill so the WS client
     /// subscribes and `get_market_price()` stays live for the position's lifetime.
@@ -291,7 +290,6 @@ impl PaperEngine {
             rn1_wallet: std::env::var("RN1_WALLET").unwrap_or_default(),
             signal_meta_cache: Arc::new(Mutex::new(HashMap::new())),
             seen_order_ids: Arc::new(Mutex::new(HashSet::with_capacity(512))),
-            token_cooldowns: Arc::new(Mutex::new(HashMap::new())),
             equity_tick: std::sync::atomic::AtomicU64::new(0),
             market_subscriptions,
             ws_force_reconnect,

@@ -72,6 +72,8 @@ struct PositionJson {
     unrealized_pnl_pct: f64,
     opened_at: String,
     opened_age_secs: u64,
+    fee_category: String,
+    fee_rate: f64,
 }
 
 #[derive(Serialize)]
@@ -233,6 +235,8 @@ async fn get_portfolio(State(state): State<AppState>) -> Json<serde_json::Value>
             unrealized_pnl_pct: pos.unrealized_pnl_pct(),
             opened_at: pos.opened_at_wall.to_rfc3339(),
             opened_age_secs: pos.opened_at.elapsed().as_secs(),
+            fee_category: pos.fee_category.clone(),
+            fee_rate: pos.fee_rate,
         }
     }).collect();
     let fees_paid = p.total_fees_paid_usdc;

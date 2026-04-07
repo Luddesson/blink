@@ -112,6 +112,22 @@ export default function NavCard({
               <YAxis domain={['dataMin - 0.3', 'dataMax + 0.3']} hide />
               <XAxis dataKey="t" hide />
               <ReferenceLine y={startNav} stroke="#1e293b" strokeDasharray="4 3" />
+              {/* Grid lines at 20/40/60/80% of range */}
+              {chartData.length > 1 && (() => {
+                const vals = chartData.map(d => d.v)
+                const mn = Math.min(...vals)
+                const mx = Math.max(...vals)
+                const range = mx - mn || 1
+                return [0.2, 0.4, 0.6, 0.8].map(p => (
+                  <ReferenceLine
+                    key={p}
+                    y={mn + range * p}
+                    stroke="#1e293b"
+                    strokeDasharray="2 4"
+                    strokeOpacity={0.5}
+                  />
+                ))
+              })()}
               <Tooltip
                 contentStyle={{
                   background: '#0f172a',
@@ -119,10 +135,10 @@ export default function NavCard({
                   borderRadius: 6,
                   fontSize: 11,
                 }}
-                labelFormatter={(label: number) =>
-                  new Date(label).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                labelFormatter={(label) =>
+                  new Date(Number(label)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 }
-                formatter={(v: number) => [`$${fmt(v)}`, 'NAV']}
+                formatter={(v) => [`$${fmt(Number(v))}`, 'NAV']}
               />
               <Area
                 type="monotone"

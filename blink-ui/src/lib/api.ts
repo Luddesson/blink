@@ -1,4 +1,7 @@
 import type {
+  BullpenConvergenceResponse,
+  BullpenDiscoveryResponse,
+  BullpenHealthResponse,
   FailsafeSnapshot,
   FillWindowResponse,
   FullPortfolio,
@@ -44,4 +47,7 @@ export const api = {
   sellPosition: (id: number, fraction = 1.0) =>
     post<{ ok: boolean; realized_pnl: number }>(`/api/positions/${id}/sell`, { fraction }),
   activity: () => get<{ entries: import('../types').ActivityEntry[] }>('/api/activity'),
+  bullpenHealth: () => get<BullpenHealthResponse>('/api/bullpen/health'),
+  bullpenDiscovery: () => get<BullpenDiscoveryResponse>('/api/bullpen/discovery'),
+  bullpenConvergence: () => get<BullpenConvergenceResponse>('/api/bullpen/convergence'),
 }

@@ -16,6 +16,9 @@ import FailsafePanel from './components/FailsafePanel'
 import CircuitBreakerAlarm from './components/CircuitBreakerAlarm'
 import PortfolioStats from './components/PortfolioStats'
 import ErrorBoundary from './components/ErrorBoundary'
+import BullpenHealth from './components/BullpenHealth'
+import DiscoveryPanel from './components/DiscoveryPanel'
+import ConvergenceAlert from './components/ConvergenceAlert'
 
 import type { RiskSummary } from './types'
 
@@ -37,6 +40,9 @@ export default function App() {
   const [cbDismissed, setCbDismissed] = useState(false)
 
   const { data: livePortfolio } = usePoll(api.livePortfolio, 5_000, isLive)
+  const { data: bullpenHealth } = usePoll(api.bullpenHealth, 10_000)
+  const { data: bullpenDiscovery } = usePoll(api.bullpenDiscovery, 15_000)
+  const { data: bullpenConvergence } = usePoll(api.bullpenConvergence, 5_000)
 
   const wsPaused = snapshot?.trading_paused ?? tradingPaused
   const risk: RiskSummary = snapshot?.risk ?? EMPTY_RISK
@@ -127,6 +133,15 @@ export default function App() {
           </ErrorBoundary>
           <ErrorBoundary label="FailsafePanel">
             <FailsafePanel />
+          </ErrorBoundary>
+          <ErrorBoundary label="BullpenHealth">
+            <BullpenHealth health={bullpenHealth} />
+          </ErrorBoundary>
+          <ErrorBoundary label="DiscoveryPanel">
+            <DiscoveryPanel discovery={bullpenDiscovery} />
+          </ErrorBoundary>
+          <ErrorBoundary label="ConvergenceAlert">
+            <ConvergenceAlert convergence={bullpenConvergence} />
           </ErrorBoundary>
         </aside>
 

@@ -1125,7 +1125,7 @@ fn render_modern_sidepanel(
         .constraints([
             Constraint::Length(7),
             Constraint::Length(7),
-            Constraint::Length(7),
+            Constraint::Length(8),
             Constraint::Min(6),
         ])
         .split(area);
@@ -1168,6 +1168,7 @@ fn render_modern_sidepanel(
         Line::from(format!(" engine: {}", if paused { "PAUSED" } else { "LIVE" })),
         Line::from(format!(" websocket: {}", if ws_live { "CONNECTED" } else { "DOWN" })),
         Line::from(format!(" twin: {}", if twin.enabled { "ACTIVE" } else { "IDLE" })),
+        Line::from(format!(" bullpen: {}", if std::env::var("BULLPEN_ENABLED").unwrap_or_default() == "true" { "ENABLED" } else { "OFF" })),
     ];
     f.render_widget(
         Paragraph::new(status_card).block(

@@ -179,6 +179,45 @@ export interface FillWindowResponse {
   countdown_secs?: number
 }
 
+// ─── Bullpen ─────────────────────────────────────────────────────────────────
+export interface BullpenHealthResponse {
+  enabled: boolean
+  authenticated?: boolean
+  consecutive_failures?: number
+  total_calls?: number
+  avg_latency_ms?: number
+  last_error?: string | null
+}
+
+export interface BullpenDiscoveryResponse {
+  enabled: boolean
+  total_markets?: number
+  scan_count?: number
+  markets?: BullpenDiscoveredMarket[]
+}
+
+export interface BullpenDiscoveredMarket {
+  token_id: string
+  lenses: string[]
+  viability_score: number
+  conviction_boost: number
+  smart_money_interest: boolean
+  seen_count: number
+}
+
+export interface BullpenConvergenceResponse {
+  enabled: boolean
+  active_signals?: BullpenConvergenceSignal[]
+}
+
+export interface BullpenConvergenceSignal {
+  market_title?: string
+  wallet_count: number
+  convergence_score: number
+  net_direction: string
+  total_usd: number
+}
+
 // ─── Metrics ─────────────────────────────────────────────────────────────────
 export interface MetricsResponse {
   available: boolean

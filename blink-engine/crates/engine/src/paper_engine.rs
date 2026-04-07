@@ -18,6 +18,7 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::activity_log::{ActivityLog, EntryKind, push as log_push};
+use crate::exit_strategy::{ExitAction, ExitConfig, evaluate_exits};
 use crate::latency_tracker::LatencyStats;
 use crate::order_book::{OrderBook, OrderBookStore};
 use crate::paper_portfolio::{DRIFT_THRESHOLD, PaperPortfolio, STARTING_BALANCE_USDC, polymarket_taker_fee};
@@ -53,6 +54,9 @@ pub struct PaperEngine {
     /// subscribes and `get_market_price()` stays live for the position's lifetime.
     market_subscriptions: Arc<std::sync::Mutex<Vec<String>>>,
     ws_force_reconnect: Arc<std::sync::atomic::AtomicBool>,
+    /// Per-token drift-abort cooldown. After a drift abort, the token is blocked
+    /// for DRIFT_ABORT_COOLDOWN_SECS seconds to prevent cascading redundant aborts.
+    drift_abort_cooldown: Arc<std::sync::Mutex<HashMap<String, Instant>>>,
 }
 
 /// Snapshot of the currently active fill window, if any.
@@ -293,6 +297,7 @@ impl PaperEngine {
             equity_tick: std::sync::atomic::AtomicU64::new(0),
             market_subscriptions,
             ws_force_reconnect,
+            drift_abort_cooldown: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -533,6 +538,20 @@ impl PaperEngine {
             }
         }
 
+        // ── Conviction-based sizing ──────────────────────────────────────
+        // Compute a dynamic multiplier using FilterConfig bonuses based on
+        // RN1 bet size, market category, sport, and liquidity.
+        let conviction_mult = {
+            let filter_cfg = crate::types::FilterConfig::from_env();
+            Some(crate::exit_strategy::conviction_multiplier(
+                rn1_notional_usd,
+                fee_category,
+                None, // sport tag — enriched below if available
+                0.0,  // liquidity — not yet fetched at this point
+                &filter_cfg,
+            ))
+        };
+
         // ── Sizing (brief lock, no await) ─────────────────────────────
         let (size_usdc, current_nav) = {
             let mut p = self.portfolio.lock().await;
@@ -540,7 +559,7 @@ impl PaperEngine {
             // Keep paper marks alive even when WS mark prices are stale/missing.
             // RN1 signal price becomes a fallback mark update for this token.
             p.update_price(&signal.token_id, entry_price);
-            let size = p.calculate_size_usdc(rn1_notional_usd);
+            let size = p.calculate_size_usdc_with_conviction(rn1_notional_usd, conviction_mult);
             let nav  = p.nav();
             (size, nav)
         };
@@ -691,6 +710,22 @@ impl PaperEngine {
             size_usdc *= throttle;
         }
 
+        // Price-confidence sizing: reduce position size for mid-range prices where
+        // outcome uncertainty is highest. Prices near 0.1 or 0.9 get full size;
+        // prices near 0.5 are capped at CONF_DISCOUNT of full size.
+        // Configurable via PAPER_CONFIDENCE_DISCOUNT (0.0 = no reduction, 0.5 = max 50% reduction at 0.5).
+        {
+            let discount = std::env::var("PAPER_CONFIDENCE_DISCOUNT")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.35)
+                .clamp(0.0, 0.75);
+            // uncertainty peaks at 0.5 (= 1.0) and is 0.0 at 0.0 or 1.0
+            let uncertainty = 1.0 - (2.0 * (entry_price - 0.5).abs()).clamp(0.0, 1.0);
+            let conf_mult = 1.0 - discount * uncertainty;
+            size_usdc *= conf_mult;
+        }
+
         let min_trade_usdc = std::env::var("PAPER_MIN_TRADE_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
@@ -736,11 +771,36 @@ impl PaperEngine {
         }
 
         // ── Fill window (adaptive, no lock held during sleep) ──────────────
+
+        // Per-token drift-abort cooldown: skip tokens that recently fired a drift
+        // abort to prevent cascading redundant aborts on the same volatile event.
+        let cooldown_secs = std::env::var("DRIFT_ABORT_COOLDOWN_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(30);
+        {
+            let mut cooldowns = self.drift_abort_cooldown.lock().unwrap();
+            // Evict expired entries
+            cooldowns.retain(|_, t| t.elapsed().as_secs() < cooldown_secs);
+            if cooldowns.contains_key(&signal.token_id) {
+                let mut p = self.portfolio.lock().await;
+                p.skipped_orders += 1;
+                drop(p);
+                self.record_rejection("drift_cooldown").await;
+                return;
+            }
+        }
+
         let filled = self
             .check_fill_window(&signal.token_id, entry_price, signal.side)
             .await;
 
         if !filled {
+            // Record this token in the abort cooldown map
+            self.drift_abort_cooldown
+                .lock()
+                .unwrap()
+                .insert(signal.token_id.clone(), Instant::now());
             let mut p = self.portfolio.lock().await;
             p.aborted_orders += 1;
             warn!(
@@ -1472,13 +1532,14 @@ impl PaperEngine {
             return;
         }
 
-        let tiers = parse_autoclaim_tiers();
+        let exit_config = ExitConfig::from_env();
 
         let mut p = self.portfolio.lock().await;
         if p.positions.is_empty() {
             return;
         }
 
+        // Refresh prices from live order book before evaluating exits.
         let token_prices: Vec<(String, f64)> = p.positions
             .iter()
             .filter_map(|pos| self.get_market_price(&pos.token_id).map(|pr| (pos.token_id.clone(), pr)))
@@ -1487,270 +1548,61 @@ impl PaperEngine {
             p.update_price(&token_id, price);
         }
 
-        // If a position's market is no longer live (no book price), close it to
-        // avoid stale overnight carry. This preserves the user's rule: keep open
-        // positions only while event data remains live.
-        // Only close as "market_not_live" if:
-        //   1. The WS book has no price AND the CLOB hasn't moved the price from entry, AND
-        //   2. The position has been held longer than STALE_CLOSE_SECS (default 5 min).
-        // This prevents premature 30-second closes that destroy copytrading PnL.
-        let stale_min_age = Duration::from_secs(
-            std::env::var("STALE_CLOSE_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(300),
-        );
-        let stale_indexes: Vec<usize> = p.positions
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, pos)| {
-                // Consider the market "live" if WS book has a price OR CLOB has moved the price.
-                let has_fresh_price = self.get_market_price(&pos.token_id).is_some()
-                    || (pos.current_price - pos.entry_price).abs() > 0.001;
-                if !has_fresh_price && pos.opened_at.elapsed() >= stale_min_age {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        for idx in stale_indexes.into_iter().rev() {
-            let pos = p.positions.remove(idx);
-            let pnl = match pos.side {
-                OrderSide::Buy => (pos.current_price - pos.entry_price) * pos.shares,
-                OrderSide::Sell => (pos.entry_price - pos.current_price) * pos.shares,
+        // Delegate exit decisions to the pure exit_strategy module.
+        let decisions = evaluate_exits(&p.positions, &exit_config, |token_id| {
+            self.get_market_price(token_id).is_some()
+        });
+
+        if decisions.is_empty() {
+            return;
+        }
+
+        // Process decisions in reverse index order to preserve indices during removal.
+        let mut sorted_decisions = decisions;
+        sorted_decisions.sort_by(|a, b| b.position_idx.cmp(&a.position_idx));
+
+        let mut total_realized = 0.0f64;
+        let mut action_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+
+        for decision in &sorted_decisions {
+            let idx = decision.position_idx;
+            if idx >= p.positions.len() {
+                continue;
+            }
+
+            let reason = decision.action.reason();
+            let fraction = decision.action.fraction();
+
+            let action_key = match &decision.action {
+                ExitAction::TakeProfit { .. } => "AUTOCLAIM",
+                ExitAction::StopLoss { .. } => "STOP-LOSS",
+                ExitAction::TrailingStop { .. } => "TRAILING-STOP",
+                ExitAction::StagnantExit { .. } => "STAGNANT-EXIT",
+                ExitAction::Resolved { .. } => "RESOLVED",
+                ExitAction::MarketNotLive { .. } => "STALE-CLOSE",
+                ExitAction::MaxHoldExpired { .. } => "MAX-HOLD",
             };
-            let exit_fee = polymarket_taker_fee(pos.shares, pos.current_price);
-            // Record fees paid and settle cash.
-            p.total_fees_paid_usdc += exit_fee;
-            p.cash_usdc += pos.usdc_spent + pnl - exit_fee;
-            // Update risk manager with realized P&L from stale close.
-            self.risk.lock().unwrap().record_close(pnl - exit_fee);
-            p.closed_trades.push(crate::paper_portfolio::ClosedTrade {
-                token_id: pos.token_id.clone(),
-                market_title: pos.market_title.clone(),
-                side: pos.side,
-                entry_price: pos.entry_price,
-                exit_price: pos.current_price,
-                shares: pos.shares,
-                realized_pnl: pnl - exit_fee,
-                fees_paid_usdc: pos.entry_fee_paid_usdc + exit_fee,
-                reason: "autoclaim@market_not_live".to_string(),
-                opened_at_wall: pos.opened_at_wall,
-                closed_at_wall: chrono::Local::now(),
-                duration_secs: pos.opened_at.elapsed().as_secs(),
-                scorecard: crate::paper_portfolio::ExecutionScorecard {
-                    slippage_bps: pos.entry_slippage_bps,
-                    queue_delay_ms: pos.queue_delay_ms,
-                    outcome_tags: vec![
-                        "market_not_live".to_string(),
-                        format!("variant:{}", pos.experiment_variant),
-                    ],
-                },
-            });
+            *action_counts.entry(action_key).or_insert(0) += 1;
+
+            let before = p.closed_trades.len();
+            let _removed = p.close_position_fraction(idx, fraction, reason);
+
+            // Sum realized P&L from newly closed trades.
+            let slice_pnl: f64 = p.closed_trades[before..].iter().map(|t| t.realized_pnl).sum();
+            total_realized += slice_pnl;
         }
 
-        let closed_before = p.closed_trades.len();
-        let closed = p.autoclaim_tiered(&tiers);
-        if closed > 0 {
-            // Update risk manager with realized P&L from tiered closes.
-            let realized: f64 = p.closed_trades[closed_before..]
-                .iter()
-                .map(|t| t.realized_pnl)
-                .sum();
-            self.risk.lock().unwrap().record_close(realized);
-            let msg = format!("AUTOCLAIM: {} tiered close action(s)", closed);
+        // Update risk manager with total realized P&L.
+        if total_realized.abs() > f64::EPSILON {
+            self.risk.lock().unwrap().record_close(total_realized);
+        }
+
+        // Log summary per action type.
+        for (action_key, count) in &action_counts {
+            let msg = format!("{}: {} position(s) closed  total_pnl={:+.2}", action_key, count, total_realized);
             if let Some(ref log) = self.activity {
-                log_push(log, EntryKind::Engine, msg.clone());
-            }
-            info!("{msg}");
-        }
-
-        // ── Stop-loss ────────────────────────────────────────────────────────
-        let stop_loss_pct = std::env::var("STOP_LOSS_PCT")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(25.0)
-            .clamp(1.0, 99.0);
-        {
-            let sl_before = p.closed_trades.len();
-            let stopped = p.stop_loss_check(stop_loss_pct);
-            if stopped > 0 {
-                let realized: f64 = p.closed_trades[sl_before..].iter().map(|t| t.realized_pnl).sum();
-                self.risk.lock().unwrap().record_close(realized);
-                let msg = format!("STOP-LOSS: {} position(s) cut at -{:.0}%  pnl={:+.2}", stopped, stop_loss_pct, realized);
-                if let Some(ref log) = self.activity {
-                    log_push(log, EntryKind::Warn, msg.clone());
-                }
-                warn!("{msg}");
-            }
-        }
-
-        // ── Trailing stop: once up 15%+, close if price drops 10% from peak ──
-        {
-            let trail_activate_pct: f64 = std::env::var("TRAILING_STOP_ACTIVATE_PCT")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(15.0);
-            let trail_drop_pct: f64 = std::env::var("TRAILING_STOP_DROP_PCT")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(10.0);
-            let trail_indexes: Vec<usize> = p.positions.iter().enumerate().filter_map(|(idx, pos)| {
-                let gain_from_entry = (pos.peak_price - pos.entry_price) / pos.entry_price * 100.0;
-                if gain_from_entry >= trail_activate_pct {
-                    let drop_from_peak = (pos.peak_price - pos.current_price) / pos.peak_price * 100.0;
-                    if drop_from_peak >= trail_drop_pct {
-                        return Some(idx);
-                    }
-                }
-                None
-            }).collect();
-            for idx in trail_indexes.into_iter().rev() {
-                let pos = p.positions.remove(idx);
-                let pnl = (pos.current_price - pos.entry_price) * pos.shares;
-                let exit_fee = polymarket_taker_fee(pos.shares, pos.current_price);
-                p.total_fees_paid_usdc += exit_fee;
-                p.cash_usdc += pos.usdc_spent + pnl - exit_fee;
-                self.risk.lock().unwrap().record_close(pnl - exit_fee);
-                let msg = format!("TRAILING-STOP: closed #{} peak={:.3} now={:.3} pnl={:+.2}",
-                    pos.id, pos.peak_price, pos.current_price, pnl - exit_fee);
-                if let Some(ref log) = self.activity {
-                    log_push(log, EntryKind::Engine, msg.clone());
-                }
-                info!("{msg}");
-                p.closed_trades.push(crate::paper_portfolio::ClosedTrade {
-                    token_id: pos.token_id.clone(),
-                    market_title: pos.market_title.clone(),
-                    side: pos.side,
-                    entry_price: pos.entry_price,
-                    exit_price: pos.current_price,
-                    shares: pos.shares,
-                    realized_pnl: pnl - exit_fee,
-                    fees_paid_usdc: pos.entry_fee_paid_usdc + exit_fee,
-                    reason: "trailing_stop".to_string(),
-                    opened_at_wall: pos.opened_at_wall,
-                    closed_at_wall: chrono::Local::now(),
-                    duration_secs: pos.opened_at.elapsed().as_secs(),
-                    scorecard: crate::paper_portfolio::ExecutionScorecard {
-                        slippage_bps: pos.entry_slippage_bps,
-                        queue_delay_ms: pos.queue_delay_ms,
-                        outcome_tags: vec!["trailing_stop".to_string()],
-                    },
-                });
-            }
-        }
-
-        // ── Time-based exit: close stagnant positions after 30 min ──────────
-        {
-            let stagnant_max_secs: u64 = std::env::var("STAGNANT_EXIT_SECS")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(1800);
-            let stagnant_threshold_pct: f64 = std::env::var("STAGNANT_THRESHOLD_PCT")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(5.0);
-            let stagnant_indexes: Vec<usize> = p.positions.iter().enumerate().filter_map(|(idx, pos)| {
-                if pos.opened_at.elapsed().as_secs() >= stagnant_max_secs {
-                    let move_pct = ((pos.current_price - pos.entry_price) / pos.entry_price * 100.0).abs();
-                    if move_pct < stagnant_threshold_pct {
-                        return Some(idx);
-                    }
-                }
-                None
-            }).collect();
-            for idx in stagnant_indexes.into_iter().rev() {
-                let pos = p.positions.remove(idx);
-                let pnl = (pos.current_price - pos.entry_price) * pos.shares;
-                let exit_fee = polymarket_taker_fee(pos.shares, pos.current_price);
-                p.total_fees_paid_usdc += exit_fee;
-                p.cash_usdc += pos.usdc_spent + pnl - exit_fee;
-                self.risk.lock().unwrap().record_close(pnl - exit_fee);
-                let msg = format!("STAGNANT-EXIT: closed #{} after {}s  pnl={:+.2}",
-                    pos.id, pos.opened_at.elapsed().as_secs(), pnl - exit_fee);
-                if let Some(ref log) = self.activity {
-                    log_push(log, EntryKind::Engine, msg.clone());
-                }
-                info!("{msg}");
-                p.closed_trades.push(crate::paper_portfolio::ClosedTrade {
-                    token_id: pos.token_id.clone(),
-                    market_title: pos.market_title.clone(),
-                    side: pos.side,
-                    entry_price: pos.entry_price,
-                    exit_price: pos.current_price,
-                    shares: pos.shares,
-                    realized_pnl: pnl - exit_fee,
-                    fees_paid_usdc: pos.entry_fee_paid_usdc + exit_fee,
-                    reason: "stagnant_exit".to_string(),
-                    opened_at_wall: pos.opened_at_wall,
-                    closed_at_wall: chrono::Local::now(),
-                    duration_secs: pos.opened_at.elapsed().as_secs(),
-                    scorecard: crate::paper_portfolio::ExecutionScorecard {
-                        slippage_bps: pos.entry_slippage_bps,
-                        queue_delay_ms: pos.queue_delay_ms,
-                        outcome_tags: vec!["stagnant_exit".to_string()],
-                    },
-                });
-            }
-        }
-
-        // Close fully resolved positions:
-        //  • price ≥ 0.99  → outcome resolved YES / team won  (harvest full winner)
-        //  • price ≤ 0.01  → outcome resolved NO  / team lost (free trapped capital)
-        let resolved_indexes: Vec<usize> = p.positions
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, pos)| {
-                if pos.current_price >= 0.99 || pos.current_price <= 0.01 {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if !resolved_indexes.is_empty() {
-            let n = resolved_indexes.len();
-            let mut total_pnl = 0.0f64;
-            for idx in resolved_indexes.into_iter().rev() {
-                let pos = p.positions.remove(idx);
-                let exit_price = pos.current_price.clamp(0.0, 1.0);
-                let pnl = match pos.side {
-                    OrderSide::Buy => (exit_price - pos.entry_price) * pos.shares,
-                    OrderSide::Sell => (pos.entry_price - exit_price) * pos.shares,
-                };
-                let exit_fee = polymarket_taker_fee(pos.shares, exit_price);
-                // Record fees and settle cash.
-                p.total_fees_paid_usdc += exit_fee;
-                p.cash_usdc += pos.usdc_spent + pnl - exit_fee;
-                total_pnl += pnl - exit_fee;
-                let reason = if exit_price >= 0.99 {
-                    "resolved@winner"
-                } else {
-                    "resolved@loser"
-                };
-                p.closed_trades.push(crate::paper_portfolio::ClosedTrade {
-                    token_id: pos.token_id.clone(),
-                    market_title: pos.market_title.clone(),
-                    side: pos.side,
-                    entry_price: pos.entry_price,
-                    exit_price,
-                    shares: pos.shares,
-                    realized_pnl: pnl - exit_fee,
-                    fees_paid_usdc: pos.entry_fee_paid_usdc + exit_fee,
-                    reason: reason.to_string(),
-                    opened_at_wall: pos.opened_at_wall,
-                    closed_at_wall: chrono::Local::now(),
-                    duration_secs: pos.opened_at.elapsed().as_secs(),
-                    scorecard: crate::paper_portfolio::ExecutionScorecard {
-                        slippage_bps: pos.entry_slippage_bps,
-                        queue_delay_ms: pos.queue_delay_ms,
-                        outcome_tags: vec![
-                            reason.to_string(),
-                            format!("variant:{}", pos.experiment_variant),
-                        ],
-                    },
-                });
-            }
-            self.risk.lock().unwrap().record_close(total_pnl);
-            let msg = format!(
-                "AUTOCLAIM: {} resolved-event close(s)  total_pnl={:+.2}",
-                n, total_pnl
-            );
-            if let Some(ref log) = self.activity {
-                log_push(log, EntryKind::Engine, msg.clone());
+                let kind = if *action_key == "STOP-LOSS" { EntryKind::Warn } else { EntryKind::Engine };
+                log_push(log, kind, msg.clone());
             }
             info!("{msg}");
         }

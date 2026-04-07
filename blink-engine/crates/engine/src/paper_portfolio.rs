@@ -384,11 +384,25 @@ impl PaperPortfolio {
     /// Returns `None` if the resulting size would be below `MIN_TRADE_USDC`
     /// or if we have no remaining cash.
     pub fn calculate_size_usdc(&self, rn1_notional_usdc: f64) -> Option<f64> {
-        let size_multiplier = std::env::var("PAPER_SIZE_MULTIPLIER")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(SIZE_MULTIPLIER)
-            .max(0.01);
+        self.calculate_size_usdc_with_conviction(rn1_notional_usdc, None)
+    }
+
+    /// Conviction-aware sizing: if a `conviction_multiplier` is provided it
+    /// replaces the flat `SIZE_MULTIPLIER`. Use [`exit_strategy::conviction_multiplier`]
+    /// to compute the multiplier from signal metadata + [`FilterConfig`].
+    pub fn calculate_size_usdc_with_conviction(
+        &self,
+        rn1_notional_usdc: f64,
+        conviction_mult: Option<f64>,
+    ) -> Option<f64> {
+        let size_multiplier = match conviction_mult {
+            Some(m) => m,
+            None => std::env::var("PAPER_SIZE_MULTIPLIER")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(SIZE_MULTIPLIER)
+                .max(0.01),
+        };
         let max_position_pct = std::env::var("PAPER_MAX_POSITION_PCT")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
@@ -407,7 +421,7 @@ impl PaperPortfolio {
 
         let raw        = rn1_notional_usdc * size_multiplier;
         let cap_nav    = self.nav() * max_position_pct;
-        // Cash reserve: keep 30% of NAV as buffer for future high-quality signals
+        // Cash reserve: keep 25% of NAV as buffer for future high-quality signals
         let cash_reserve_pct: f64 = std::env::var("CASH_RESERVE_PCT")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(0.25);
         let available_cash = (self.cash_usdc - self.nav() * cash_reserve_pct).max(0.0);
@@ -581,11 +595,31 @@ impl PaperPortfolio {
     ///
     /// Returns the number of positions closed.
     pub fn stop_loss_check(&mut self, loss_threshold_pct: f64) -> usize {
+        self.stop_loss_check_tiered(loss_threshold_pct, None, None)
+    }
+
+    /// Tiered stop-loss: apply `small_threshold_pct` (tighter) for positions
+    /// whose cost basis is below `small_notional_usdc`. Falls back to
+    /// `loss_threshold_pct` for larger positions.
+    pub fn stop_loss_check_tiered(
+        &mut self,
+        loss_threshold_pct: f64,
+        small_threshold_pct: Option<f64>,
+        small_notional_usdc: Option<f64>,
+    ) -> usize {
         let mut actions = 0usize;
         let mut i = 0usize;
         while i < self.positions.len() {
-            if self.positions[i].unrealized_pnl_pct() <= -loss_threshold_pct.abs() {
-                let reason = format!("stop_loss@-{:.0}%", loss_threshold_pct.abs());
+            let threshold = match (small_threshold_pct, small_notional_usdc) {
+                (Some(tight_pct), Some(notional_cutoff))
+                    if self.positions[i].usdc_spent < notional_cutoff =>
+                {
+                    tight_pct.abs()
+                }
+                _ => loss_threshold_pct.abs(),
+            };
+            if self.positions[i].unrealized_pnl_pct() <= -threshold {
+                let reason = format!("stop_loss@-{:.0}%", threshold);
                 let removed = self.close_position_fraction(i, 1.0, reason);
                 actions += 1;
                 if !removed {
@@ -597,6 +631,7 @@ impl PaperPortfolio {
         }
         actions
     }
+
 
     pub fn close_position_fraction(&mut self, idx: usize, fraction: f64, reason: String) -> bool {
         if idx >= self.positions.len() {
@@ -900,16 +935,17 @@ mod tests {
 
     #[test]
     fn size_capped_at_10_pct_nav() {
-        let p = PaperPortfolio::new(); // NAV = 100, cap = 25% = 25
-        // RN1 trades $20,000 → 20% = $4,000, capped at $25
+        let p = PaperPortfolio::new(); // NAV = 100, cap = 12% = 12
+        // RN1 trades $20,000 → 5% = $1,000, capped at $12
         let size = p.calculate_size_usdc(20_000.0).unwrap();
-        assert!((size - 25.0).abs() < 1e-9, "size={size}");
+        let max_position = p.nav() * MAX_POSITION_PCT;
+        assert!((size - max_position).abs() < 1e-9, "size={size} expected cap={max_position}");
     }
 
     #[test]
     fn size_below_minimum_returns_none() {
         let p = PaperPortfolio::new();
-        // 20% of $100 = $20, which is above minimum ($5), so should size.
+        // 5% of $100 = $5, which meets the floor, so should size.
         assert!(p.calculate_size_usdc(100.0).is_some());
     }
 
@@ -917,9 +953,14 @@ mod tests {
     fn nav_decreases_after_open() {
         let mut p = PaperPortfolio::new();
         p.open_position("tok".into(), OrderSide::Buy, 0.65, 20.0, "oid".into());
-        // cash = 80, position worth 20 at entry → NAV ≈ 100
-        assert!((p.nav() - 100.0).abs() < 1e-9);
-        assert!((p.cash_usdc - 80.0).abs() < 1e-9);
+        // cash = 100 - 20 - entry_fee; position worth 20 at entry → NAV ≈ 100 - entry_fee
+        // Entry fee = shares * rate * p * (1-p) where shares = 20/0.65, rate = 0.05
+        let shares = 20.0 / 0.65;
+        let entry_fee = polymarket_taker_fee(shares, 0.65);
+        assert!((p.nav() - (100.0 - entry_fee)).abs() < 0.01,
+            "nav={} expected={}", p.nav(), 100.0 - entry_fee);
+        assert!((p.cash_usdc - (80.0 - entry_fee)).abs() < 0.01,
+            "cash={} expected={}", p.cash_usdc, 80.0 - entry_fee);
     }
 
     #[test]

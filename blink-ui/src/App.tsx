@@ -110,9 +110,9 @@ export default function App() {
       {/* ── Tab Content ─────────────────────────────────────────── */}
 
       {activeTab === 'dashboard' && (
-        <main className="flex-1 grid grid-cols-[220px_1fr_260px] gap-2 p-2 overflow-hidden min-h-0">
+        <main className="flex-1 grid grid-cols-1 md:grid-cols-[220px_1fr] xl:grid-cols-[220px_1fr_260px] gap-2 p-2 overflow-hidden min-h-0">
 
-          <aside className="flex flex-col gap-2 overflow-y-auto min-h-0">
+          <aside className="hidden md:flex flex-col gap-2 overflow-y-auto min-h-0">
             <ErrorBoundary label="RiskPanel">
               <RiskPanel risk={risk} />
             </ErrorBoundary>
@@ -151,7 +151,7 @@ export default function App() {
             </ErrorBoundary>
           </section>
 
-          <aside className="flex flex-col gap-2 overflow-y-auto min-h-0">
+          <aside className="hidden xl:flex flex-col gap-2 overflow-y-auto min-h-0">
             <ErrorBoundary label="LatencyPanel">
               <LatencyPanel />
             </ErrorBoundary>

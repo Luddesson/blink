@@ -17,13 +17,16 @@ interface Props {
 
 export default function TabBar({ activeTab, onSwitch }: Props) {
   return (
-    <nav className="flex items-center gap-0.5 px-2 py-1 bg-surface-900 border-b border-slate-800 shrink-0 overflow-x-auto">
+    <nav role="tablist" aria-label="Main navigation" className="flex items-center gap-0.5 px-2 py-1 bg-surface-900 border-b border-slate-800 shrink-0 overflow-x-auto">
       {TAB_META.map((t) => {
         const active = activeTab === t.id
         return (
           <button
             key={t.id}
             onClick={() => onSwitch(t.id)}
+            role="tab"
+            aria-selected={active}
+            aria-label={`Tab ${t.key}: ${t.label}`}
             className={`
               flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-medium
               transition-colors whitespace-nowrap

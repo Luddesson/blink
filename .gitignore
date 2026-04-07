@@ -14,6 +14,7 @@ secrets/
 .env.production
 .env.staging
 .env.*.local
+.bullpen/
 
 # Editor & OS
 .vscode/settings.json

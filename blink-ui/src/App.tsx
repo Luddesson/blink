@@ -1,15 +1,18 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { useEngineSocket } from './hooks/useEngineSocket'
 import { usePoll } from './hooks/usePoll'
 import { useMode } from './hooks/useMode'
+import { useTab } from './hooks/useTab'
+import { useKeyboard } from './hooks/useKeyboard'
 import { api } from './lib/api'
 
 import Header from './components/Header'
+import TabBar from './components/TabBar'
+import StatusBar from './components/StatusBar'
 import NavCard from './components/NavCard'
 import RiskPanel from './components/RiskPanel'
 import EmergencyStop from './components/EmergencyStop'
 import PositionsTable from './components/PositionsTable'
-import TradeHistory from './components/TradeHistory'
 import ActivityFeed from './components/ActivityFeed'
 import LatencyPanel from './components/LatencyPanel'
 import FailsafePanel from './components/FailsafePanel'
@@ -19,6 +22,12 @@ import ErrorBoundary from './components/ErrorBoundary'
 import BullpenHealth from './components/BullpenHealth'
 import DiscoveryPanel from './components/DiscoveryPanel'
 import ConvergenceAlert from './components/ConvergenceAlert'
+
+import MarketsPage from './pages/MarketsPage'
+import HistoryPage from './pages/HistoryPage'
+import IntelligencePage from './pages/IntelligencePage'
+import PerformancePage from './pages/PerformancePage'
+import ConfigPage from './pages/ConfigPage'
 
 import type { RiskSummary } from './types'
 
@@ -35,6 +44,7 @@ export default function App() {
   const { snapshot, connected, lastMessageAt } = useEngineSocket()
   const { viewMode } = useMode()
   const isLive = viewMode === 'live'
+  const { activeTab, switchTab, switchByIndex } = useTab()
 
   const [tradingPaused, setTradingPaused] = useState(false)
   const [cbDismissed, setCbDismissed] = useState(false)
@@ -68,9 +78,23 @@ export default function App() {
   const wsDownSecs = lastMessageAt ? Math.floor((Date.now() - lastMessageAt) / 1000) : 0
   const showWsBanner = !connected && wsDownSecs > 15
 
+  // Keyboard shortcuts
+  const handlePause = useCallback(async () => {
+    try {
+      const res = await api.pause(!wsPaused)
+      setTradingPaused(res.trading_paused)
+    } catch { /* ignore */ }
+  }, [wsPaused])
+
+  useKeyboard({
+    onTabSwitch: switchByIndex,
+    onPause: handlePause,
+  })
+
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-surface-950 text-slate-100">
       <Header wsConnected={connected} tradingPaused={wsPaused} />
+      <TabBar activeTab={activeTab} onSwitch={switchTab} />
 
       {showWsBanner && (
         <div className="bg-red-900/80 border-b border-red-600 text-red-200 text-xs flex items-center justify-center gap-2 py-1 z-30 shrink-0">
@@ -83,69 +107,78 @@ export default function App() {
         <CircuitBreakerAlarm risk={risk} onDismiss={() => setCbDismissed(true)} />
       )}
 
-      <main className="flex-1 grid grid-cols-[220px_1fr_260px] gap-2 p-2 overflow-hidden min-h-0">
+      {/* ── Tab Content ─────────────────────────────────────────── */}
 
-        <aside className="flex flex-col gap-2 overflow-y-auto min-h-0">
-          <ErrorBoundary label="RiskPanel">
-            <RiskPanel risk={risk} />
-          </ErrorBoundary>
-          <ErrorBoundary label="PortfolioStats">
-            <PortfolioStats portfolio={portfolio} />
-          </ErrorBoundary>
-          {isLive && (
-            <ErrorBoundary label="EmergencyStop">
-              <EmergencyStop paused={wsPaused} onToggled={(p) => setTradingPaused(p)} />
+      {activeTab === 'dashboard' && (
+        <main className="flex-1 grid grid-cols-[220px_1fr_260px] gap-2 p-2 overflow-hidden min-h-0">
+
+          <aside className="flex flex-col gap-2 overflow-y-auto min-h-0">
+            <ErrorBoundary label="RiskPanel">
+              <RiskPanel risk={risk} />
             </ErrorBoundary>
-          )}
-        </aside>
+            <ErrorBoundary label="PortfolioStats">
+              <PortfolioStats portfolio={portfolio} />
+            </ErrorBoundary>
+            {isLive && (
+              <ErrorBoundary label="EmergencyStop">
+                <EmergencyStop paused={wsPaused} onToggled={(p) => setTradingPaused(p)} />
+              </ErrorBoundary>
+            )}
+          </aside>
 
-        <section className="flex flex-col gap-2 overflow-y-auto min-h-0">
-          <ErrorBoundary label="NavCard">
-            <NavCard
-              nav={nav}
-              navDelta={navDelta}
-              navDeltaPct={navDeltaPct}
-              netPnl={netPnl}
-              feesPaid={feesPaid}
-              equityCurve={equityCurve}
-              equityTimestamps={equityTimestamps}
-              portfolio={portfolio}
-            />
-          </ErrorBoundary>
-          <ErrorBoundary label="PositionsTable">
-            <PositionsTable
-              positions={positions}
-              loading={!snapshot && connected}
-              isLive={isLive}
-            />
-          </ErrorBoundary>
-          <ErrorBoundary label="TradeHistory">
-            <TradeHistory />
-          </ErrorBoundary>
-        </section>
+          <section className="flex flex-col gap-2 overflow-y-auto min-h-0">
+            <ErrorBoundary label="NavCard">
+              <NavCard
+                nav={nav}
+                navDelta={navDelta}
+                navDeltaPct={navDeltaPct}
+                netPnl={netPnl}
+                feesPaid={feesPaid}
+                equityCurve={equityCurve}
+                equityTimestamps={equityTimestamps}
+                portfolio={portfolio}
+              />
+            </ErrorBoundary>
+            <ErrorBoundary label="PositionsTable">
+              <PositionsTable
+                positions={positions}
+                loading={!snapshot && connected}
+                isLive={isLive}
+              />
+            </ErrorBoundary>
+            <ErrorBoundary label="ActivityFeed">
+              <ActivityFeed wsEntries={activity} />
+            </ErrorBoundary>
+          </section>
 
-        <aside className="flex flex-col gap-2 overflow-y-auto min-h-0">
-          <ErrorBoundary label="ActivityFeed">
-            <ActivityFeed wsEntries={activity} />
-          </ErrorBoundary>
-          <ErrorBoundary label="LatencyPanel">
-            <LatencyPanel />
-          </ErrorBoundary>
-          <ErrorBoundary label="FailsafePanel">
-            <FailsafePanel />
-          </ErrorBoundary>
-          <ErrorBoundary label="BullpenHealth">
-            <BullpenHealth health={bullpenHealth} />
-          </ErrorBoundary>
-          <ErrorBoundary label="DiscoveryPanel">
-            <DiscoveryPanel discovery={bullpenDiscovery} />
-          </ErrorBoundary>
-          <ErrorBoundary label="ConvergenceAlert">
-            <ConvergenceAlert convergence={bullpenConvergence} />
-          </ErrorBoundary>
-        </aside>
+          <aside className="flex flex-col gap-2 overflow-y-auto min-h-0">
+            <ErrorBoundary label="LatencyPanel">
+              <LatencyPanel />
+            </ErrorBoundary>
+            <ErrorBoundary label="FailsafePanel">
+              <FailsafePanel />
+            </ErrorBoundary>
+            <ErrorBoundary label="BullpenHealth">
+              <BullpenHealth health={bullpenHealth} />
+            </ErrorBoundary>
+            <ErrorBoundary label="DiscoveryPanel">
+              <DiscoveryPanel discovery={bullpenDiscovery} />
+            </ErrorBoundary>
+            <ErrorBoundary label="ConvergenceAlert">
+              <ConvergenceAlert convergence={bullpenConvergence} />
+            </ErrorBoundary>
+          </aside>
 
-      </main>
+        </main>
+      )}
+
+      {activeTab === 'markets' && <MarketsPage />}
+      {activeTab === 'history' && <HistoryPage />}
+      {activeTab === 'intelligence' && <IntelligencePage />}
+      {activeTab === 'performance' && <PerformancePage portfolio={portfolio} />}
+      {activeTab === 'config' && <ConfigPage risk={risk} positions={positions} />}
+
+      <StatusBar />
     </div>
   )
 }

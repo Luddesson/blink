@@ -225,3 +225,35 @@ export interface MetricsResponse {
   rejection_by_reason?: Record<string, number>
   uptime_secs?: number
 }
+
+// ─── Order Book ──────────────────────────────────────────────────────────────
+export interface OrderBookResponse {
+  token_id: string
+  bids: [number, number][]  // [price, size]
+  asks: [number, number][]
+  best_bid: number | null
+  best_ask: number | null
+  spread_bps: number | null
+}
+
+export interface OrderBooksResponse {
+  orderbooks: OrderBookResponse[]
+}
+
+// ─── Twin ────────────────────────────────────────────────────────────────────
+export interface TwinSnapshot {
+  generation: number
+  extra_latency_ms: number
+  slippage_penalty_bps: number
+  drift_multiplier: number
+  nav: number
+  realized_pnl: number
+  unrealized_pnl: number
+  filled_orders: number
+  aborted_orders: number
+  open_positions: number
+  closed_trades: number
+  win_rate_pct: number
+  nav_return_pct: number
+  max_drawdown_pct: number
+}

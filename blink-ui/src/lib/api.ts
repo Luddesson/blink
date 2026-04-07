@@ -10,8 +10,11 @@ import type {
   LivePortfolio,
   MetricsResponse,
   ModeResponse,
+  OrderBookResponse,
+  OrderBooksResponse,
   RiskSummary,
   StatusResponse,
+  TwinSnapshot,
 } from '../types'
 
 async function get<T>(path: string): Promise<T> {
@@ -50,4 +53,7 @@ export const api = {
   bullpenHealth: () => get<BullpenHealthResponse>('/api/bullpen/health'),
   bullpenDiscovery: () => get<BullpenDiscoveryResponse>('/api/bullpen/discovery'),
   bullpenConvergence: () => get<BullpenConvergenceResponse>('/api/bullpen/convergence'),
+  orderbook: (tokenId: string) => get<OrderBookResponse>(`/api/orderbook/${tokenId}`),
+  orderbooks: () => get<OrderBooksResponse>('/api/orderbooks'),
+  twin: () => get<TwinSnapshot>('/api/twin'),
 }

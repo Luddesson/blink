@@ -33,6 +33,8 @@ use engine::types::RN1Signal;
 use engine::web_server::{AppState, run_web_server};
 use engine::ws_client::run_ws;
 use engine::rn1_poller::{run_rn1_poller, Rn1PollDiagnostics, Rn1PollDiagnosticsHandle};
+use engine::smart_money::{run_smart_money, SmartMoneyConfig, SmartMoneyDiagnostics, SmartMoneyDiagHandle};
+use engine::discovery::{run_discovery, DiscoveryConfig, DiscoveryDiagnostics, DiscoveryDiagHandle};
 use engine::ws_client::WsHealthMetrics;
 use std::collections::HashMap;
 
@@ -283,6 +285,54 @@ async fn main() -> Result<()> {
     };
 
     // ── Optional Agent JSON-RPC server (for orchestrator/agents) ─────────
+
+    // ── Smart Money poller (SMART_MONEY_ENABLED=true to activate) ─────────
+    let sm_config = SmartMoneyConfig::from_env();
+    let sm_diag: SmartMoneyDiagHandle = Arc::new(Mutex::new(SmartMoneyDiagnostics::default()));
+    if sm_config.enabled {
+        let tx   = signal_tx.clone();
+        let act  = activity.clone();
+        let diag = Arc::clone(&sm_diag);
+        let cfg  = sm_config.clone();
+        tokio::spawn(async move {
+            run_smart_money(tx, act, diag, cfg.top_n, cfg.min_trade_usd, cfg.poll_ms).await;
+        });
+        info!(top_n = sm_config.top_n, min_usd = sm_config.min_trade_usd, "Smart money poller enabled");
+    }
+
+    // ── Market Discovery (DISCOVERY_ENABLED=true to activate) ─────────────
+    let disc_config = DiscoveryConfig::from_env();
+    let disc_diag: DiscoveryDiagHandle = Arc::new(Mutex::new(DiscoveryDiagnostics::default()));
+    if disc_config.enabled {
+        let subs = Arc::clone(&market_subscriptions);
+        let act  = activity.clone();
+        let diag = Arc::clone(&disc_diag);
+        let cfg  = disc_config.clone();
+        tokio::spawn(async move {
+            run_discovery(cfg, subs, act, diag).await;
+        });
+        info!(lenses = ?disc_config.lenses, "Market discovery enabled");
+    }
+
+    // ── Bullpen CLI bridge (BULLPEN_ENABLED=true to activate) ────────────
+    let bullpen_config = engine::bullpen_bridge::BullpenConfig::from_env();
+    let bullpen: Option<Arc<engine::bullpen_bridge::BullpenBridge>> = if bullpen_config.enabled {
+        let bridge = Arc::new(engine::bullpen_bridge::BullpenBridge::new(bullpen_config));
+        let bp = Arc::clone(&bridge);
+        tokio::spawn(async move {
+            match bp.health_check().await {
+                Ok(()) => {},
+                Err(e) => tracing::warn!("Bullpen CLI not available: {e} — enrichment disabled"),
+            }
+        });
+        log_push(&activity, EntryKind::Engine, "Bullpen CLI bridge enabled".to_string());
+        info!("Bullpen CLI bridge enabled");
+        Some(bridge)
+    } else {
+        None
+    };
+    let _bullpen = bullpen; // Available for future phase wiring
+
     let rpc_enabled = env_flag("AGENT_RPC_ENABLED");
     let rpc_bind_addr = std::env::var("AGENT_RPC_BIND")
         .unwrap_or_else(|_| "127.0.0.1:7878".to_string());
@@ -596,7 +646,7 @@ async fn main() -> Result<()> {
             Arc::clone(&config),
             Arc::clone(&book_store),
             Some(activity.clone()),
-        ));
+        ).expect("LiveEngine init failed — check vault config and LIVE_TRADING env vars"));
         live_for_web = Some(Arc::clone(&live));
         Arc::clone(&live).spawn_reconciliation_worker();
 

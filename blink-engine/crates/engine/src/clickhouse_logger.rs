@@ -237,7 +237,68 @@ impl ClickHouseLogger {
             .execute()
             .await?;
 
-        info!("ClickHouse warehouse schema ready (6 tables)");
+        // ── Bullpen integration tables ─────────────────────────────────────
+        self.client
+            .query(
+                "CREATE TABLE IF NOT EXISTS blink.bullpen_commands (
+                    timestamp_ms UInt64,
+                    command      String,
+                    success      UInt8,
+                    latency_ms   UInt32,
+                    error_msg    String
+                ) ENGINE = MergeTree()
+                ORDER BY (command, timestamp_ms)",
+            )
+            .execute()
+            .await?;
+
+        self.client
+            .query(
+                "CREATE TABLE IF NOT EXISTS blink.bullpen_discoveries (
+                    timestamp_ms    UInt64,
+                    lens            String,
+                    markets_found   UInt32,
+                    new_markets     UInt32
+                ) ENGINE = MergeTree()
+                ORDER BY (lens, timestamp_ms)",
+            )
+            .execute()
+            .await?;
+
+        self.client
+            .query(
+                "CREATE TABLE IF NOT EXISTS blink.bullpen_smart_money (
+                    timestamp_ms       UInt64,
+                    wallet             String,
+                    action             String,
+                    market             String,
+                    amount_usd         Float64,
+                    price              Float64,
+                    convergence_count  UInt32
+                ) ENGINE = MergeTree()
+                ORDER BY (wallet, timestamp_ms)",
+            )
+            .execute()
+            .await?;
+
+        self.client
+            .query(
+                "CREATE TABLE IF NOT EXISTS blink.bullpen_reconciliation (
+                    timestamp_ms   UInt64,
+                    check_type     String,
+                    market         String,
+                    blink_value    Float64,
+                    bullpen_value  Float64,
+                    drift          Float64,
+                    drift_pct      Float64,
+                    alert          UInt8
+                ) ENGINE = MergeTree()
+                ORDER BY (check_type, timestamp_ms)",
+            )
+            .execute()
+            .await?;
+
+        info!("ClickHouse warehouse schema ready (10 tables)");
         Ok(())
     }
 

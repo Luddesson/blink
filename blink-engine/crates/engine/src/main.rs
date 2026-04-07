@@ -351,6 +351,29 @@ async fn main() -> Result<()> {
     }
     let _bullpen = bullpen; // Available for future phase wiring
 
+    // ── Bullpen Smart Money Monitor ─────────────────────────────────────
+    let convergence_store = {
+        let sm_config = engine::bullpen_smart_money::SmartMoneyConfig::from_env();
+        if sm_config.enabled {
+            if let Some(ref bp) = _bullpen {
+                let monitor = engine::bullpen_smart_money::SmartMoneyMonitor::new(
+                    Arc::clone(bp),
+                    sm_config,
+                );
+                let store = monitor.convergence_store();
+                let sm_shutdown = Arc::clone(&shutdown);
+                tokio::spawn(async move { monitor.run(sm_shutdown).await });
+                log_push(&activity, EntryKind::Engine, "Bullpen smart money monitor started".to_string());
+                info!("Bullpen smart money monitor started");
+                Some(store)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
     let rpc_enabled = env_flag("AGENT_RPC_ENABLED");
     let rpc_bind_addr = std::env::var("AGENT_RPC_BIND")
         .unwrap_or_else(|_| "127.0.0.1:7878".to_string());
@@ -375,6 +398,7 @@ async fn main() -> Result<()> {
             Arc::clone(&ws_force_reconnect),
         );
         paper_inner.discovery_store = Some(Arc::clone(&discovery_store));
+        paper_inner.convergence_store = convergence_store.clone();
         let paper = Arc::new(paper_inner);
         paper_for_persist = Some(Arc::clone(&paper));
 

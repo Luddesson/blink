@@ -223,7 +223,7 @@ impl DiscoveryScheduler {
     /// Execute a full multi-lens discovery scan.
     async fn full_scan(&self) -> anyhow::Result<()> {
         let lenses = self.config.lenses.clone();
-        let limit = self.config.limit_per_lens;
+        let _limit = self.config.limit_per_lens;
 
         // Parallel lens scans
         let futures: Vec<_> = lenses

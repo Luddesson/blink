@@ -331,6 +331,24 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+    // ── Bullpen Discovery Scheduler (cold-path enrichment) ──────────────
+    let discovery_store = Arc::new(tokio::sync::RwLock::new(
+        engine::bullpen_discovery::DiscoveryStore::new(),
+    ));
+    if let Some(ref bp) = bullpen {
+        let disc_config = engine::bullpen_discovery::DiscoverySchedulerConfig::from_env();
+        if disc_config.enabled {
+            let scheduler = engine::bullpen_discovery::DiscoveryScheduler::new(
+                Arc::clone(bp),
+                Arc::clone(&discovery_store),
+                disc_config,
+            );
+            let disc_shutdown = Arc::clone(&shutdown);
+            tokio::spawn(async move { scheduler.run(disc_shutdown).await });
+            log_push(&activity, EntryKind::Engine, "Bullpen discovery scheduler started".to_string());
+            info!("Bullpen discovery scheduler started");
+        }
+    }
     let _bullpen = bullpen; // Available for future phase wiring
 
     let rpc_enabled = env_flag("AGENT_RPC_ENABLED");
@@ -350,12 +368,14 @@ async fn main() -> Result<()> {
     };
 
     let signal_task: tokio::task::JoinHandle<()> = if paper_mode {
-        let paper = Arc::new(PaperEngine::new(
+        let mut paper_inner = PaperEngine::new(
             Arc::clone(&book_store),
             Some(activity.clone()),
             Arc::clone(&market_subscriptions),
             Arc::clone(&ws_force_reconnect),
-        ));
+        );
+        paper_inner.discovery_store = Some(Arc::clone(&discovery_store));
+        let paper = Arc::new(paper_inner);
         paper_for_persist = Some(Arc::clone(&paper));
 
         let paper_state_path = std::env::var("PAPER_STATE_PATH")

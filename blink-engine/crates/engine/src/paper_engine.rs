@@ -57,6 +57,8 @@ pub struct PaperEngine {
     /// Per-token drift-abort cooldown. After a drift abort, the token is blocked
     /// for DRIFT_ABORT_COOLDOWN_SECS seconds to prevent cascading redundant aborts.
     drift_abort_cooldown: Arc<std::sync::Mutex<HashMap<String, Instant>>>,
+    /// Optional Bullpen discovery store for conviction boost lookups.
+    pub discovery_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_discovery::DiscoveryStore>>>,
 }
 
 /// Snapshot of the currently active fill window, if any.
@@ -298,6 +300,7 @@ impl PaperEngine {
             market_subscriptions,
             ws_force_reconnect,
             drift_abort_cooldown: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            discovery_store: None,
         }
     }
 
@@ -541,15 +544,23 @@ impl PaperEngine {
         // ── Conviction-based sizing ──────────────────────────────────────
         // Compute a dynamic multiplier using FilterConfig bonuses based on
         // RN1 bet size, market category, sport, and liquidity.
+        // Discovery boost is added from Bullpen multi-lens data when available.
         let conviction_mult = {
             let filter_cfg = crate::types::FilterConfig::from_env();
-            Some(crate::exit_strategy::conviction_multiplier(
+            let base = crate::exit_strategy::conviction_multiplier(
                 rn1_notional_usd,
                 fee_category,
                 None, // sport tag — enriched below if available
                 0.0,  // liquidity — not yet fetched at this point
                 &filter_cfg,
-            ))
+            );
+            let discovery_boost = if let Some(ref store) = self.discovery_store {
+                let s = store.read().await;
+                s.conviction_boost(&signal.token_id)
+            } else {
+                0.0
+            };
+            Some(base + discovery_boost)
         };
 
         // ── Sizing (brief lock, no await) ─────────────────────────────

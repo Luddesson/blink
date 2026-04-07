@@ -29,6 +29,9 @@ pub struct AgentRpcState {
     pub market_subscriptions: Arc<Mutex<Vec<String>>>,
     pub shutdown: Arc<AtomicBool>,
     pub paper: Option<Arc<PaperEngine>>,
+    pub bullpen: Option<Arc<crate::bullpen_bridge::BullpenBridge>>,
+    pub discovery_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_discovery::DiscoveryStore>>>,
+    pub convergence_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_smart_money::ConvergenceStore>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,6 +140,11 @@ async fn handle_rpc(req: RpcRequest, state: &AgentRpcState) -> std::result::Resu
         "blink_status" => blink_status(state).await,
         "paper_summary" => paper_summary(state).await,
         "set_pause" => set_pause(req.params, state).await,
+        "bullpen_health" => bullpen_health(state).await,
+        "bullpen_discovery" => bullpen_discovery(state).await,
+        "bullpen_convergence" => bullpen_convergence(state).await,
+        "bullpen_discover" => bullpen_discover(req.params, state).await,
+        "bullpen_smart_money" => bullpen_smart_money_rpc(req.params, state).await,
         _ => Err(RpcError { code: -32601, message: "Method not found".to_string() }),
     }
 }
@@ -239,4 +247,97 @@ async fn write_http(stream: &mut TcpStream, status: u16, body: Value) -> io::Res
         payload
     );
     stream.write_all(resp.as_bytes()).await
+}
+
+// ── Bullpen RPC methods ──────────────────────────────────────────────────
+
+async fn bullpen_health(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    let bridge = state.bullpen.as_ref().ok_or(RpcError {
+        code: -32000,
+        message: "Bullpen bridge not enabled".into(),
+    })?;
+    let health = bridge.health().await;
+    Ok(json!({
+        "authenticated": health.authenticated,
+        "consecutive_failures": health.consecutive_failures,
+        "total_calls": health.total_calls,
+        "total_failures": health.total_failures,
+        "avg_latency_ms": health.avg_latency_ms,
+    }))
+}
+
+async fn bullpen_discovery(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    let store = state.discovery_store.as_ref().ok_or(RpcError {
+        code: -32000,
+        message: "Discovery store not available".into(),
+    })?;
+    let s = store.read().await;
+    let summary = s.summary();
+    Ok(json!({
+        "total_markets": summary.total_markets,
+        "smart_money_markets": summary.smart_money_markets,
+        "avg_viability": summary.avg_viability,
+        "scan_count": summary.scan_count,
+        "last_scan_ago_secs": summary.last_scan_ago_secs,
+    }))
+}
+
+async fn bullpen_convergence(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    let store = state.convergence_store.as_ref().ok_or(RpcError {
+        code: -32000,
+        message: "Convergence store not available".into(),
+    })?;
+    let s = store.read().await;
+    let summary = s.summary();
+    let signals: Vec<Value> = s
+        .active_signals
+        .iter()
+        .map(|sig| {
+            json!({
+                "market": sig.market,
+                "convergence_score": sig.convergence_score,
+                "net_direction": sig.net_direction,
+                "total_usd": sig.total_usd,
+                "wallets": sig.wallets.len(),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "active_signals": summary.active_signals,
+        "tracked_markets": summary.tracked_markets,
+        "signals": signals,
+    }))
+}
+
+async fn bullpen_discover(params: Value, state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    let bridge = state.bullpen.as_ref().ok_or(RpcError {
+        code: -32000,
+        message: "Bullpen bridge not enabled".into(),
+    })?;
+    let lens = params["lens"].as_str().unwrap_or("all");
+    match bridge.discover_markets(lens).await {
+        Ok(resp) => Ok(json!({
+            "lens": resp.lens,
+            "events": resp.events.len(),
+        })),
+        Err(e) => Err(RpcError {
+            code: -32000,
+            message: format!("Discover failed: {e}"),
+        }),
+    }
+}
+
+async fn bullpen_smart_money_rpc(params: Value, state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    let bridge = state.bullpen.as_ref().ok_or(RpcError {
+        code: -32000,
+        message: "Bullpen bridge not enabled".into(),
+    })?;
+    let signal_type = params["type"].as_str().unwrap_or("aggregated");
+    match bridge.smart_money(signal_type).await {
+        Ok(json) => Ok(json.0),
+        Err(e) => Err(RpcError {
+            code: -32000,
+            message: format!("Smart money failed: {e}"),
+        }),
+    }
 }

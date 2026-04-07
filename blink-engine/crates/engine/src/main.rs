@@ -873,6 +873,9 @@ async fn main() -> Result<()> {
             market_subscriptions: Arc::clone(&market_subscriptions),
             shutdown: Arc::clone(&shutdown),
             paper: paper_for_persist.as_ref().map(Arc::clone),
+            bullpen: _bullpen.clone(),
+            discovery_store: Some(Arc::clone(&discovery_store)),
+            convergence_store: convergence_store.clone(),
         };
         let bind = rpc_bind_addr.clone();
         let act = activity.clone();

@@ -602,7 +602,7 @@ fn tui_loop(
 /// Returns `true` if the TUI should exit.
 fn handle_key(
     code:           KeyCode,
-    _modifiers:     KeyModifiers,
+    modifiers:      KeyModifiers,
     state:          &mut TuiState,
     trading_paused: &Arc<AtomicBool>,
     activity:       &ActivityLog,
@@ -614,6 +614,14 @@ fn handle_key(
     ws_force_reconnect: &Arc<AtomicBool>,
     experiment_switches: &Arc<Mutex<ExperimentSwitches>>,
 ) -> bool {
+    // ── Ctrl+K: Emergency Kill Switch (always active) ────────────────────
+    if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('k') | KeyCode::Char('K')) {
+        shutdown.store(true, Ordering::Relaxed);
+        log_push(activity, EntryKind::Engine, "🚨 EMERGENCY KILL SWITCH (Ctrl+K) — shutting down".to_string());
+        state.push_notification(NotificationKind::Critical, "EMERGENCY STOP triggered");
+        return true;
+    }
+
     // ── Config editing mode intercepts all keys ──────────────────────────
     if state.config_editing {
         match code {

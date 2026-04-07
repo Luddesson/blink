@@ -1,6 +1,7 @@
 import { ShieldCheck, ShieldOff } from 'lucide-react'
 import type { RiskSummary } from '../types'
 import { fmt, fmtPnl, pnlClass } from '../lib/format'
+import GradientBar from './shared/GradientBar'
 
 interface Props { risk: RiskSummary }
 
@@ -36,21 +37,19 @@ export default function RiskPanel({ risk }: Props) {
               {fmtPnl(pnl)} USDC
             </span>
           </div>
-          {/* Progress bar: how close to hitting the daily loss limit */}
-          {maxLossPct > 0 && (() => {
-            // We approximate nav from daily_pnl; the ratio is what matters
-            const limitUSDC = 250 * maxLossPct  // approx $12.50 at 5%
-            const usedPct = Math.max(0, Math.min(1, Math.abs(pnl < 0 ? pnl / limitUSDC : 0)))
-            const barColor = usedPct > 0.75 ? 'bg-red-500' : usedPct > 0.4 ? 'bg-yellow-500' : 'bg-emerald-500'
-            return (
-              <div className="w-full bg-surface-700 rounded-full h-1 mt-1">
-                <div
-                  className={`h-1 rounded-full transition-all ${barColor}`}
-                  style={{ width: `${usedPct * 100}%` }}
-                />
-              </div>
-            )
-          })()}
+          {/* Risk gauge: gradient bar showing % of daily loss budget consumed */}
+        {maxLossPct > 0 && (() => {
+          const limitUSDC = 250 * maxLossPct
+          const usedPct = Math.max(0, Math.min(1, Math.abs(pnl < 0 ? pnl / limitUSDC : 0)))
+          return (
+            <GradientBar
+              value={usedPct}
+              label="Loss budget"
+              height={6}
+              className="mt-1"
+            />
+          )
+        })()}
         </div>
 
         <div className="flex justify-between text-xs">

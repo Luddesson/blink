@@ -1,7 +1,7 @@
 import { useState, useMemo, memo } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import type { Position } from '../types'
-import { fmt, fmtPnl, pnlClass } from '../lib/format'
+import { fmt, fmtPnl, fmtDuration, pnlClass } from '../lib/format'
 import { api } from '../lib/api'
 
 interface Props {
@@ -72,6 +72,7 @@ function PositionsTable({ positions, loading, onRefresh }: Props) {
           <table className="w-full text-xs">
             <thead>
               <tr className="text-slate-500 border-b border-surface-600">
+                <th className="text-left pb-2 pr-3 font-normal w-10">Side</th>
                 {([
                   ['market_title', 'Market'],
                   ['shares', 'Shares'],
@@ -87,12 +88,25 @@ function PositionsTable({ positions, loading, onRefresh }: Props) {
                     {label} <SortIcon k={k} />
                   </th>
                 ))}
+                <th className="text-right pb-2 pr-3 font-normal">To Win</th>
+                <th className="text-right pb-2 pr-3 font-normal">Age</th>
                 <th className="pb-2 text-right font-normal">Action</th>
               </tr>
             </thead>
             <tbody>
-              {sorted.map((p) => (
+              {sorted.map((p) => {
+                const maxProfit = p.side === 'Buy'
+                  ? (1 - p.entry_price) * p.shares
+                  : p.entry_price * p.shares
+                const toWin = maxProfit - p.unrealized_pnl
+                const nearAutoClose = toWin > 0 && toWin / maxProfit < 0.2
+                const sideColor = p.side === 'Buy' ? 'text-emerald-400' : 'text-pink-400'
+
+                return (
                 <tr key={p.id} className="border-b border-surface-700/50 hover:bg-surface-700/30">
+                  <td className={`py-2 pr-3 font-mono font-semibold text-[10px] ${sideColor}`}>
+                    {p.side === 'Buy' ? '▲ BUY' : '▼ SELL'}
+                  </td>
                   <td className="py-2 pr-3 font-mono text-slate-200 max-w-[160px] truncate" title={p.market_title ?? p.token_id}>
                     {p.market_title ?? p.token_id}
                   </td>
@@ -101,6 +115,12 @@ function PositionsTable({ positions, loading, onRefresh }: Props) {
                   <td className="py-2 pr-3 font-mono text-slate-200">{fmt(p.current_price, 4)}</td>
                   <td className={`py-2 pr-3 font-mono font-semibold ${pnlClass(p.unrealized_pnl)}`}>
                     {fmtPnl(p.unrealized_pnl)}
+                  </td>
+                  <td className={`py-2 pr-3 font-mono text-right text-[10px] ${nearAutoClose ? 'text-emerald-300 font-bold' : 'text-slate-400'}`}>
+                    {nearAutoClose ? 'AUTO NOW' : `$${fmt(Math.max(0, toWin))}`}
+                  </td>
+                  <td className="py-2 pr-3 font-mono text-right text-slate-500 text-[10px]">
+                    {fmtDuration(p.opened_age_secs)}
                   </td>
                   <td className="py-2 text-right">
                     <button
@@ -112,7 +132,8 @@ function PositionsTable({ positions, loading, onRefresh }: Props) {
                     </button>
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>

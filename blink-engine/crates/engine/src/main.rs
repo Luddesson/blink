@@ -919,6 +919,9 @@ async fn main() -> Result<()> {
             started_at: Arc::new(std::time::Instant::now()),
             provider: engine::execution_provider::create_provider_from_env(),
             live_engine: live_for_web.as_ref().map(Arc::clone),
+            bullpen: _bullpen.clone(),
+            discovery_store: Some(Arc::clone(&discovery_store)),
+            convergence_store: convergence_store.clone(),
         };
 
         let static_dir = std::env::var("WEB_UI_STATIC_DIR").ok()

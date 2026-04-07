@@ -53,6 +53,12 @@ pub struct AppState {
     pub provider: Option<Arc<dyn crate::execution_provider::ExecutionProvider>>,
     /// Optional live engine — present only in live trading mode.
     pub live_engine: Option<Arc<LiveEngine>>,
+    /// Optional Bullpen bridge for enrichment data.
+    pub bullpen: Option<Arc<crate::bullpen_bridge::BullpenBridge>>,
+    /// Optional discovery store from Bullpen scanner.
+    pub discovery_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_discovery::DiscoveryStore>>>,
+    /// Optional convergence store from smart money monitor.
+    pub convergence_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_smart_money::ConvergenceStore>>>,
 }
 
 // ─── JSON response types ────────────────────────────────────────────────────
@@ -132,6 +138,9 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/positions/{id}/sell", post(post_sell_position))
         .route("/api/metrics", get(get_metrics))
         .route("/api/fill-window", get(get_fill_window))
+        .route("/api/bullpen/health", get(get_bullpen_health))
+        .route("/api/bullpen/discovery", get(get_bullpen_discovery))
+        .route("/api/bullpen/convergence", get(get_bullpen_convergence))
         .route("/ws", get(ws_handler))
         .with_state(state)
         .layer(cors);
@@ -903,5 +912,64 @@ async fn get_fill_window(State(state): State<AppState>) -> Json<serde_json::Valu
             "elapsed_secs": s.elapsed.as_secs_f64(),
             "countdown_secs": s.countdown.as_secs_f64(),
         })),
+    }
+}
+
+// ─── Bullpen API endpoints ──────────────────────────────────────────────────
+
+async fn get_bullpen_health(State(state): State<AppState>) -> impl IntoResponse {
+    if let Some(ref bridge) = state.bullpen {
+        let health = bridge.health().await;
+        Json(json!({
+            "enabled": true,
+            "authenticated": health.authenticated,
+            "consecutive_failures": health.consecutive_failures,
+            "total_calls": health.total_calls,
+            "total_failures": health.total_failures,
+            "avg_latency_ms": health.avg_latency_ms,
+        }))
+    } else {
+        Json(json!({ "enabled": false }))
+    }
+}
+
+async fn get_bullpen_discovery(State(state): State<AppState>) -> impl IntoResponse {
+    if let Some(ref store) = state.discovery_store {
+        let s = store.read().await;
+        let summary = s.summary();
+        Json(json!({
+            "enabled": true,
+            "total_markets": summary.total_markets,
+            "smart_money_markets": summary.smart_money_markets,
+            "avg_viability": summary.avg_viability,
+            "scan_count": summary.scan_count,
+            "last_scan_ago_secs": summary.last_scan_ago_secs,
+        }))
+    } else {
+        Json(json!({ "enabled": false }))
+    }
+}
+
+async fn get_bullpen_convergence(State(state): State<AppState>) -> impl IntoResponse {
+    if let Some(ref store) = state.convergence_store {
+        let s = store.read().await;
+        let summary = s.summary();
+        let signals: Vec<serde_json::Value> = s.active_signals.iter().map(|sig| {
+            json!({
+                "market": sig.market,
+                "convergence_score": sig.convergence_score,
+                "net_direction": sig.net_direction,
+                "total_usd": sig.total_usd,
+                "wallets": sig.wallets.len(),
+            })
+        }).collect();
+        Json(json!({
+            "enabled": true,
+            "active_signals": summary.active_signals,
+            "tracked_markets": summary.tracked_markets,
+            "signals": signals,
+        }))
+    } else {
+        Json(json!({ "enabled": false }))
     }
 }

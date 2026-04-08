@@ -660,7 +660,7 @@ async fn main() -> Result<()> {
             Arc::clone(&config),
             Arc::clone(&book_store),
             Some(activity.clone()),
-        ).expect("LiveEngine init failed — check vault config and LIVE_TRADING env vars"));
+        ));
         live_for_web = Some(Arc::clone(&live));
         Arc::clone(&live).spawn_reconciliation_worker();
 

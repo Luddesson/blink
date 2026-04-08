@@ -1,10 +1,9 @@
 ﻿# start-blink.ps1
-# Usage: .\start-blink.ps1                  (auto-detect build, release)
-#        .\start-blink.ps1 -Debug            (debug build, fast compile)
-#        .\start-blink.ps1 -SkipBuild        (skip cargo entirely, run existing binary)
-#        .\start-blink.ps1 -Watch            (AFK mode — auto-restart engine on crash)
-#        .\start-blink.ps1 -SkipBuild -Watch (fast AFK restart — no rebuild)
-param([switch]$Debug, [switch]$Watch, [switch]$SkipBuild)
+# Usage: .\start-blink.ps1              (auto-detect build, release — watchdog always on)
+#        .\start-blink.ps1 -Debug        (debug build, fast compile)
+#        .\start-blink.ps1 -SkipBuild    (skip cargo entirely, run existing binary)
+#        .\start-blink.ps1 -NoWatch      (disable auto-restart watchdog)
+param([switch]$Debug, [switch]$SkipBuild, [switch]$NoWatch, [switch]$Watch)
 $root = $PSScriptRoot
 $logs = "$root\logs"
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
@@ -17,7 +16,7 @@ function Kill-Tree($id) {
 
 # Stop old processes
 Write-Host "Stopping any running instances..." -ForegroundColor Yellow
-foreach ($pidFile in @("$logs\engine.pid", "$logs\vite.pid")) {
+foreach ($pidFile in @("$logs\watchdog.pid", "$logs\engine.pid", "$logs\vite.pid")) {
     if (Test-Path $pidFile) {
         $old = [int]((Get-Content $pidFile).Trim())
         Kill-Tree $old
@@ -151,73 +150,74 @@ if ($ready) {
     exit 1
 }
 
-# ── Watch mode: auto-restart engine on crash ──────────────────────────────────
-if ($Watch) {
+# ── Watchdog: always-on auto-restart (detached background process) ────────────
+# Only skip if -NoWatch was explicitly passed
+if (-not $NoWatch) {
     Write-Host ""
     Write-Host "================================================" -ForegroundColor Magenta
-    Write-Host "  WATCH MODE: Auto-restart on crash (AFK safe)" -ForegroundColor Magenta
-    Write-Host "  Press Ctrl+C to stop." -ForegroundColor Gray
+    Write-Host "  WATCHDOG: Auto-restart enabled (always on)" -ForegroundColor Magenta
+    Write-Host "  Stop it with: .\stop-blink.ps1" -ForegroundColor Gray
     Write-Host "================================================" -ForegroundColor Magenta
 
-    $restartCount = 0
-    $failStreak = 0
-    $failThreshold = 3  # require 3 consecutive failures before restarting
-    while ($true) {
-        Start-Sleep 5
+    # Write watchdog script to a temp file so it can run fully detached
+    $watchdogScript = "$logs\watchdog.ps1"
+    @"
+`$engineLauncher = '$engineLauncher'
+`$engineLog      = '$engineLog'
+`$logs           = '$logs'
+`$failStreak     = 0
+`$failThreshold  = 3
+`$restartCount   = 0
+while (`$true) {
+    Start-Sleep 5
+    `$alive = `$false
+    try {
+        `$null = Invoke-RestMethod 'http://localhost:3030/api/status' -TimeoutSec 8
+        `$alive = `$true
+    } catch {}
 
-        # Check if engine is still responding
-        $alive = $false
-        try {
-            $null = Invoke-RestMethod "http://localhost:3030/api/status" -TimeoutSec 8
-            $alive = $true
-        } catch {}
+    if (`$alive) { `$failStreak = 0; continue }
 
-        if ($alive) {
-            $failStreak = 0  # reset streak on any successful response
-            continue
+    `$failStreak++
+    `$ts = Get-Date -Format 'HH:mm:ss'
+    if (`$failStreak -lt `$failThreshold) {
+        "[`$ts] Engine slow (streak `$failStreak/`$failThreshold)" | Out-File -Append "`$logs\watchdog.log"
+        continue
+    }
+
+    `$failStreak = 0
+    `$restartCount++
+    "[`$ts] Engine DOWN -- restart #`$restartCount" | Out-File -Append "`$logs\watchdog.log"
+
+    # Check for panic sentinel
+    `$panicFile = '$root\blink-engine\logs\paper_portfolio_state.json.panic'
+    if (Test-Path `$panicFile) {
+        `$panicMsg = Get-Content `$panicFile -Raw
+        "[`$ts] PANIC: `$panicMsg" | Out-File -Append "`$logs\watchdog.log"
+        Remove-Item `$panicFile -ErrorAction SilentlyContinue
+    }
+
+    # Only restart if port is free
+    `$portInUse = (netstat -an | Select-String '0.0.0.0:3030.*LISTENING') -ne `$null
+    if (-not `$portInUse) {
+        `$ep = Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File ``"`$engineLauncher``"" -WindowStyle Hidden -PassThru
+        `$ep.Id | Out-File "`$logs\engine.pid"
+        "[`$ts] Engine restarted (PID `$(`$ep.Id))" | Out-File -Append "`$logs\watchdog.log"
+
+        `$back = `$false
+        for (`$j = 0; `$j -lt 15; `$j++) {
+            Start-Sleep 2
+            try { `$null = Invoke-RestMethod 'http://localhost:3030/api/status' -TimeoutSec 5; `$back = `$true; break } catch {}
         }
-
-        $failStreak++
-        $ts = Get-Date -Format "HH:mm:ss"
-        if ($failStreak -lt $failThreshold) {
-            Write-Host "[$ts] Engine slow/unreachable (streak $failStreak/$failThreshold) — waiting..." -ForegroundColor Gray
-            continue
-        }
-
-        # Three consecutive failures — treat as a real crash
-        $failStreak = 0
-        $restartCount++
-        Write-Host "[$ts] Engine not responding after $failThreshold checks — restart #$restartCount" -ForegroundColor Yellow
-
-            # Check for panic sentinel file
-            $panicFile = "$root\blink-engine\logs\paper_portfolio_state.json.panic"
-            if (Test-Path $panicFile) {
-                $panicMsg = Get-Content $panicFile -Raw
-                Write-Host "  PANIC detected: $panicMsg" -ForegroundColor Red
-                Remove-Item $panicFile -ErrorAction SilentlyContinue
-            }
-
-            # Restart engine only (Vite stays running)
-            $portInUse = (netstat -an | Select-String "0.0.0.0:3030.*LISTENING") -ne $null
-            if (-not $portInUse) {
-                $ep2 = Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$engineLauncher`"" -WindowStyle Hidden -PassThru
-                $ep2.Id | Out-File "$logs\engine.pid"
-                Write-Host "  Engine restarted (PID $($ep2.Id))" -ForegroundColor Green
-
-                # Wait up to 30s for it to come back
-                $back = $false
-                for ($j = 0; $j -lt 15; $j++) {
-                    Start-Sleep 2
-                    try {
-                        $null = Invoke-RestMethod "http://localhost:3030/api/status" -TimeoutSec 5
-                        $back = $true; break
-                    } catch {}
-                }
-                if ($back) {
-                    Write-Host "  Engine is back online." -ForegroundColor Green
-                } else {
-                    Write-Host "  Engine failed to restart — check $engineLog" -ForegroundColor Red
-                }
-            }
+        if (`$back) { "[`$ts] Engine back online." | Out-File -Append "`$logs\watchdog.log" }
+        else { "[`$ts] Engine failed to restart -- see `$engineLog" | Out-File -Append "`$logs\watchdog.log" }
     }
 }
+"@ | Set-Content $watchdogScript
+
+    "" | Set-Content "$logs\watchdog.log"
+    $wd = Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$watchdogScript`"" -WindowStyle Hidden -PassThru
+    $wd.Id | Out-File "$logs\watchdog.pid"
+    Write-Host "  Watchdog PID: $($wd.Id)" -ForegroundColor Green
+}
+

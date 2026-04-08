@@ -18,6 +18,7 @@ import logging
 import signal
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
@@ -27,7 +28,18 @@ from .config import AlphaConfig
 from .connectors.gamma import fetch_active_markets
 from .submission import submit_signal
 
-load_dotenv()
+# Load .env — search current dir, then blink-engine/, then repo root
+def _load_env() -> None:
+    candidates = [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parents[2] / ".env",   # blink-engine/.env
+        Path(__file__).resolve().parents[3] / ".env",   # repo root/.env
+    ]
+    for p in candidates:
+        if p.exists():
+            load_dotenv(p, override=False)
+
+_load_env()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,7 +111,16 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI) -> None:
 
 async def main_loop(cfg: AlphaConfig) -> None:
     if not cfg.llm_api_key:
-        logger.error("XAI_API_KEY (or OPENAI_API_KEY) is not set — alpha sidecar cannot start")
+        logger.error(
+            "XAI_API_KEY is not set. Add it to blink-engine/.env:\n"
+            "  XAI_API_KEY=xai-...\n"
+            "Searched: %s",
+            ", ".join(str(p) for p in [
+                Path.cwd() / ".env",
+                Path(__file__).resolve().parents[2] / ".env",
+                Path(__file__).resolve().parents[3] / ".env",
+            ])
+        )
         sys.exit(1)
 
     openai_client = AsyncOpenAI(api_key=cfg.llm_api_key, base_url=cfg.llm_base_url)

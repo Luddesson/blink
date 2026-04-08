@@ -24,20 +24,26 @@ pip install -e .
 Add to your `.env` file (alongside the main Blink engine config):
 
 ```env
-# Required
-OPENAI_API_KEY=sk-...
+# Required — Grok (xAI)
+XAI_API_KEY=xai-...
 ALPHA_ENABLED=true          # Enable sidecar in the engine
 ALPHA_TRADING_ENABLED=true  # Allow sidecar signals to trigger trades
 
 # Optional — tune to taste
-OPENAI_MODEL=gpt-4-turbo           # or gpt-4o, gpt-3.5-turbo
+ALPHA_MODEL=grok-3                 # or grok-3-mini, grok-beta
+LLM_BASE_URL=https://api.x.ai/v1  # default, no need to set unless changing provider
 ALPHA_DISCOVERY_INTERVAL_SECS=300  # How often to scan (default: 5 min)
 ALPHA_MIN_EDGE_BPS=500             # Minimum edge to act (default: 5%)
-ALPHA_CONFIDENCE_FLOOR=0.65        # Minimum LLM confidence (0.0–1.0)
+ALPHA_CONFIDENCE_FLOOR=0.65        # Minimum confidence (0.0–1.0)
 ALPHA_MAX_SINGLE_ORDER_USDC=5.0    # Max bet per signal ($)
 ALPHA_MAX_CONCURRENT_POSITIONS=3   # Max open AI positions
-ALPHA_MAX_LLM_CALLS_PER_CYCLE=20   # GPT calls per discovery cycle
+ALPHA_MAX_LLM_CALLS_PER_CYCLE=20   # Grok calls per discovery cycle
 BLINK_RPC_URL=http://127.0.0.1:7878  # Blink engine RPC address
+
+# To switch to OpenAI instead of Grok:
+# OPENAI_API_KEY=sk-...
+# ALPHA_MODEL=gpt-4-turbo
+# LLM_BASE_URL=https://api.openai.com/v1
 ```
 
 ### 3. Start alongside Blink

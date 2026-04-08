@@ -98,14 +98,15 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI) -> None:
 
 
 async def main_loop(cfg: AlphaConfig) -> None:
-    if not cfg.openai_api_key:
-        logger.error("OPENAI_API_KEY is not set — alpha sidecar cannot start")
+    if not cfg.llm_api_key:
+        logger.error("XAI_API_KEY (or OPENAI_API_KEY) is not set — alpha sidecar cannot start")
         sys.exit(1)
 
-    openai_client = AsyncOpenAI(api_key=cfg.openai_api_key)
+    openai_client = AsyncOpenAI(api_key=cfg.llm_api_key, base_url=cfg.llm_base_url)
     logger.info(
-        "Alpha sidecar starting | model=%s | interval=%ds | min_edge=%dbps | rpc=%s",
+        "Alpha sidecar starting | model=%s | base_url=%s | interval=%ds | min_edge=%dbps | rpc=%s",
         cfg.openai_model,
+        cfg.llm_base_url,
         cfg.discovery_interval_secs,
         cfg.min_edge_bps,
         cfg.blink_rpc_url,

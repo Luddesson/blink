@@ -11,9 +11,10 @@ class AlphaConfig:
     # Blink engine RPC
     blink_rpc_url: str = "http://127.0.0.1:7878"
 
-    # OpenAI
-    openai_api_key: str = ""
-    openai_model: str = "gpt-4-turbo"
+    # LLM — defaults to Grok (xAI), OpenAI-compatible API
+    llm_api_key: str = ""
+    llm_base_url: str = "https://api.x.ai/v1"
+    openai_model: str = "grok-3"
 
     # Discovery
     gamma_api_url: str = "https://gamma-api.polymarket.com"
@@ -35,10 +36,17 @@ class AlphaConfig:
 
     @classmethod
     def from_env(cls) -> AlphaConfig:
+        # Accept XAI_API_KEY (Grok) or OPENAI_API_KEY as fallback
+        api_key = (
+            os.getenv("XAI_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+            or ""
+        )
         return cls(
             blink_rpc_url=os.getenv("BLINK_RPC_URL", cls.blink_rpc_url),
-            openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-            openai_model=os.getenv("OPENAI_MODEL", cls.openai_model),
+            llm_api_key=api_key,
+            llm_base_url=os.getenv("LLM_BASE_URL", cls.llm_base_url),
+            openai_model=os.getenv("ALPHA_MODEL", os.getenv("OPENAI_MODEL", cls.openai_model)),
             gamma_api_url=os.getenv("GAMMA_API_URL", cls.gamma_api_url),
             discovery_interval_secs=int(os.getenv("ALPHA_DISCOVERY_INTERVAL_SECS", str(cls.discovery_interval_secs))),
             min_edge_bps=int(os.getenv("ALPHA_MIN_EDGE_BPS", str(cls.min_edge_bps))),

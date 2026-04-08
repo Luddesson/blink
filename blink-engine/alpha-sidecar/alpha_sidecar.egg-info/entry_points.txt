@@ -1,2 +1,0 @@
-[console_scripts]
-alpha-sidecar = alpha_sidecar.main:main

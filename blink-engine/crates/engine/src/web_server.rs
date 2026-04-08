@@ -712,6 +712,10 @@ async fn post_update_config(
         cfg.var_threshold_pct = v.clamp(0.01, 1.0);
         changed.push("var_threshold_pct");
     }
+    if let Some(v) = body.get("trading_enabled").and_then(|v| v.as_bool()) {
+        cfg.trading_enabled = v;
+        changed.push("trading_enabled");
+    }
 
     tracing::warn!(fields = ?changed, "Risk config updated via API");
     Json(json!({ "ok": true, "updated": changed }))

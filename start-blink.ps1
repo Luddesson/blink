@@ -160,20 +160,34 @@ if ($Watch) {
     Write-Host "================================================" -ForegroundColor Magenta
 
     $restartCount = 0
+    $failStreak = 0
+    $failThreshold = 3  # require 3 consecutive failures before restarting
     while ($true) {
         Start-Sleep 5
 
         # Check if engine is still responding
         $alive = $false
         try {
-            $null = Invoke-RestMethod "http://localhost:3030/api/status" -TimeoutSec 5
+            $null = Invoke-RestMethod "http://localhost:3030/api/status" -TimeoutSec 8
             $alive = $true
         } catch {}
 
-        if (-not $alive) {
-            $restartCount++
-            $ts = Get-Date -Format "HH:mm:ss"
-            Write-Host "[$ts] Engine not responding — restart #$restartCount" -ForegroundColor Yellow
+        if ($alive) {
+            $failStreak = 0  # reset streak on any successful response
+            continue
+        }
+
+        $failStreak++
+        $ts = Get-Date -Format "HH:mm:ss"
+        if ($failStreak -lt $failThreshold) {
+            Write-Host "[$ts] Engine slow/unreachable (streak $failStreak/$failThreshold) — waiting..." -ForegroundColor Gray
+            continue
+        }
+
+        # Three consecutive failures — treat as a real crash
+        $failStreak = 0
+        $restartCount++
+        Write-Host "[$ts] Engine not responding after $failThreshold checks — restart #$restartCount" -ForegroundColor Yellow
 
             # Check for panic sentinel file
             $panicFile = "$root\blink-engine\logs\paper_portfolio_state.json.panic"
@@ -205,6 +219,5 @@ if ($Watch) {
                     Write-Host "  Engine failed to restart — check $engineLog" -ForegroundColor Red
                 }
             }
-        }
     }
 }

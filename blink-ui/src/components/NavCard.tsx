@@ -59,16 +59,16 @@ export default function NavCard({
     v: v - START_BALANCE,
   }))
 
-  // Rolling 30-min window: domain always ends at latest point
+  // Rolling 30-min window: right edge is always NOW, regardless of last data point
   const CHART_WINDOW_MS = 30 * 60 * 1000
-  const latestTs = equityTimestamps[equityTimestamps.length - 1] ?? Date.now()
-  const windowStart = latestTs - CHART_WINDOW_MS
+  const nowMs = Date.now()
+  const windowStart = nowMs - CHART_WINDOW_MS
 
   // Generate 1-min tick marks within the visible window
   const TICK_INTERVAL_MS = 60 * 1000
   const firstTick = Math.ceil(windowStart / TICK_INTERVAL_MS) * TICK_INTERVAL_MS
   const xTicks: number[] = []
-  for (let t = firstTick; t <= latestTs; t += TICK_INTERVAL_MS) {
+  for (let t = firstTick; t <= nowMs; t += TICK_INTERVAL_MS) {
     xTicks.push(t)
   }
 
@@ -139,7 +139,7 @@ export default function NavCard({
                 dataKey="t"
                 type="number"
                 scale="time"
-                domain={[windowStart, latestTs]}
+                domain={[windowStart, nowMs]}
                 ticks={xTicks}
                 tickFormatter={fmtTickTime}
                 tick={{ fill: '#475569', fontSize: 9 }}

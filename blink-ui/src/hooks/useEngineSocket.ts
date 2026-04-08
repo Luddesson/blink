@@ -32,7 +32,20 @@ export function useEngineSocket() {
       setLastMessageAt(Date.now())
       try {
         const data = JSON.parse(e.data) as WsSnapshot
-        if (data.type === 'snapshot') setSnapshot(data)
+        if (data.type === 'snapshot') {
+          setSnapshot(prev => {
+            // Don't overwrite a valid snapshot with an empty one from a
+            // freshly-restarted engine. Keep stale data until the engine
+            // has real state to show (NAV > 0 or positions present).
+            const hasData = (data.portfolio?.nav_usdc ?? 0) > 0
+              || (data.portfolio?.open_positions?.length ?? 0) > 0
+              || (data.portfolio?.closed_trades_count ?? 0) > 0
+            const hadData = (prev?.portfolio?.nav_usdc ?? 0) > 0
+              || (prev?.portfolio?.open_positions?.length ?? 0) > 0
+            if (hadData && !hasData) return prev  // hold stale until engine is ready
+            return data
+          })
+        }
       } catch {
         // ignore malformed messages
       }

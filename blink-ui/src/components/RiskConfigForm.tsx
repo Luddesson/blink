@@ -17,6 +17,7 @@ export default function RiskConfigForm({ risk, className }: Props) {
     max_single_order_usdc: risk.max_single_order_usdc ?? 20,
     max_orders_per_second: risk.max_orders_per_second ?? 3,
     var_threshold_pct: (risk.var_threshold_pct ?? 0.05) * 100,
+    trading_enabled: risk.trading_enabled ?? false,
   })
 
   useEffect(() => {
@@ -27,6 +28,7 @@ export default function RiskConfigForm({ risk, className }: Props) {
         max_single_order_usdc: risk.max_single_order_usdc ?? 20,
         max_orders_per_second: risk.max_orders_per_second ?? 3,
         var_threshold_pct: (risk.var_threshold_pct ?? 0.05) * 100,
+        trading_enabled: risk.trading_enabled ?? false,
       })
     }
   }, [risk, editing])
@@ -40,6 +42,7 @@ export default function RiskConfigForm({ risk, className }: Props) {
         max_single_order_usdc: draft.max_single_order_usdc,
         max_orders_per_second: draft.max_orders_per_second,
         var_threshold_pct: draft.var_threshold_pct / 100,
+        trading_enabled: draft.trading_enabled,
       })
       setEditing(false)
     } catch (e) {
@@ -49,7 +52,7 @@ export default function RiskConfigForm({ risk, className }: Props) {
     }
   }
 
-  const Row = ({ label, field, suffix, step }: { label: string; field: keyof typeof draft; suffix: string; step?: number }) => (
+  const Row = ({ label, field, suffix, step }: { label: string; field: keyof Omit<typeof draft, 'trading_enabled'>; suffix: string; step?: number }) => (
     <div className="flex justify-between items-center py-2 border-b border-slate-800">
       <span className="text-xs text-slate-400">{label}</span>
       {editing ? (
@@ -113,11 +116,26 @@ export default function RiskConfigForm({ risk, className }: Props) {
         <Row label="Max Order Size" field="max_single_order_usdc" suffix="$" step={1} />
         <Row label="Max Orders/sec" field="max_orders_per_second" suffix="" />
         <Row label="VaR Threshold" field="var_threshold_pct" suffix="%" step={0.5} />
+
+        {/* Trading enabled toggle */}
         <div className="flex justify-between items-center py-2 border-b border-slate-800">
           <span className="text-xs text-slate-400">Trading Enabled</span>
-          <span className={`text-xs font-mono font-semibold ${risk.trading_enabled ? 'text-emerald-400' : 'text-red-400'}`}>
-            {risk.trading_enabled ? 'YES' : 'NO'}
-          </span>
+          {editing ? (
+            <button
+              onClick={() => setDraft({ ...draft, trading_enabled: !draft.trading_enabled })}
+              className={`relative w-10 h-5 rounded-full transition-colors text-[10px] font-bold ${
+                draft.trading_enabled ? 'bg-emerald-600' : 'bg-slate-700'
+              }`}
+            >
+              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                draft.trading_enabled ? 'translate-x-5' : 'translate-x-0.5'
+              }`} />
+            </button>
+          ) : (
+            <span className={`text-xs font-mono font-semibold ${draft.trading_enabled ? 'text-emerald-400' : 'text-red-400'}`}>
+              {draft.trading_enabled ? 'YES' : 'NO'}
+            </span>
+          )}
         </div>
       </div>
 

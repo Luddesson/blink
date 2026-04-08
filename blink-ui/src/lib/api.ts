@@ -56,5 +56,5 @@ export const api = {
   orderbook: (tokenId: string) => get<OrderBookResponse>(`/api/orderbook/${tokenId}`),
   orderbooks: () => get<OrderBooksResponse>('/api/orderbooks'),
   twin: () => get<TwinSnapshot>('/api/twin'),
-  updateConfig: (config: Record<string, number>) => post<{ ok: boolean; updated: string[] }>('/api/config', config),
+  updateConfig: (config: Record<string, number | boolean>) => post<{ ok: boolean; updated: string[] }>('/api/config', config),
 }

@@ -8,12 +8,20 @@ interface Props {
 }
 
 const LEVEL_COLORS: Record<string, string> = {
+  // Frontend lowercase (from WS recent_activity)
   info: 'text-slate-400',
   warn: 'text-yellow-400',
   error: 'text-red-400',
   success: 'text-emerald-400',
   trade: 'text-indigo-300',
   signal: 'text-sky-400',
+  // Backend Debug-format values (from /api/activity)
+  Engine: 'text-slate-400',
+  Signal: 'text-sky-400',
+  Fill: 'text-emerald-400',
+  Abort: 'text-red-400',
+  Skip: 'text-yellow-400',
+  Warn: 'text-yellow-400',
 }
 
 export default function ActivityFeed({ wsEntries }: Props) {

@@ -51,7 +51,12 @@ export function fmtNeonTime(input: string | number | Date): string {
       const parts = input.trim().split(':')
       return `[${parts[0].padStart(2, '0')}:${parts[1]}]`
     }
-    const d = input instanceof Date ? input : new Date(input)
+    // Rust chrono emits nanoseconds (9 sub-second digits): new Date() only handles ms (3 digits).
+    // Strip any sub-second precision beyond 3 digits so JS Date parses correctly.
+    const normalized = typeof input === 'string'
+      ? input.replace(/(\.\d{3})\d+/, '$1')
+      : input
+    const d = normalized instanceof Date ? normalized : new Date(normalized)
     if (isNaN(d.getTime())) return '[--:--]'
     const hh = d.toLocaleTimeString('sv-SE', {
       hour: '2-digit',

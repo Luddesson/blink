@@ -433,6 +433,33 @@ impl PaperEngine {
         self.enrich_signal_metadata(&mut signal).await;
         let queue_delay_ms = prio_signal.queued_at.elapsed().as_millis() as u64;
 
+        // ── 6-hour event horizon rule ─────────────────────────────────────
+        // Skip signals where the event starts more than 6 hours from now.
+        // We only skip when we actually know the start time — unknown timing passes through.
+        const MAX_EVENT_HORIZON_SECS: i64 = 6 * 3600;
+        if let Some(start_ts) = signal.event_start_time {
+            let now_secs = chrono::Utc::now().timestamp();
+            if start_ts > now_secs + MAX_EVENT_HORIZON_SECS {
+                let hours_away = (start_ts - now_secs + 1799) / 3600; // round up
+                warn!(
+                    token_id   = %signal.token_id,
+                    hours_away = hours_away,
+                    "⏭️  Event too far away — skipping (>{} h horizon)",
+                    MAX_EVENT_HORIZON_SECS / 3600,
+                );
+                if let Some(ref log) = self.activity {
+                    log_push(log, EntryKind::Skip, format!(
+                        "Skipped — event {}h away (max 6h horizon)", hours_away
+                    ));
+                }
+                let mut p = self.portfolio.lock().await;
+                p.skipped_orders += 1;
+                drop(p);
+                self.record_rejection("event_too_far").await;
+                return;
+            }
+        }
+
         // Convert scaled integers back to f64 for human-readable logic.
         let mut entry_price      = signal.price as f64 / 1_000.0;
         let rn1_shares       = signal.size  as f64 / 1_000.0;
@@ -1451,6 +1478,16 @@ impl PaperEngine {
     async fn enrich_signal_metadata(&self, signal: &mut RN1Signal) {
         let title_ok = signal.market_title.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
         let outcome_ok = signal.market_outcome.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+
+        // Check cache for timing first (avoids redundant Gamma API calls)
+        {
+            let cache = self.signal_meta_cache.lock().await;
+            if let Some(entry) = cache.get(&signal.token_id) {
+                if signal.event_start_time.is_none() { signal.event_start_time = entry.event_start_time; }
+                if signal.event_end_time.is_none()   { signal.event_end_time   = entry.event_end_time; }
+            }
+        }
+
         if title_ok && outcome_ok && signal.event_start_time.is_some() {
             return;
         }
@@ -1462,11 +1499,17 @@ impl PaperEngine {
                 signal.market_outcome = outcome;
             }
         }
-        // Enrich event timing from Gamma API if not already set
+        // Enrich event timing from Gamma API if still not set
         if signal.event_start_time.is_none() || signal.event_end_time.is_none() {
             if let Some((start, end)) = self.fetch_event_timing(&signal.token_id).await {
                 if signal.event_start_time.is_none() { signal.event_start_time = start; }
-                if signal.event_end_time.is_none() { signal.event_end_time = end; }
+                if signal.event_end_time.is_none()   { signal.event_end_time   = end; }
+                // Persist timing into cache so future signals for this token don't re-fetch
+                let mut cache = self.signal_meta_cache.lock().await;
+                if let Some(entry) = cache.get_mut(&signal.token_id) {
+                    entry.event_start_time = signal.event_start_time;
+                    entry.event_end_time   = signal.event_end_time;
+                }
             }
         }
     }
@@ -1575,23 +1618,38 @@ impl PaperEngine {
         let market = markets.first()?;
 
         let parse_ts = |s: &str| -> Option<i64> {
+            let s = s.trim();
+            // Full ISO 8601 / RFC 3339
             chrono::DateTime::parse_from_rfc3339(s).ok()
                 .map(|dt| dt.timestamp())
+                // "YYYY-MM-DD HH:MM:SS" (Polymarket Gamma legacy)
                 .or_else(|| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
                     .map(|ndt| ndt.and_utc().timestamp()))
+                // "YYYY-MM-DDTHH:MM:SS" (no tz)
                 .or_else(|| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").ok()
                     .map(|ndt| ndt.and_utc().timestamp()))
+                // Date-only "YYYY-MM-DD" → midnight UTC
+                .or_else(|| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+                    .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()))
         };
 
-        let event_start = market.get("game_start_date")
-            .or_else(|| market.get("start_date_iso"))
-            .and_then(|v| v.as_str())
-            .and_then(|s| parse_ts(s));
+        // Try all known Polymarket field name variants (snake_case AND camelCase)
+        let get_str = |market: &serde_json::Value, keys: &[&str]| -> Option<String> {
+            keys.iter().find_map(|k| market.get(*k)?.as_str().map(|s| s.to_string()))
+        };
 
-        let event_end = market.get("end_date_iso")
-            .or_else(|| market.get("end_date"))
-            .and_then(|v| v.as_str())
-            .and_then(|s| parse_ts(s));
+        let event_start = get_str(market, &[
+            "game_start_date", "gameStartDate",
+            "start_date_iso",  "startDateIso",
+            "start_date",      "startDate",
+            "gameStartTime",   "game_start_time",
+        ]).and_then(|s| parse_ts(&s));
+
+        let event_end = get_str(market, &[
+            "end_date_iso", "endDateIso",
+            "end_date",     "endDate",
+            "resolution_date", "resolutionDate",
+        ]).and_then(|s| parse_ts(&s));
 
         Some((event_start, event_end))
     }

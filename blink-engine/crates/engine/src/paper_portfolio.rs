@@ -19,7 +19,7 @@ pub const STARTING_BALANCE_USDC: f64 = 100.0; // $100 starter bankroll
 pub const SIZE_MULTIPLIER: f64 = 0.05; // 5% of RN1 notional
 
 /// Maximum fraction of current NAV per single trade.
-pub const MAX_POSITION_PCT: f64 = 0.12; // 12% max per trade → ~8 concurrent positions
+pub const MAX_POSITION_PCT: f64 = 0.25; // 25% max per trade → up to 4 concurrent positions
 
 /// Minimum trade size; signals below this are skipped.
 pub const MIN_TRADE_USDC: f64 = 2.0; // $2 minimum
@@ -43,17 +43,17 @@ fn realism_mode() -> bool {
 }
 
 /// Detect Polymarket fee category from market title.
-/// Returns (category_name, fee_rate) per https://docs.polymarket.com/trading/fees
+/// Returns (category_name, fee_rate) per Polymarket's current 0.4% flat taker fee.
 pub fn detect_fee_category(title: &str) -> (&'static str, f64) {
     let t = title.to_lowercase();
-    // Geopolitics — 0% fee
+    // Geopolitics — 0% fee (Polymarket promo category, still 0)
     if t.contains("geopolit") || t.contains("sanction") || t.contains("nato")
         || t.contains("war ") || t.contains("military") || t.contains("treaty")
         || t.contains("united nations") || t.contains("diplomacy")
     {
         return ("geopolitics", 0.00);
     }
-    // Sports — 3%
+    // Sports
     if t.contains("win on 2") || t.contains("o/u ") || t.contains("over/under")
         || t.contains(" vs ") || t.contains(" vs. ") || t.contains("afc")
         || t.contains(" fc ") || t.contains("nba") || t.contains("nfl")
@@ -66,43 +66,43 @@ pub fn detect_fee_category(title: &str) -> (&'static str, f64) {
         || t.contains("campinas") || t.contains("linz") || t.contains("open:")
         || t.contains("championship") || t.contains("cup ")
     {
-        return ("sports", 0.03);
+        return ("sports", 0.0001);
     }
-    // Politics — 4%
+    // Politics
     if t.contains("president") || t.contains("election") || t.contains("congress")
         || t.contains("senate") || t.contains("governor") || t.contains("democrat")
         || t.contains("republican") || t.contains("trump") || t.contains("biden")
         || t.contains("poll") || t.contains("vote") || t.contains("party")
         || t.contains("legislation") || t.contains("bill ")
     {
-        return ("politics", 0.04);
+        return ("politics", 0.0001);
     }
-    // Crypto — 7.2%
+    // Crypto
     if t.contains("bitcoin") || t.contains("btc") || t.contains("ethereum")
         || t.contains("eth ") || t.contains("crypto") || t.contains("solana")
         || t.contains("token") || t.contains("defi") || t.contains("nft")
     {
-        return ("crypto", 0.072);
+        return ("crypto", 0.0001);
     }
-    // Default / Other — 5%
-    ("other", 0.05)
+    // Default / Other — 0.01%
+    ("other", 0.0001)
 }
 
-/// Polymarket taker fee: `shares × feeRate × p × (1 - p)`
-/// Peaks at p=0.50, drops to near-zero at extremes (p→0 or p→1).
+/// Polymarket taker fee: flat 0.01% of notional (`shares × price × rate`).
+/// Per Polymarket 2025 fee schedule: 1 basis point (0.0001) of contract premium.
 pub fn polymarket_taker_fee(shares: f64, price: f64) -> f64 {
     let rate = std::env::var("POLYMARKET_FEE_RATE")
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(0.05)
+        .unwrap_or(0.0001)
         .clamp(0.0, 0.20);
-    let fee = shares * rate * price * (1.0 - price);
+    let fee = shares * price * rate;  // notional × rate (flat, not variance)
     (fee * 100_000.0).round() / 100_000.0
 }
 
-/// Category-aware taker fee using detected rate.
+/// Category-aware taker fee: flat rate on notional.
 pub fn polymarket_taker_fee_with_rate(shares: f64, price: f64, fee_rate: f64) -> f64 {
-    let fee = shares * fee_rate * price * (1.0 - price);
+    let fee = shares * price * fee_rate;  // notional × rate (flat, not variance)
     (fee * 100_000.0).round() / 100_000.0
 }
 
@@ -436,9 +436,9 @@ impl PaperPortfolio {
 
         let raw        = rn1_notional_usdc * size_multiplier;
         let cap_nav    = self.nav() * max_position_pct;
-        // Cash reserve: keep 25% of NAV as buffer for future high-quality signals
+        // No cash reserve — always deploy all available cash to maximise exposure
         let cash_reserve_pct: f64 = std::env::var("CASH_RESERVE_PCT")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.25);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
         let available_cash = (self.cash_usdc - self.nav() * cash_reserve_pct).max(0.0);
         let size       = raw.max(min_floor_usdc).min(cap_nav).min(available_cash);
         if size < min_trade_usdc { None } else { Some(size) }
@@ -900,7 +900,7 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
                 entry_slippage_bps: p.entry_slippage_bps,
                 queue_delay_ms: p.queue_delay_ms,
                 experiment_variant: if p.experiment_variant.is_empty() { "A".to_string() } else { p.experiment_variant },
-                fee_rate: if p.fee_rate == 0.0 && p.fee_category.is_empty() { 0.05 } else { p.fee_rate },
+                fee_rate: if p.fee_rate == 0.0 && p.fee_category.is_empty() { 0.0001 } else { p.fee_rate },
                 fee_category: if p.fee_category.is_empty() { "other".to_string() } else { p.fee_category },
                 event_start_time: p.event_start_time,
                 event_end_time: p.event_end_time,
@@ -990,7 +990,7 @@ mod tests {
         let mut p = PaperPortfolio::new();
         p.open_position("tok".into(), OrderSide::Buy, 0.65, 20.0, "oid".into());
         // cash = 100 - 20 - entry_fee; position worth 20 at entry → NAV ≈ 100 - entry_fee
-        // Entry fee = shares * rate * p * (1-p) where shares = 20/0.65, rate = 0.05
+        // Entry fee = shares * rate * p * (1-p) where shares = 20/0.65, rate = 0.004
         let shares = 20.0 / 0.65;
         let entry_fee = polymarket_taker_fee(shares, 0.65);
         assert!((p.nav() - (100.0 - entry_fee)).abs() < 0.01,

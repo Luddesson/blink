@@ -88,7 +88,8 @@ function PositionsTable({ positions, loading, onRefresh }: Props) {
                     {label} <SortIcon k={k} />
                   </th>
                 ))}
-                <th className="text-right pb-2 pr-3 font-normal">Cost</th>
+                <th className="text-right pb-2 pr-3 font-normal">Stake</th>
+                <th className="text-right pb-2 pr-3 font-normal">Value</th>
                 <th className="text-right pb-2 pr-3 font-normal">To Win</th>
                 <th className="text-right pb-2 pr-3 font-normal">Event</th>
                 <th className="text-right pb-2 pr-3 font-normal">Age</th>
@@ -97,9 +98,8 @@ function PositionsTable({ positions, loading, onRefresh }: Props) {
             </thead>
             <tbody>
               {sorted.map((p) => {
-                const cost = p.side === 'Buy'
-                  ? p.entry_price * p.shares
-                  : (1 - p.entry_price) * p.shares
+                const cost = p.usdc_spent
+                const currentValue = p.shares * p.current_price
                 const maxProfit = p.side === 'Buy'
                   ? (1 - p.entry_price) * p.shares
                   : p.entry_price * p.shares
@@ -131,6 +131,9 @@ function PositionsTable({ positions, loading, onRefresh }: Props) {
                   </td>
                   <td className="py-2 pr-3 font-mono text-right text-slate-400 text-[10px]">
                     ${fmt(cost)}
+                  </td>
+                  <td className={`py-2 pr-3 font-mono text-right text-[10px] ${currentValue >= cost ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    ${fmt(currentValue)}
                   </td>
                   <td className={`py-2 pr-3 font-mono text-right text-[10px] ${nearAutoClose ? 'text-emerald-300 font-bold' : 'text-slate-400'}`}>
                     {nearAutoClose ? 'AUTO NOW' : `$${fmt(Math.max(0, toWin))}`}

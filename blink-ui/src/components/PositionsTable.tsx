@@ -1,7 +1,7 @@
 import { useState, useMemo, memo } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import type { Position } from '../types'
-import { fmt, fmtPnl, fmtDuration, pnlClass } from '../lib/format'
+import { fmt, fmtPnl, fmtDuration, pnlClass, formatEventTiming, fmtNeonTime } from '../lib/format'
 import { api } from '../lib/api'
 
 interface Props {
@@ -88,24 +88,37 @@ function PositionsTable({ positions, loading, onRefresh }: Props) {
                     {label} <SortIcon k={k} />
                   </th>
                 ))}
+                <th className="text-right pb-2 pr-3 font-normal">Cost</th>
                 <th className="text-right pb-2 pr-3 font-normal">To Win</th>
+                <th className="text-right pb-2 pr-3 font-normal">Event</th>
                 <th className="text-right pb-2 pr-3 font-normal">Age</th>
                 <th className="pb-2 text-right font-normal">Action</th>
               </tr>
             </thead>
             <tbody>
               {sorted.map((p) => {
+                const cost = p.side === 'Buy'
+                  ? p.entry_price * p.shares
+                  : (1 - p.entry_price) * p.shares
                 const maxProfit = p.side === 'Buy'
                   ? (1 - p.entry_price) * p.shares
                   : p.entry_price * p.shares
                 const toWin = maxProfit - p.unrealized_pnl
                 const nearAutoClose = toWin > 0 && toWin / maxProfit < 0.2
-                const sideColor = p.side === 'Buy' ? 'text-emerald-400' : 'text-pink-400'
+                const event = formatEventTiming(p.event_start_time, p.event_end_time)
 
                 return (
                 <tr key={p.id} className="border-b border-surface-700/50 hover:bg-surface-700/30">
-                  <td className={`py-2 pr-3 font-mono font-semibold text-[10px] ${sideColor}`}>
-                    {p.side === 'Buy' ? '▲ BUY' : '▼ SELL'}
+                  <td className="py-2 pr-3 text-left">
+                    <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-mono font-semibold truncate max-w-[100px] ${
+                      p.side === 'Buy'
+                        ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-700/50'
+                        : 'bg-pink-900/60 text-pink-300 border border-pink-700/50'
+                    }`} title={p.market_outcome ?? p.side}>
+                      {p.market_outcome
+                        ? <>{p.market_outcome} <span className="opacity-50">{p.side === 'Buy' ? '▲' : '▼'}</span></>
+                        : (p.side === 'Buy' ? '▲ YES' : '▼ NO')}
+                    </span>
                   </td>
                   <td className="py-2 pr-3 font-mono text-slate-200 max-w-[160px] truncate" title={p.market_title ?? p.token_id}>
                     {p.market_title ?? p.token_id}
@@ -116,10 +129,17 @@ function PositionsTable({ positions, loading, onRefresh }: Props) {
                   <td className={`py-2 pr-3 font-mono font-semibold ${pnlClass(p.unrealized_pnl)}`}>
                     {fmtPnl(p.unrealized_pnl)}
                   </td>
+                  <td className="py-2 pr-3 font-mono text-right text-slate-400 text-[10px]">
+                    ${fmt(cost)}
+                  </td>
                   <td className={`py-2 pr-3 font-mono text-right text-[10px] ${nearAutoClose ? 'text-emerald-300 font-bold' : 'text-slate-400'}`}>
                     {nearAutoClose ? 'AUTO NOW' : `$${fmt(Math.max(0, toWin))}`}
                   </td>
+                  <td className={`py-2 pr-3 font-mono text-right text-[10px] ${event.className}`}>
+                    {event.text}
+                  </td>
                   <td className="py-2 pr-3 font-mono text-right text-slate-500 text-[10px]">
+                    {p.opened_at && <span className="text-cyan-400">{fmtNeonTime(p.opened_at)} </span>}
                     {fmtDuration(p.opened_age_secs)}
                   </td>
                   <td className="py-2 text-right">

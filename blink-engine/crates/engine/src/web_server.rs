@@ -80,6 +80,8 @@ struct PositionJson {
     opened_age_secs: u64,
     fee_category: String,
     fee_rate: f64,
+    event_start_time: Option<i64>,
+    event_end_time: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -97,6 +99,8 @@ struct ClosedTradeJson {
     closed_at: String,
     duration_secs: u64,
     slippage_bps: f64,
+    event_start_time: Option<i64>,
+    event_end_time: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -134,6 +138,7 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/live/portfolio", get(get_live_portfolio))
         .route("/api/pause", post(post_pause))
         .route("/api/risk/reset_circuit_breaker", post(post_reset_circuit_breaker))
+        .route("/api/config", post(post_update_config))
         .route("/api/debug/seed_position", post(post_seed_position))
         .route("/api/positions/{id}/sell", post(post_sell_position))
         .route("/api/metrics", get(get_metrics))
@@ -249,6 +254,8 @@ async fn get_portfolio(State(state): State<AppState>) -> Json<serde_json::Value>
             opened_age_secs: pos.opened_at.elapsed().as_secs(),
             fee_category: pos.fee_category.clone(),
             fee_rate: pos.fee_rate,
+            event_start_time: pos.event_start_time,
+            event_end_time: pos.event_end_time,
         }
     }).collect();
     let fees_paid = p.total_fees_paid_usdc;
@@ -343,6 +350,8 @@ async fn get_history(
             closed_at: t.closed_at_wall.to_rfc3339(),
             duration_secs: t.duration_secs,
             slippage_bps: t.scorecard.slippage_bps,
+            event_start_time: t.event_start_time,
+            event_end_time: t.event_end_time,
         }
     }).collect();
 
@@ -397,10 +406,26 @@ async fn get_orderbook(
 
 async fn get_all_orderbooks(State(state): State<AppState>) -> Json<serde_json::Value> {
     let subs = state.market_subscriptions.lock().unwrap().clone();
+
+    // Build token→title map from open positions
+    let title_map: std::collections::HashMap<String, String> = if let Some(ref pe) = state.paper {
+        if let Ok(p) = pe.portfolio.try_lock() {
+            p.positions.iter()
+                .filter_map(|pos| pos.market_title.as_ref().map(|t: &String| (pos.token_id.clone(), t.clone())))
+                .collect()
+        } else {
+            std::collections::HashMap::new()
+        }
+    } else {
+        std::collections::HashMap::new()
+    };
+
     let books: Vec<serde_json::Value> = subs.iter().map(|token_id| {
+        let title = title_map.get(token_id).cloned();
         if let Some(ob) = state.book_store.get_book_snapshot(token_id) {
             json!({
                 "token_id": token_id,
+                "market_title": title,
                 "best_bid": ob.best_bid().map(|p| p as f64 / 1000.0),
                 "best_ask": ob.best_ask().map(|p| p as f64 / 1000.0),
                 "spread_bps": ob.spread_bps(),
@@ -410,6 +435,7 @@ async fn get_all_orderbooks(State(state): State<AppState>) -> Json<serde_json::V
         } else {
             json!({
                 "token_id": token_id,
+                "market_title": title,
                 "best_bid": null,
                 "best_ask": null,
                 "spread_bps": null,
@@ -655,6 +681,42 @@ async fn post_reset_circuit_breaker(State(state): State<AppState>) -> Json<serde
     Json(json!({ "ok": true, "circuit_breaker_tripped": false }))
 }
 
+async fn post_update_config(
+    State(state): State<AppState>,
+    body: Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let Some(ref risk) = state.risk else {
+        return Json(json!({ "error": "Risk manager not available" }));
+    };
+    let mut rm = risk.lock().unwrap();
+    let cfg = rm.config_mut();
+    let mut changed = Vec::new();
+
+    if let Some(v) = body.get("max_daily_loss_pct").and_then(|v| v.as_f64()) {
+        cfg.max_daily_loss_pct = v.clamp(0.01, 1.0);
+        changed.push("max_daily_loss_pct");
+    }
+    if let Some(v) = body.get("max_concurrent_positions").and_then(|v| v.as_u64()) {
+        cfg.max_concurrent_positions = (v as usize).clamp(1, 100);
+        changed.push("max_concurrent_positions");
+    }
+    if let Some(v) = body.get("max_single_order_usdc").and_then(|v| v.as_f64()) {
+        cfg.max_single_order_usdc = v.clamp(1.0, 10_000.0);
+        changed.push("max_single_order_usdc");
+    }
+    if let Some(v) = body.get("max_orders_per_second").and_then(|v| v.as_u64()) {
+        cfg.max_orders_per_second = (v as u32).clamp(1, 100);
+        changed.push("max_orders_per_second");
+    }
+    if let Some(v) = body.get("var_threshold_pct").and_then(|v| v.as_f64()) {
+        cfg.var_threshold_pct = v.clamp(0.01, 1.0);
+        changed.push("var_threshold_pct");
+    }
+
+    tracing::warn!(fields = ?changed, "Risk config updated via API");
+    Json(json!({ "ok": true, "updated": changed }))
+}
+
 async fn post_sell_position(
     State(state): State<AppState>,
     Path(id): Path<usize>,
@@ -718,7 +780,7 @@ async fn post_seed_position(
         return Json(json!({"error": "Paper engine not available"}));
     };
     let mut p = paper.portfolio.lock().await;
-    let id = p.open_position_with_meta(token_id.clone(), market_title.clone(), None, side, entry_price, usdc_size, "debug".to_string(), 0.0, 0, "debug");
+    let id = p.open_position_with_meta(token_id.clone(), market_title.clone(), None, side, entry_price, usdc_size, "debug".to_string(), 0.0, 0, "debug", None, None);
     let pos_json = p.positions.iter().find(|x| x.id == id).map(|pos| json!({
         "id": pos.id,
         "token_id": pos.token_id,
@@ -780,7 +842,7 @@ async fn build_snapshot(state: &AppState) -> Result<String, ()> {
         // Decimate equity curve to at most 150 points to keep the WS payload small.
         // The full curve is available via /api/portfolio for initial chart loads.
         let equity_len = p.equity_curve.len();
-        let max_ws_equity_points: usize = 50;
+        let max_ws_equity_points: usize = 150;
         let (equity_curve_ws, equity_timestamps_ws): (Vec<f64>, Vec<i64>) = if equity_len <= max_ws_equity_points {
             (p.equity_curve.clone(), p.equity_timestamps.clone())
         } else {
@@ -810,6 +872,8 @@ async fn build_snapshot(state: &AppState) -> Result<String, ()> {
             "unrealized_pnl": pos.unrealized_pnl(),
             "unrealized_pnl_pct": pos.unrealized_pnl_pct(),
             "opened_age_secs": pos.opened_at.elapsed().as_secs(),
+            "event_start_time": pos.event_start_time,
+            "event_end_time": pos.event_end_time,
         })).collect();
 
         let avg_slippage_bps = if p.closed_trades.is_empty() { 0.0 } else {

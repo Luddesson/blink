@@ -247,6 +247,8 @@ pub async fn run_rn1_poller(
                         size: (size * 1000.0) as u64,
                         order_id: hash.clone(),
                         detected_at: Instant::now(),
+                        event_start_time: None,
+                        event_end_time: None,
                     };
 
                     total_signals += 1;

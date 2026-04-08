@@ -58,6 +58,8 @@ export interface Position {
   unrealized_pnl_pct: number
   opened_at?: string
   opened_age_secs: number
+  event_start_time?: number  // Unix timestamp — game/event kickoff
+  event_end_time?: number    // Unix timestamp — market resolution deadline
 }
 
 // /api/portfolio returns same shape as PortfolioSummary; alias for clarity
@@ -77,6 +79,8 @@ export interface ClosedTrade {
   closed_at: string
   duration_secs: number
   slippage_bps: number
+  event_start_time?: number  // Unix timestamp — game/event kickoff
+  event_end_time?: number    // Unix timestamp — market resolution deadline
 }
 
 export interface HistoryResponse {
@@ -229,6 +233,7 @@ export interface MetricsResponse {
 // ─── Order Book ──────────────────────────────────────────────────────────────
 export interface OrderBookResponse {
   token_id: string
+  market_title?: string
   bids: [number, number][]  // [price, size]
   asks: [number, number][]
   best_bid: number | null

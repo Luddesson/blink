@@ -172,7 +172,7 @@ impl Config {
         let ws_broadcast_interval_secs = std::env::var("WS_BROADCAST_INTERVAL_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(10)
+            .unwrap_or(1)
             .clamp(1, 60);
         let latency_window_size = std::env::var("LATENCY_WINDOW_SIZE")
             .ok()

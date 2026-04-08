@@ -123,7 +123,15 @@ impl MetadataFetcher {
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
         
-        let event_start_time = market.get("end_date_iso")
+        // game_start_date = actual game kickoff (sports markets)
+        let event_start_time = market.get("game_start_date")
+            .or_else(|| market.get("start_date_iso"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.timestamp());
+
+        // end_date_iso = market resolution deadline
+        let event_end_time = market.get("end_date_iso")
             .and_then(|v| v.as_str())
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.timestamp());
@@ -140,6 +148,7 @@ impl MetadataFetcher {
             volume_24h,
             liquidity,
             event_start_time,
+            event_end_time,
             closed,
         })
     }
@@ -175,6 +184,7 @@ mod tests {
             volume_24h: 0.0,
             liquidity: 50_000.0, // Too low
             event_start_time: None,
+            event_end_time: None,
             closed: false,
         };
         
@@ -196,6 +206,7 @@ mod tests {
             volume_24h: 0.0,
             liquidity: 100_000.0,
             event_start_time: None,
+            event_end_time: None,
             closed: false,
         };
         

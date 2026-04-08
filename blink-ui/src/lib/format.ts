@@ -31,13 +31,70 @@ export function pnlClass(n: number): string {
 
 export function formatTimestamp(iso: string): string {
   try {
-    return new Date(iso).toLocaleTimeString('en-US', {
+    return new Date(iso).toLocaleTimeString('sv-SE', {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
       hour12: false,
+      timeZone: 'Europe/Stockholm',
     })
   } catch {
     return iso
   }
+}
+
+/** Neon-styled time string like [17:30] */
+export function fmtNeonTime(input: string | number | Date): string {
+  try {
+    // Handle bare HH:MM:SS or HH:MM strings from backend
+    if (typeof input === 'string' && /^\d{1,2}:\d{2}(:\d{2})?$/.test(input.trim())) {
+      const parts = input.trim().split(':')
+      return `[${parts[0].padStart(2, '0')}:${parts[1]}]`
+    }
+    const d = input instanceof Date ? input : new Date(input)
+    if (isNaN(d.getTime())) return '[--:--]'
+    const hh = d.toLocaleTimeString('sv-SE', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: 'Europe/Stockholm',
+    })
+    return `[${hh}]`
+  } catch {
+    return '[--:--]'
+  }
+}
+
+/** Format Stockholm time for chart tooltips (HH:mm:ss) */
+export function fmtChartTime(unixMs: number): string {
+  return new Date(unixMs).toLocaleTimeString('sv-SE', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    timeZone: 'Europe/Stockholm',
+  })
+}
+
+/** Format event timing relative to now */
+export function formatEventTiming(startTime?: number, endTime?: number): { text: string; className: string } {
+  const now = Math.floor(Date.now() / 1000)
+
+  if (endTime && endTime < now) {
+    const ago = now - endTime
+    return { text: `Ended ${fmtDuration(ago)} ago`, className: 'text-slate-500' }
+  }
+
+  if (startTime) {
+    if (startTime > now) {
+      const until = startTime - now
+      return { text: `Starts in ${fmtDuration(until)}`, className: 'text-amber-400' }
+    }
+    // Started but not ended
+    if (!endTime || endTime > now) {
+      return { text: 'In progress', className: 'text-emerald-400' }
+    }
+  }
+
+  return { text: '—', className: 'text-slate-600' }
 }

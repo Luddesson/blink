@@ -412,6 +412,8 @@ mod tests {
             entry_slippage_bps: 0.0,
             queue_delay_ms: 0,
             experiment_variant: "A".to_string(),
+            event_start_time: None,
+            event_end_time: None,
         }
     }
 }

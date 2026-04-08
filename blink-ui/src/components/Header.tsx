@@ -14,13 +14,18 @@ interface HeaderProps {
 export default function Header({ wsConnected, tradingPaused }: HeaderProps) {
   const { viewMode, setViewMode, liveAvailable } = useMode()
   const [showConfirm, setShowConfirm] = useState(false)
-  const [utcTime, setUtcTime] = useState(() => new Date().toUTCString().slice(17, 25))
+  const fmtSE = () =>
+    new Date().toLocaleTimeString('sv-SE', {
+      timeZone: 'Europe/Stockholm',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+  const [seTime, setSeTime] = useState(fmtSE)
   const { data: metrics } = usePoll(api.metrics, 10_000)
 
   useEffect(() => {
-    const id = setInterval(() => {
-      setUtcTime(new Date().toUTCString().slice(17, 25))
-    }, 1000)
+    const id = setInterval(() => setSeTime(fmtSE()), 1000)
     return () => clearInterval(id)
   }, [])
 
@@ -91,7 +96,7 @@ export default function Header({ wsConnected, tradingPaused }: HeaderProps) {
               <AlertTriangle size={10} /> PAUSED
             </span>
           )}
-          {metrics?.available && (
+          {metrics?.available && rejections > 0 && (
             <span
               className={`flex items-center gap-1 font-mono ${rejections > 10 ? 'text-amber-400' : 'text-slate-500'}`}
               title={`Signals rejected last 60s: ${rejections}`}
@@ -106,7 +111,7 @@ export default function Header({ wsConnected, tradingPaused }: HeaderProps) {
               {wsConnected ? 'WS LIVE' : 'WS DOWN'}
             </span>
           </span>
-          <span className="text-slate-600 font-mono">{utcTime} UTC</span>
+          <span className="text-slate-600 font-mono">{seTime} SE</span>
         </div>
       </header>
 

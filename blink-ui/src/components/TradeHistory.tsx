@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { usePoll } from '../hooks/usePoll'
 import { api } from '../lib/api'
-import { fmt, fmtPnl, pnlClass, formatTimestamp } from '../lib/format'
+import { fmt, fmtPnl, pnlClass, fmtNeonTime, formatEventTiming } from '../lib/format'
 
 function fmtDuration(secs: number): string {
   if (secs < 60) return `${Math.round(secs)}s`
@@ -44,24 +44,30 @@ export default function TradeHistory() {
                   <th className="text-left pb-2 pr-3 font-normal">Closed</th>
                   <th className="text-right pb-2 pr-3 font-normal">Size</th>
                   <th className="text-right pb-2 pr-3 font-normal">Duration</th>
+                  <th className="text-right pb-2 pr-3 font-normal">Event</th>
                   <th className="text-left pb-2 pr-3 font-normal">Reason</th>
                   <th className="text-right pb-2 font-normal">P&amp;L</th>
                 </tr>
               </thead>
               <tbody>
-                {trades.map((t, i) => (
+                {trades.map((t, i) => {
+                  const event = formatEventTiming(t.event_start_time, t.event_end_time)
+                  return (
                   <tr key={i} className="border-b border-surface-700/50 hover:bg-surface-700/30">
                     <td className="py-1.5 pr-3 font-mono text-slate-200 max-w-[120px] truncate" title={t.market_title ?? t.token_id}>
                       {t.market_title ?? t.token_id}
                     </td>
-                    <td className="py-1.5 pr-3 font-mono text-slate-500">
-                      {t.closed_at ? formatTimestamp(t.closed_at) : '—'}
+                    <td className="py-1.5 pr-3 font-mono text-cyan-400">
+                      {t.closed_at ? fmtNeonTime(t.closed_at) : '—'}
                     </td>
                     <td className="py-1.5 pr-3 font-mono text-slate-300 text-right">
                       {t.shares} @ ${fmt(t.entry_price, 4)}
                     </td>
                     <td className="py-1.5 pr-3 font-mono text-slate-400 text-right">
                       {t.duration_secs > 0 ? fmtDuration(t.duration_secs) : '—'}
+                    </td>
+                    <td className={`py-1.5 pr-3 font-mono text-right text-[10px] ${event.className}`}>
+                      {event.text}
                     </td>
                     <td className="py-1.5 pr-3 text-slate-500 max-w-[80px] truncate" title={t.reason}>
                       {t.reason || '—'}
@@ -70,7 +76,8 @@ export default function TradeHistory() {
                       {fmtPnl(t.realized_pnl)}
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>

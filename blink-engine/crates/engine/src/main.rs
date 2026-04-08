@@ -49,7 +49,22 @@ async fn main() -> Result<()> {
         Err(_) => eprintln!("Warning: .env has a formatting issue"),
     }
 
-    // ── Backtest mode (--backtest <csv>) ─────────────────────────────────
+    // ── Panic hook — save portfolio state before dying ───────────────────
+    {
+        let state_path = std::env::var("PAPER_STATE_PATH")
+            .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());
+        let original = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            eprintln!("BLINK ENGINE PANIC: {info}");
+            // Best-effort: write a sentinel file so restart scripts know it panicked
+            let _ = std::fs::write(
+                format!("{state_path}.panic"),
+                format!("{}", info),
+            );
+            original(info);
+        }));
+    }
+
     let args: Vec<String> = std::env::args().collect();
     if let Some(pos) = args.iter().position(|a| a == "--backtest") {
         let csv_path = args

@@ -353,6 +353,8 @@ impl BacktestEngine {
                 closed_at_wall: chrono::Local::now(),
                 duration_secs: pos.opened_at.elapsed().as_secs(),
                 scorecard: crate::paper_portfolio::ExecutionScorecard::default(),
+                event_start_time: pos.event_start_time,
+                event_end_time: pos.event_end_time,
             });
             if let Some(open_ts) = trade_open_times.remove(&pos.id) {
                 trade_durations_ms.push(final_ts - open_ts);

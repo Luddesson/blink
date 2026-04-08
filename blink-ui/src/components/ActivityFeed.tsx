@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ActivityEntry } from '../types'
-import { formatTimestamp } from '../lib/format'
+import { fmtNeonTime } from '../lib/format'
 import { api } from '../lib/api'
 
 interface Props {
@@ -62,8 +62,8 @@ export default function ActivityFeed({ wsEntries }: Props) {
         )}
         {merged.map((e, i) => (
           <div key={i} className="flex gap-2 leading-5">
-            <span className="text-slate-600 shrink-0">
-              {formatTimestamp(e.timestamp)}
+            <span className="text-cyan-400 shrink-0">
+              {fmtNeonTime(e.timestamp)}
             </span>
             <span className={`shrink-0 w-14 ${LEVEL_COLORS[e.kind] ?? 'text-slate-400'}`}>
               [{e.kind.toUpperCase()}]

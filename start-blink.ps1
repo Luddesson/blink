@@ -1,7 +1,10 @@
 ﻿# start-blink.ps1
-# Usage: .\start-blink.ps1          (release build, optimized — default)
-#        .\start-blink.ps1 -Debug    (debug build, fast compile)
-param([switch]$Debug)
+# Usage: .\start-blink.ps1                  (auto-detect build, release)
+#        .\start-blink.ps1 -Debug            (debug build, fast compile)
+#        .\start-blink.ps1 -SkipBuild        (skip cargo entirely, run existing binary)
+#        .\start-blink.ps1 -Watch            (AFK mode — auto-restart engine on crash)
+#        .\start-blink.ps1 -SkipBuild -Watch (fast AFK restart — no rebuild)
+param([switch]$Debug, [switch]$Watch, [switch]$SkipBuild)
 $root = $PSScriptRoot
 $logs = "$root\logs"
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
@@ -33,14 +36,36 @@ Write-Host "=== [1/4] Building engine (cargo build) ===" -ForegroundColor Cyan
 Push-Location "$root\blink-engine"
 $cargoArgs = if ($Debug) { @("build") } else { @("build", "--release") }
 $buildProfile = if ($Debug) { "debug" } else { "release" }
-if ($Release) { Write-Host "  Mode: RELEASE (optimized)" -ForegroundColor Yellow }
-$p = Start-Process "cargo" -ArgumentList $cargoArgs -NoNewWindow -Wait -PassThru
-Pop-Location
-if ($p.ExitCode -ne 0) {
-    Write-Host "ERROR: cargo build failed (exit code $($p.ExitCode))" -ForegroundColor Red
-    exit 1
+
+# Smart skip: bypass cargo if binary is newer than all source files
+$binaryPath = "$root\blink-engine\target\$buildProfile\engine.exe"
+$needsBuild = $true
+if ($SkipBuild) {
+    Write-Host "  -SkipBuild flag set — skipping cargo build" -ForegroundColor Green
+    $needsBuild = $false
+} elseif (Test-Path $binaryPath) {
+    $binaryTime = (Get-Item $binaryPath).LastWriteTime
+    $sourceFiles = Get-ChildItem "$root\blink-engine" -Recurse -Include "*.rs","*.toml" -File |
+                   Where-Object { $_.FullName -notlike "*\target\*" }
+    $latestSource = ($sourceFiles | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+    if ($latestSource -and $binaryTime -gt $latestSource) {
+        Write-Host "  Binary is up to date ($(Split-Path $binaryPath -Leaf) newer than all sources) — skipping build" -ForegroundColor Green
+        $needsBuild = $false
+    }
 }
-Write-Host "Engine build OK" -ForegroundColor Green
+
+if ($needsBuild) {
+    $p = Start-Process "cargo" -ArgumentList $cargoArgs -NoNewWindow -Wait -PassThru
+    Pop-Location
+    if ($p.ExitCode -ne 0) {
+        Write-Host "ERROR: cargo build failed (exit code $($p.ExitCode))" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "Engine build OK" -ForegroundColor Green
+} else {
+    Pop-Location
+    Write-Host "Engine build skipped" -ForegroundColor Green
+}
 
 # ── [2/4] Frontend deps ───────────────────────────────────────────────────────
 Write-Host ""
@@ -124,4 +149,62 @@ if ($ready) {
 } else {
     Write-Host "ERROR: Engine did not respond. Check: $engineLog" -ForegroundColor Red
     exit 1
+}
+
+# ── Watch mode: auto-restart engine on crash ──────────────────────────────────
+if ($Watch) {
+    Write-Host ""
+    Write-Host "================================================" -ForegroundColor Magenta
+    Write-Host "  WATCH MODE: Auto-restart on crash (AFK safe)" -ForegroundColor Magenta
+    Write-Host "  Press Ctrl+C to stop." -ForegroundColor Gray
+    Write-Host "================================================" -ForegroundColor Magenta
+
+    $restartCount = 0
+    while ($true) {
+        Start-Sleep 5
+
+        # Check if engine is still responding
+        $alive = $false
+        try {
+            $null = Invoke-RestMethod "http://localhost:3030/api/status" -TimeoutSec 5
+            $alive = $true
+        } catch {}
+
+        if (-not $alive) {
+            $restartCount++
+            $ts = Get-Date -Format "HH:mm:ss"
+            Write-Host "[$ts] Engine not responding — restart #$restartCount" -ForegroundColor Yellow
+
+            # Check for panic sentinel file
+            $panicFile = "$root\blink-engine\logs\paper_portfolio_state.json.panic"
+            if (Test-Path $panicFile) {
+                $panicMsg = Get-Content $panicFile -Raw
+                Write-Host "  PANIC detected: $panicMsg" -ForegroundColor Red
+                Remove-Item $panicFile -ErrorAction SilentlyContinue
+            }
+
+            # Restart engine only (Vite stays running)
+            $portInUse = (netstat -an | Select-String "0.0.0.0:3030.*LISTENING") -ne $null
+            if (-not $portInUse) {
+                $ep2 = Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$engineLauncher`"" -WindowStyle Hidden -PassThru
+                $ep2.Id | Out-File "$logs\engine.pid"
+                Write-Host "  Engine restarted (PID $($ep2.Id))" -ForegroundColor Green
+
+                # Wait up to 30s for it to come back
+                $back = $false
+                for ($j = 0; $j -lt 15; $j++) {
+                    Start-Sleep 2
+                    try {
+                        $null = Invoke-RestMethod "http://localhost:3030/api/status" -TimeoutSec 5
+                        $back = $true; break
+                    } catch {}
+                }
+                if ($back) {
+                    Write-Host "  Engine is back online." -ForegroundColor Green
+                } else {
+                    Write-Host "  Engine failed to restart — check $engineLog" -ForegroundColor Red
+                }
+            }
+        }
+    }
 }

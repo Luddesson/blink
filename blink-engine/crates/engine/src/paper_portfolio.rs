@@ -153,6 +153,10 @@ pub struct PaperPosition {
     pub queue_delay_ms: u64,
     /// Experiment variant label for A/B metrics.
     pub experiment_variant: String,
+    /// Unix timestamp — game/event kickoff time (from Gamma API).
+    pub event_start_time: Option<i64>,
+    /// Unix timestamp — market resolution deadline (from Gamma API).
+    pub event_end_time: Option<i64>,
 }
 
 impl PaperPosition {
@@ -206,8 +210,11 @@ pub struct ClosedTrade {
     pub duration_secs: u64,
     /// Execution quality scorecard snapshot.
     pub scorecard: ExecutionScorecard,
+    /// Unix timestamp — game/event kickoff time (from Gamma API).
+    pub event_start_time: Option<i64>,
+    /// Unix timestamp — market resolution deadline (from Gamma API).
+    pub event_end_time: Option<i64>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExecutionScorecard {
     pub slippage_bps: f64,
@@ -274,6 +281,10 @@ struct PersistedPaperPosition {
     fee_category: String,
     #[serde(default)]
     fee_rate: f64,
+    #[serde(default)]
+    event_start_time: Option<i64>,
+    #[serde(default)]
+    event_end_time: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -294,6 +305,10 @@ struct PersistedClosedTrade {
     duration_secs: u64,
     #[serde(default)]
     scorecard: ExecutionScorecard,
+    #[serde(default)]
+    event_start_time: Option<i64>,
+    #[serde(default)]
+    event_end_time: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -442,7 +457,7 @@ impl PaperPortfolio {
         usdc_size:    f64,
         rn1_order_id: String,
     ) -> usize {
-        self.open_position_with_meta(token_id, None, None, side, entry_price, usdc_size, rn1_order_id, 0.0, 0, "A")
+        self.open_position_with_meta(token_id, None, None, side, entry_price, usdc_size, rn1_order_id, 0.0, 0, "A", None, None)
     }
 
     pub fn open_position_with_meta(
@@ -457,6 +472,8 @@ impl PaperPortfolio {
         entry_slippage_bps: f64,
         queue_delay_ms: u64,
         experiment_variant: &str,
+        event_start_time: Option<i64>,
+        event_end_time: Option<i64>,
     ) -> usize {
         let shares = usdc_size / entry_price;
         let id     = self.next_id;
@@ -488,6 +505,8 @@ impl PaperPortfolio {
             entry_slippage_bps,
             queue_delay_ms,
             experiment_variant: experiment_variant.to_string(),
+            event_start_time,
+            event_end_time,
         });
         self.filled_orders += 1;
         id
@@ -548,6 +567,8 @@ impl PaperPortfolio {
                         format!("variant:{}", pos.experiment_variant),
                     ],
                 },
+                event_start_time: pos.event_start_time,
+                event_end_time: pos.event_end_time,
             });
             closed += 1;
         }
@@ -674,6 +695,8 @@ impl PaperPortfolio {
                         format!("variant:{}", pos.experiment_variant),
                     ],
                 },
+                event_start_time: pos.event_start_time,
+                event_end_time: pos.event_end_time,
             });
             return true;
         }
@@ -714,6 +737,8 @@ impl PaperPortfolio {
                     format!("variant:{}", pos.experiment_variant),
                 ],
             },
+            event_start_time: pos.event_start_time,
+            event_end_time: pos.event_end_time,
         });
 
         pos.shares -= close_shares;
@@ -775,7 +800,10 @@ impl PaperPortfolio {
         }
         let json = serde_json::to_string_pretty(&persisted)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-        std::fs::write(path, json)?;
+        // Atomic write: write to .tmp then rename to prevent corruption on hard kill
+        let tmp_path = format!("{path}.tmp");
+        std::fs::write(&tmp_path, &json)?;
+        std::fs::rename(&tmp_path, path)?;
         Ok(())
     }
 
@@ -812,6 +840,8 @@ impl From<&PaperPortfolio> for PersistedPaperPortfolio {
                 experiment_variant: p.experiment_variant.clone(),
                 fee_category: p.fee_category.clone(),
                 fee_rate: p.fee_rate,
+                event_start_time: p.event_start_time,
+                event_end_time: p.event_end_time,
             }).collect(),
             closed_trades: value.closed_trades.iter().map(|t| PersistedClosedTrade {
                 token_id: t.token_id.clone(),
@@ -827,6 +857,8 @@ impl From<&PaperPortfolio> for PersistedPaperPortfolio {
                 closed_at_wall_ms: t.closed_at_wall.timestamp_millis(),
                 duration_secs: t.duration_secs,
                 scorecard: t.scorecard.clone(),
+                event_start_time: t.event_start_time,
+                event_end_time: t.event_end_time,
             }).collect(),
             total_signals: value.total_signals,
             filled_orders: value.filled_orders,
@@ -870,6 +902,8 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
                 experiment_variant: if p.experiment_variant.is_empty() { "A".to_string() } else { p.experiment_variant },
                 fee_rate: if p.fee_rate == 0.0 && p.fee_category.is_empty() { 0.05 } else { p.fee_rate },
                 fee_category: if p.fee_category.is_empty() { "other".to_string() } else { p.fee_category },
+                event_start_time: p.event_start_time,
+                event_end_time: p.event_end_time,
             }
         }).collect();
 
@@ -896,6 +930,8 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
                 closed_at_wall,
                 duration_secs: t.duration_secs,
                 scorecard: t.scorecard,
+                event_start_time: t.event_start_time,
+                event_end_time: t.event_end_time,
             }
         }).collect();
 

@@ -70,6 +70,8 @@ impl Sniffer {
             size,
             order_id:    order.order_id.clone(),
             detected_at: Instant::now(),
+            event_start_time: None,
+            event_end_time: None,
         }
     }
 

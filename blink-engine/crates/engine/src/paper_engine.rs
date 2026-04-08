@@ -111,6 +111,8 @@ struct VolatilityState {
 struct CachedSignalMeta {
     market_title: Option<String>,
     market_outcome: Option<String>,
+    event_start_time: Option<i64>,
+    event_end_time: Option<i64>,
     cached_at: Instant,
 }
 
@@ -636,6 +638,8 @@ impl PaperEngine {
                         queue_delay_ms: pos.queue_delay_ms,
                         outcome_tags: vec!["rn1_mirror_exit".to_string()],
                     },
+                    event_start_time: pos.event_start_time,
+                    event_end_time: pos.event_end_time,
                 });
                 self.risk.lock().unwrap().record_close(pnl);
                 if let Some(ref log) = self.activity {
@@ -858,6 +862,8 @@ impl PaperEngine {
                 slippage_bps,
                 queue_delay_ms,
                 variant,
+                signal.event_start_time,
+                signal.event_end_time,
             )
         };
         // Record fill in risk manager for VaR tracking (does not affect daily P&L).
@@ -910,6 +916,13 @@ impl PaperEngine {
         // Only print text dashboard when not in TUI mode.
         if self.activity.is_none() {
             self.print_dashboard().await;
+        }
+
+        // Immediate save on position open — don't wait for the 10s timer.
+        {
+            let state_path = std::env::var("PAPER_STATE_PATH")
+                .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());
+            let _ = self.save_portfolio(&state_path).await;
         }
     }
 
@@ -1438,7 +1451,7 @@ impl PaperEngine {
     async fn enrich_signal_metadata(&self, signal: &mut RN1Signal) {
         let title_ok = signal.market_title.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
         let outcome_ok = signal.market_outcome.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
-        if title_ok && outcome_ok {
+        if title_ok && outcome_ok && signal.event_start_time.is_some() {
             return;
         }
         if let Some((title, outcome)) = self.lookup_signal_metadata(&signal.token_id, Some(&signal.order_id)).await {
@@ -1447,6 +1460,13 @@ impl PaperEngine {
             }
             if signal.market_outcome.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
                 signal.market_outcome = outcome;
+            }
+        }
+        // Enrich event timing from Gamma API if not already set
+        if signal.event_start_time.is_none() || signal.event_end_time.is_none() {
+            if let Some((start, end)) = self.fetch_event_timing(&signal.token_id).await {
+                if signal.event_start_time.is_none() { signal.event_start_time = start; }
+                if signal.event_end_time.is_none() { signal.event_end_time = end; }
             }
         }
     }
@@ -1473,6 +1493,8 @@ impl PaperEngine {
             CachedSignalMeta {
                 market_title: title.clone(),
                 market_outcome: outcome.clone(),
+                event_start_time: None,
+                event_end_time: None,
                 cached_at: Instant::now(),
             },
         );
@@ -1527,6 +1549,51 @@ impl PaperEngine {
             }
         }
         None
+    }
+
+    /// Fetch event timing (game start + market end) from Gamma API.
+    async fn fetch_event_timing(&self, token_id: &str) -> Option<(Option<i64>, Option<i64>)> {
+        let url = format!(
+            "https://gamma-api.polymarket.com/markets?token_id={}",
+            token_id
+        );
+        let resp = match self.metadata_client.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(token_id = %token_id, error = %e, "Gamma API timing fetch failed");
+                return None;
+            }
+        };
+        if !resp.status().is_success() {
+            return None;
+        }
+        let data: serde_json::Value = match resp.json().await {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
+        let markets = data.as_array()?;
+        let market = markets.first()?;
+
+        let parse_ts = |s: &str| -> Option<i64> {
+            chrono::DateTime::parse_from_rfc3339(s).ok()
+                .map(|dt| dt.timestamp())
+                .or_else(|| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
+                    .map(|ndt| ndt.and_utc().timestamp()))
+                .or_else(|| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").ok()
+                    .map(|ndt| ndt.and_utc().timestamp()))
+        };
+
+        let event_start = market.get("game_start_date")
+            .or_else(|| market.get("start_date_iso"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| parse_ts(s));
+
+        let event_end = market.get("end_date_iso")
+            .or_else(|| market.get("end_date"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| parse_ts(s));
+
+        Some((event_start, event_end))
     }
 
     /// Resets daily P&L and rate-limit counters in the risk manager.
@@ -1625,6 +1692,13 @@ impl PaperEngine {
                 log_push(log, kind, msg.clone());
             }
             info!("{msg}");
+        }
+
+        // Immediate save after any position close.
+        if !action_counts.is_empty() {
+            let state_path = std::env::var("PAPER_STATE_PATH")
+                .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());
+            let _ = self.save_portfolio(&state_path).await;
         }
     }
 }

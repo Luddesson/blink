@@ -45,7 +45,7 @@ pub fn new_activity_log() -> ActivityLog {
 
 /// Appends an entry, evicting the oldest if the buffer is full.
 pub fn push(log: &ActivityLog, kind: EntryKind, message: impl Into<String>) {
-    let timestamp = Local::now().format("%H:%M:%S").to_string();
+    let timestamp = Local::now().to_rfc3339();
     let entry = ActivityEntry {
         timestamp,
         kind,

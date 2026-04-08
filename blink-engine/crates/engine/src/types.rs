@@ -225,9 +225,11 @@ pub struct RN1Signal {
     pub order_id: String,
     /// Wall-clock timestamp recorded at the moment of detection.
     pub detected_at: Instant,
+    /// Unix timestamp — game/event kickoff time (from Gamma API).
+    pub event_start_time: Option<i64>,
+    /// Unix timestamp — market resolution deadline (from Gamma API).
+    pub event_end_time: Option<i64>,
 }
-
-// ─── Signal (for Position Tracking) ──────────────────────────────────────────
 
 /// Simplified signal used for position tracking and hedge detection
 #[derive(Debug, Clone)]
@@ -435,7 +437,8 @@ pub struct MarketMetadata {
     pub tags: Vec<String>,
     pub volume_24h: f64,
     pub liquidity: f64,
-    pub event_start_time: Option<i64>,  // Unix timestamp
+    pub event_start_time: Option<i64>,  // Unix timestamp — game/event kickoff
+    pub event_end_time: Option<i64>,    // Unix timestamp — market resolution deadline
     pub closed: bool,
 }
 

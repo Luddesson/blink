@@ -5,18 +5,18 @@ import QualityBadge from '../components/QualityBadge'
 import LatencyHistogram from '../components/LatencyHistogram'
 import ExecutionKpi from '../components/ExecutionKpi'
 import RejectionTrend from '../components/RejectionTrend'
-import TwinComparison from '../components/TwinComparison'
+import ExposureHeatmap from '../components/ExposureHeatmap'
 import ExperimentPanel from '../components/ExperimentPanel'
-import type { PortfolioSummary } from '../types'
+import type { PortfolioSummary, Position } from '../types'
 
 interface Props {
   portfolio: PortfolioSummary | undefined
+  positions?: Position[]
 }
 
-export default function PerformancePage({ portfolio }: Props) {
+export default function PerformancePage({ portfolio, positions = [] }: Props) {
   const { data: latency } = usePoll(api.latency, 5_000)
   const { data: metrics } = usePoll(api.metrics, 5_000)
-  const { data: twin } = usePoll(api.twin, 10_000)
 
   return (
     <div className="flex-1 flex flex-col gap-2 p-2 overflow-y-auto min-h-0">
@@ -42,19 +42,13 @@ export default function PerformancePage({ portfolio }: Props) {
         </ErrorBoundary>
       </div>
 
-      {/* Rejections + Twin row */}
+      {/* Rejections + Exposure row */}
       <div className="grid grid-cols-2 gap-2">
         <ErrorBoundary label="RejectionTrend">
           <RejectionTrend rejectionByReason={metrics?.rejection_by_reason ?? null} />
         </ErrorBoundary>
-        <ErrorBoundary label="TwinComparison">
-          <TwinComparison
-            mainNav={portfolio?.nav_usdc ?? 0}
-            mainReturn={portfolio ? ((portfolio.nav_usdc - 250) / 250) * 100 : 0}
-            mainWinRate={portfolio?.win_rate_pct ?? 0}
-            mainDrawdown={0}
-            twin={twin}
-          />
+        <ErrorBoundary label="ExposureHeatmap">
+          <ExposureHeatmap positions={positions} />
         </ErrorBoundary>
       </div>
 

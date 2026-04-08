@@ -175,8 +175,8 @@ export default function App() {
       {activeTab === 'markets' && <MarketsPage />}
       {activeTab === 'history' && <HistoryPage />}
       {activeTab === 'intelligence' && <IntelligencePage />}
-      {activeTab === 'performance' && <PerformancePage portfolio={portfolio} />}
-      {activeTab === 'config' && <ConfigPage risk={risk} positions={positions} />}
+      {activeTab === 'performance' && <PerformancePage portfolio={portfolio} positions={positions} />}
+      {activeTab === 'config' && <ConfigPage risk={risk} />}
 
       <StatusBar />
     </div>

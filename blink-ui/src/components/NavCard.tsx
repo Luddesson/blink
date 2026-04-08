@@ -8,7 +8,7 @@ import {
   XAxis,
   ReferenceLine,
 } from 'recharts'
-import { fmt, fmtPct, fmtPnl, pnlClass } from '../lib/format'
+import { fmt, fmtPct, fmtPnl, pnlClass, fmtChartTime } from '../lib/format'
 import { useMode } from '../hooks/useMode'
 import type { PortfolioSummary } from '../types'
 
@@ -52,12 +52,32 @@ export default function NavCard({
     ? (isLive ? '#f59e0b' : '#818cf8')
     : '#ef4444'
 
+  // Transform NAV → P&L in dollars (NAV − $100 starting balance)
+  const START_BALANCE = 100
   const chartData = equityCurve.map((v, i) => ({
     t: equityTimestamps[i] ?? i,
-    v,
+    v: v - START_BALANCE,
   }))
 
-  const startNav = equityCurve[0] ?? 100
+  // Rolling 30-min window: domain always ends at latest point
+  const CHART_WINDOW_MS = 30 * 60 * 1000
+  const latestTs = equityTimestamps[equityTimestamps.length - 1] ?? Date.now()
+  const windowStart = latestTs - CHART_WINDOW_MS
+
+  // Generate 1-min tick marks within the visible window
+  const TICK_INTERVAL_MS = 60 * 1000
+  const firstTick = Math.ceil(windowStart / TICK_INTERVAL_MS) * TICK_INTERVAL_MS
+  const xTicks: number[] = []
+  for (let t = firstTick; t <= latestTs; t += TICK_INTERVAL_MS) {
+    xTicks.push(t)
+  }
+
+  const fmtTickTime = (ms: number) =>
+    new Date(ms).toLocaleTimeString('sv-SE', {
+      timeZone: 'Europe/Stockholm',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
 
   const uptime = portfolio?.uptime_secs ?? 0
   const uptimeStr = uptime < 3600
@@ -102,17 +122,32 @@ export default function NavCard({
       {chartData.length > 1 ? (
         <div className="h-52 -mx-1 mt-3">
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+            <AreaChart data={chartData} margin={{ top: 4, right: 8, bottom: 18, left: 44 }}>
               <defs>
                 <linearGradient id="navGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor={strokeColor} stopOpacity={0.28} />
                   <stop offset="100%" stopColor={strokeColor} stopOpacity={0.01} />
                 </linearGradient>
               </defs>
-              <YAxis domain={['dataMin - 0.3', 'dataMax + 0.3']} hide />
-              <XAxis dataKey="t" hide />
-              <ReferenceLine y={startNav} stroke="#1e293b" strokeDasharray="4 3" />
-              {/* Grid lines at 20/40/60/80% of range */}
+              <YAxis
+                domain={['dataMin - 0.05', 'dataMax + 0.05']}
+                tickFormatter={(v: number) => (v >= 0 ? `+${v.toFixed(2)}` : v.toFixed(2))}
+                tick={{ fill: '#475569', fontSize: 9 }}
+                width={42}
+              />
+              <XAxis
+                dataKey="t"
+                type="number"
+                scale="time"
+                domain={[windowStart, latestTs]}
+                ticks={xTicks}
+                tickFormatter={fmtTickTime}
+                tick={{ fill: '#475569', fontSize: 9 }}
+                height={18}
+              />
+              {/* Breakeven line */}
+              <ReferenceLine y={0} stroke="#334155" strokeDasharray="4 3" />
+              {/* Subtle grid lines */}
               {chartData.length > 1 && (() => {
                 const vals = chartData.map(d => d.v)
                 const mn = Math.min(...vals)
@@ -135,10 +170,11 @@ export default function NavCard({
                   borderRadius: 6,
                   fontSize: 11,
                 }}
-                labelFormatter={(label) =>
-                  new Date(Number(label)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                }
-                formatter={(v) => [`$${fmt(Number(v))}`, 'NAV']}
+                labelFormatter={(label) => fmtChartTime(Number(label))}
+                formatter={(v: number) => [
+                  `${v >= 0 ? '+' : ''}$${Math.abs(v).toFixed(2)}`,
+                  'P&L',
+                ]}
               />
               <Area
                 type="monotone"

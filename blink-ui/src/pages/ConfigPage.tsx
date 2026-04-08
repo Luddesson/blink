@@ -1,16 +1,14 @@
 import ErrorBoundary from '../components/ErrorBoundary'
 import RiskConfigForm from '../components/RiskConfigForm'
 import CircuitBreakerCard from '../components/CircuitBreakerCard'
-import ExposureHeatmap from '../components/ExposureHeatmap'
 import { api } from '../lib/api'
-import type { RiskSummary, Position } from '../types'
+import type { RiskSummary } from '../types'
 
 interface Props {
   risk: RiskSummary
-  positions: Position[]
 }
 
-export default function ConfigPage({ risk, positions }: Props) {
+export default function ConfigPage({ risk }: Props) {
   const handleResetCb = async () => {
     try {
       await api.resetCircuitBreaker()
@@ -30,9 +28,6 @@ export default function ConfigPage({ risk, positions }: Props) {
       <div className="flex flex-col gap-2">
         <ErrorBoundary label="CircuitBreakerCard">
           <CircuitBreakerCard risk={risk} onReset={handleResetCb} />
-        </ErrorBoundary>
-        <ErrorBoundary label="ExposureHeatmap">
-          <ExposureHeatmap positions={positions} />
         </ErrorBoundary>
       </div>
     </div>

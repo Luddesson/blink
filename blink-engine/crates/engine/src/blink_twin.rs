@@ -226,6 +226,8 @@ impl BlinkTwin {
                 current_cfg.slippage_penalty_bps,
                 current_cfg.extra_latency_ms,
                 &format!("TWIN_G{}", current_cfg.generation),
+                None,
+                None,
             );
             p.push_equity_snapshot();
         }
@@ -317,6 +319,8 @@ impl BlinkTwin {
                         format!("variant:{}", pos.experiment_variant),
                     ],
                 },
+                event_start_time: pos.event_start_time,
+                event_end_time: pos.event_end_time,
             });
         }
 

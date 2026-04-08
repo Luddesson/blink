@@ -20,7 +20,7 @@ use serde::Serialize;
 use serde_json::json;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 
 use crate::activity_log::ActivityLog;
 use crate::blink_twin::TwinSnapshot;
@@ -146,7 +146,10 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .layer(cors);
 
     if let Some(dir) = static_dir {
-        api.fallback_service(ServeDir::new(dir))
+        let index_path = format!("{dir}/index.html");
+        api
+            .route_service("/", ServeFile::new(index_path))
+            .fallback_service(ServeDir::new(dir))
     } else {
         api
     }

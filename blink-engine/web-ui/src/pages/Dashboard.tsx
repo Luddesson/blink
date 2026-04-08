@@ -198,7 +198,9 @@ export default function Dashboard() {
   // Prefer WS recent_activity when it has entries; otherwise fall back to REST.
   // Using `&&` length check because [] is truthy so ?? wouldn't fall back correctly.
   const activityEntries: unknown[] =
-    (wsActivity && wsActivity.length > 0) ? wsActivity : (activityData?.entries ?? []);
+    (Array.isArray(wsActivity) && wsActivity.length > 0)
+      ? wsActivity
+      : (Array.isArray(activityData?.entries) ? activityData.entries : []);
 
   // Auto-scroll activity log to bottom when new entries arrive
   useEffect(() => {
@@ -221,8 +223,10 @@ export default function Dashboard() {
 
   // Memoize so canvas only redraws when interval or data actually changes
   const equityCurve = useMemo(() => {
-    const raw: number[] = (wsPortfolio?.equity_curve ?? portfolio?.equity_curve ?? []) as number[];
-    const ts: number[]  = (wsPortfolio?.equity_timestamps ?? portfolio?.equity_timestamps ?? []) as number[];
+    const rawCandidate = (wsPortfolio?.equity_curve ?? portfolio?.equity_curve ?? []) as unknown;
+    const tsCandidate = (wsPortfolio?.equity_timestamps ?? portfolio?.equity_timestamps ?? []) as unknown;
+    const raw: number[] = Array.isArray(rawCandidate) ? rawCandidate.filter((v): v is number => typeof v === 'number') : [];
+    const ts: number[] = Array.isArray(tsCandidate) ? tsCandidate.filter((v): v is number => typeof v === 'number') : [];
     const windowMs = INTERVALS[interval]?.ms;
     const now = Date.now();
     const hasTimestamps = ts.some(t => t != null && t > 0);
@@ -251,7 +255,9 @@ export default function Dashboard() {
   type PositionRow = Record<string, unknown>;
   // Use WS positions if available (live), else fall back to REST portfolio
   const openPositions = wsPortfolio?.open_positions ?? p?.open_positions;
-  const allPositions: PositionRow[] = ((openPositions ?? []) as PositionRow[]).filter((pos) => (pos.shares as number) >= 0.01);
+  const allPositions: PositionRow[] = (
+    Array.isArray(openPositions) ? (openPositions as PositionRow[]) : []
+  ).filter((pos) => typeof pos.shares === 'number' && (pos.shares as number) >= 0.01);
   const filteredPositions = search
     ? allPositions.filter((pos) =>
         `${(pos.market_title as string | undefined) ?? (pos.token_id as string)} ${(pos.market_outcome as string | undefined) ?? ''}`
@@ -384,16 +390,16 @@ export default function Dashboard() {
 
         <Card title="Activity Log">
           <div ref={activityRef} className="h-[220px] overflow-y-auto space-y-1 text-xs">
-            {(activityEntries as Array<{timestamp: string; kind: string; message: string}>).map((e, i) => (
+            {(activityEntries as Array<{timestamp?: string; kind?: string; message?: string}>).map((e, i) => (
               <div key={i} className="flex gap-2">
-                <span className="text-gray-600 shrink-0">{e.timestamp}</span>
+                <span className="text-gray-600 shrink-0">{e.timestamp ?? '-'}</span>
                 <span className={
                   e.kind === 'Fill' ? 'text-emerald-400' :
                   e.kind === 'Signal' ? 'text-cyan-400' :
                   e.kind === 'Abort' ? 'text-red-400' :
                   e.kind === 'Skip' || e.kind === 'Warn' ? 'text-yellow-400' :
                   'text-gray-400'
-                }>{e.message}</span>
+                }>{e.message ?? ''}</span>
               </div>
             ))}
             {activityEntries.length === 0 && (

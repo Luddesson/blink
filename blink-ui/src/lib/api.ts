@@ -37,6 +37,15 @@ export function getPolymarketUrl(tokenId: string): string {
   return `https://polymarket.com/clob/${tokenId}`
 }
 
+export async function resolveMarketUrl(tokenId: string): Promise<string | null> {
+  try {
+    const data = await get<{ url: string | null }>(`/api/market-url/${tokenId}`)
+    return data.url ?? null
+  } catch {
+    return null
+  }
+}
+
 export const api = {
   mode: () => get<ModeResponse>('/api/mode'),
   status: () => get<StatusResponse>('/api/status'),

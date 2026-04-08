@@ -979,6 +979,7 @@ async fn main() -> Result<()> {
             bullpen: _bullpen.clone(),
             discovery_store: Some(Arc::clone(&discovery_store)),
             convergence_store: convergence_store.clone(),
+            slug_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
         };
 
         let static_dir = std::env::var("WEB_UI_STATIC_DIR").ok()

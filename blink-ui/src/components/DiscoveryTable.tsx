@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import type { BullpenDiscoveryResponse, BullpenDiscoveredMarket } from '../types'
 import { fmt } from '../lib/format'
-import { getPolymarketUrl } from '../lib/api'
+import MarketLink from './MarketLink'
 
 interface Props {
   discovery: BullpenDiscoveryResponse | null
@@ -97,17 +97,12 @@ export default function DiscoveryTable({ discovery }: Props) {
                   >
                     {/* Token ID */}
                     <td className="px-3 py-1.5">
-                      <a
-                        href={getPolymarketUrl(m.token_id)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-mono text-slate-300 truncate block max-w-[120px] hover:text-emerald-400 hover:underline transition-colors"
-                        title={m.token_id}
-                      >
-                        {m.token_id.length > 16
-                          ? `${m.token_id.slice(0, 8)}…${m.token_id.slice(-6)}`
-                          : m.token_id}
-                      </a>
+                      <MarketLink
+                        tokenId={m.token_id}
+                        label={m.token_id.length > 16 ? `${m.token_id.slice(0, 8)}…${m.token_id.slice(-6)}` : m.token_id}
+                        className="font-mono text-slate-300 truncate block max-w-[120px]"
+                        titleOverride={m.token_id}
+                      />
                     </td>
 
                     {/* Lenses */}

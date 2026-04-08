@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { usePoll } from '../hooks/usePoll'
-import { api, getPolymarketUrl } from '../lib/api'
+import { api } from '../lib/api'
 import { fmt, fmtPnl, pnlClass, fmtNeonTime, formatEventTiming } from '../lib/format'
+import MarketLink from './MarketLink'
 
 function fmtDuration(secs: number): string {
   if (secs < 60) return `${Math.round(secs)}s`
@@ -55,15 +56,11 @@ export default function TradeHistory() {
                   return (
                   <tr key={i} className="border-b border-surface-700/50 hover:bg-surface-700/30">
                     <td className="py-1.5 pr-3 font-mono text-slate-200 max-w-[120px] truncate">
-                      <a
-                        href={getPolymarketUrl(t.token_id)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="hover:text-emerald-400 hover:underline transition-colors"
-                        title={t.market_title ?? t.token_id}
-                      >
-                        {t.market_title ?? t.token_id}
-                      </a>
+                      <MarketLink
+                        tokenId={t.token_id}
+                        label={t.market_title ?? t.token_id}
+                        titleOverride={t.market_title ?? t.token_id}
+                      />
                     </td>
                     <td className="py-1.5 pr-3 font-mono text-cyan-400">
                       {t.closed_at ? fmtNeonTime(t.closed_at) : '—'}

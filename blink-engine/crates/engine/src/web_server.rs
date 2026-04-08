@@ -31,6 +31,8 @@ use crate::paper_engine::PaperEngine;
 use crate::risk_manager::RiskManager;
 use crate::ws_client::WsHealthMetrics;
 
+type SlugCache = Arc<Mutex<std::collections::HashMap<String, String>>>;
+
 // ─── Shared application state ───────────────────────────────────────────────
 
 /// Shared state passed to every axum handler via `State<AppState>`.
@@ -59,6 +61,8 @@ pub struct AppState {
     pub discovery_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_discovery::DiscoveryStore>>>,
     /// Optional convergence store from smart money monitor.
     pub convergence_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_smart_money::ConvergenceStore>>>,
+    /// In-memory cache of token_id → Polymarket event slug.
+    pub slug_cache: SlugCache,
 }
 
 // ─── JSON response types ────────────────────────────────────────────────────
@@ -146,6 +150,7 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/bullpen/health", get(get_bullpen_health))
         .route("/api/bullpen/discovery", get(get_bullpen_discovery))
         .route("/api/bullpen/convergence", get(get_bullpen_convergence))
+        .route("/api/market-url/{token_id}", get(get_market_url))
         .route("/ws", get(ws_handler))
         .with_state(state)
         .layer(cors);
@@ -1042,5 +1047,64 @@ async fn get_bullpen_convergence(State(state): State<AppState>) -> impl IntoResp
         }))
     } else {
         Json(json!({ "enabled": false }))
+    }
+}
+
+// ─── Market URL resolver ─────────────────────────────────────────────────────
+
+/// GET /api/market-url/:token_id
+///
+/// Resolves a Polymarket token ID to a live event URL via the Gamma API.
+/// Results are cached in memory to avoid redundant API calls.
+async fn get_market_url(
+    State(state): State<AppState>,
+    Path(token_id): Path<String>,
+) -> Json<serde_json::Value> {
+    // Check cache first.
+    {
+        let cache = state.slug_cache.lock().unwrap();
+        if let Some(url) = cache.get(&token_id) {
+            return Json(json!({ "url": url, "cached": true }));
+        }
+    }
+
+    // Call Gamma API.
+    let gamma_url = format!(
+        "https://gamma-api.polymarket.com/markets?clob_token_ids={}",
+        token_id
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
+
+    match client.get(&gamma_url).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.json::<serde_json::Value>().await {
+                Ok(data) => {
+                    // Gamma returns an array of markets.
+                    let slug = data.as_array()
+                        .and_then(|arr| arr.first())
+                        .and_then(|m| {
+                            m.get("market_slug")
+                                .or_else(|| m.get("slug"))
+                                .or_else(|| m.get("marketSlug"))
+                        })
+                        .and_then(|s| s.as_str())
+                        .map(|s| s.to_string());
+
+                    if let Some(slug) = slug {
+                        let url = format!("https://polymarket.com/event/{slug}");
+                        state.slug_cache.lock().unwrap().insert(token_id, url.clone());
+                        Json(json!({ "url": url, "cached": false }))
+                    } else {
+                        Json(json!({ "url": null, "error": "slug not found in Gamma response" }))
+                    }
+                }
+                Err(e) => Json(json!({ "url": null, "error": format!("JSON parse error: {e}") })),
+            }
+        }
+        Ok(resp) => Json(json!({ "url": null, "error": format!("Gamma API returned {}", resp.status()) })),
+        Err(e) => Json(json!({ "url": null, "error": format!("HTTP error: {e}") })),
     }
 }

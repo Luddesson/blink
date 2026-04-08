@@ -347,16 +347,6 @@ async fn connect_and_run(
 
             // Heartbeat: send application-level "ping" text (Polymarket protocol)
             _ = ping_ticker.tick() => {
-                // Check if we've received any data (messages or pongs) recently
-                if last_data_at.elapsed() > PONG_TIMEOUT {
-                    warn!(
-                        silent_secs = last_data_at.elapsed().as_secs(),
-                        "Pong watchdog: no data received — forcing reconnect"
-                    );
-                    parse_counters.log_summary("pong-timeout");
-                    return Err(anyhow::anyhow!("pong watchdog timeout: {}s without data", last_data_at.elapsed().as_secs()));
-                }
-
                 debug!("Sending application-level PING");
                 if let Err(err) = write.send(Message::Text("PING".into())).await {
                     return Err(anyhow::anyhow!("failed to send ping: {err}"));

@@ -2,7 +2,7 @@ import { useState, useMemo, memo } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import type { Position } from '../types'
 import { fmt, fmtPnl, fmtDuration, pnlClass, formatEventTiming, fmtNeonTime } from '../lib/format'
-import { api } from '../lib/api'
+import { api, getPolymarketUrl } from '../lib/api'
 
 interface Props {
   positions: Position[]
@@ -120,8 +120,16 @@ function PositionsTable({ positions, loading, onRefresh }: Props) {
                         : (p.side === 'Buy' ? '▲ YES' : '▼ NO')}
                     </span>
                   </td>
-                  <td className="py-2 pr-3 font-mono text-slate-200 max-w-[160px] truncate" title={p.market_title ?? p.token_id}>
-                    {p.market_title ?? p.token_id}
+                  <td className="py-2 pr-3 font-mono text-slate-200 max-w-[160px] truncate">
+                    <a
+                      href={getPolymarketUrl(p.token_id)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="hover:text-emerald-400 hover:underline transition-colors"
+                      title={p.market_title ?? p.token_id}
+                    >
+                      {p.market_title ?? p.token_id}
+                    </a>
                   </td>
                   <td className="py-2 pr-3 font-mono text-slate-300">{p.shares}</td>
                   <td className="py-2 pr-3 font-mono text-slate-300">{fmt(p.entry_price, 4)}</td>

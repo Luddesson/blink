@@ -33,6 +33,10 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export function getPolymarketUrl(tokenId: string): string {
+  return `https://polymarket.com/clob/${tokenId}`
+}
+
 export const api = {
   mode: () => get<ModeResponse>('/api/mode'),
   status: () => get<StatusResponse>('/api/status'),

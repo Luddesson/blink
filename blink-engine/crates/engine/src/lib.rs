@@ -42,6 +42,7 @@
 
 pub mod activity_log;
 pub mod agent_rpc;
+pub mod alpha_signal;
 pub mod backtest_engine;
 pub mod blink_twin;
 pub mod bullpen_bridge;

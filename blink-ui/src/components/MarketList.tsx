@@ -1,6 +1,7 @@
 import { useState, useMemo, memo } from 'react'
 import { Search } from 'lucide-react'
 import type { OrderBookResponse } from '../types'
+import { getPolymarketUrl } from '../lib/api'
 
 interface Props {
   markets: OrderBookResponse[]
@@ -63,11 +64,17 @@ function MarketList({ markets, selectedTokenId, onSelect }: Props) {
                   ●
                 </span>
 
-                <span className="text-slate-200 truncate min-w-0 flex-1 font-mono">
+                <a
+                  href={getPolymarketUrl(m.token_id)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-slate-200 truncate min-w-0 flex-1 font-mono hover:text-emerald-400 hover:underline transition-colors"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   {m.market_title ?? (m.token_id.length > 12
                     ? `${m.token_id.slice(0, 12)}…`
                     : m.token_id)}
-                </span>
+                </a>
 
                 {mid != null && (
                   <span className="text-slate-400 tabular-nums shrink-0">

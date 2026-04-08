@@ -1,0 +1,20 @@
+[project]
+name = "alpha-sidecar"
+version = "0.1.0"
+description = "AI-driven alpha signal generator for Blink Engine"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.30",
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "chromadb>=0.5",
+    "langchain-openai>=0.1",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+news = ["newsapi-python>=0.2"]
+search = ["tavily-python>=0.3"]
+
+[project.scripts]
+alpha-sidecar = "alpha_sidecar.main:main"

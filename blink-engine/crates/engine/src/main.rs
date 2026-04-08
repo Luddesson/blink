@@ -254,8 +254,30 @@ async fn main() -> Result<()> {
         Arc::new(GasOracle::new(api_key))
     };
 
-    // ── Channel ───────────────────────────────────────────────────────────
+    // ── Channels ──────────────────────────────────────────────────────────
     let (signal_tx, signal_rx) = crossbeam_channel::bounded::<RN1Signal>(1024);
+
+    // Alpha signal channel (AI sidecar → engine). Only allocated when enabled.
+    let alpha_enabled = config.alpha_enabled;
+    let (alpha_signal_tx, alpha_signal_rx) = if alpha_enabled {
+        let (tx, rx) = crossbeam_channel::bounded::<engine::alpha_signal::AlphaSignal>(256);
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+    let alpha_analytics = if alpha_enabled {
+        Some(Arc::new(Mutex::new(engine::alpha_signal::AlphaAnalytics::default())))
+    } else {
+        None
+    };
+    let alpha_risk_config = if alpha_enabled {
+        Some(engine::alpha_signal::AlphaRiskConfig::from_env())
+    } else {
+        None
+    };
+    if alpha_enabled {
+        info!(sidecar_url = %config.alpha_sidecar_url, "Alpha pipeline enabled");
+    }
 
     // ── Task: Ctrl-C sets shutdown flag ───────────────────────────────────
     {
@@ -849,6 +871,53 @@ async fn main() -> Result<()> {
         })
     };
 
+    // ── Alpha signal consumer (AI sidecar → PaperEngine) ────────────────
+    if let Some(alpha_rx) = alpha_signal_rx {
+        let alpha_paper = paper_for_persist.as_ref().map(Arc::clone);
+        let alpha_act = activity.clone();
+        let alpha_analytics_ref = alpha_analytics.clone();
+        tokio::task::spawn_blocking(move || {
+            for signal in &alpha_rx {
+                let source_label = format!("AI/{}", signal.analysis_id);
+                if let Some(ref paper) = alpha_paper {
+                    // Convert alpha signal to RN1Signal for the existing pipeline.
+                    // This is a deliberate bridge: the paper engine processes it
+                    // through the same risk checks and fill simulation.
+                    let rn1_compat = RN1Signal {
+                        token_id: signal.token_id.clone(),
+                        market_title: Some(format!("[ALPHA] {}", signal.analysis_id)),
+                        market_outcome: None,
+                        side: signal.side,
+                        price: (signal.recommended_price * 1000.0) as u64,
+                        size: (signal.recommended_size_usdc * 1000.0) as u64,
+                        order_id: format!("alpha-{}", signal.analysis_id),
+                        detected_at: signal.received_at.unwrap_or_else(std::time::Instant::now),
+                        event_start_time: None,
+                        event_end_time: None,
+                    };
+
+                    let p = Arc::clone(paper);
+                    // Use a lightweight runtime for the blocking bridge.
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all().build().expect("alpha rt");
+                    rt.block_on(async move {
+                        p.handle_signal(rn1_compat).await;
+                    });
+
+                    if let Some(ref analytics) = alpha_analytics_ref {
+                        if let Ok(mut a) = analytics.lock() {
+                            a.positions_opened += 1;
+                        }
+                    }
+                }
+                log_push(&alpha_act, engine::activity_log::EntryKind::Signal,
+                    format!("Alpha signal processed: {source_label}"));
+            }
+        });
+        log_push(&activity, EntryKind::Engine, "Alpha signal consumer started".to_string());
+        info!("Alpha signal consumer task spawned");
+    }
+
     if rpc_enabled {
         let state = AgentRpcState {
             ws_live: Arc::clone(&ws_live),
@@ -861,6 +930,9 @@ async fn main() -> Result<()> {
             bullpen: _bullpen.clone(),
             discovery_store: Some(Arc::clone(&discovery_store)),
             convergence_store: convergence_store.clone(),
+            alpha_signal_tx: alpha_signal_tx.clone(),
+            alpha_analytics: alpha_analytics.clone(),
+            alpha_risk_config: alpha_risk_config.clone(),
         };
         let bind = rpc_bind_addr.clone();
         let act = activity.clone();

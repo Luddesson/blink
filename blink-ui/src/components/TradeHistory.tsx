@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { usePoll } from '../hooks/usePoll'
-import { api } from '../lib/api'
+import { api, getPolymarketUrl } from '../lib/api'
 import { fmt, fmtPnl, pnlClass, fmtNeonTime, formatEventTiming } from '../lib/format'
 
 function fmtDuration(secs: number): string {
@@ -54,8 +54,16 @@ export default function TradeHistory() {
                   const event = formatEventTiming(t.event_start_time, t.event_end_time)
                   return (
                   <tr key={i} className="border-b border-surface-700/50 hover:bg-surface-700/30">
-                    <td className="py-1.5 pr-3 font-mono text-slate-200 max-w-[120px] truncate" title={t.market_title ?? t.token_id}>
-                      {t.market_title ?? t.token_id}
+                    <td className="py-1.5 pr-3 font-mono text-slate-200 max-w-[120px] truncate">
+                      <a
+                        href={getPolymarketUrl(t.token_id)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:text-emerald-400 hover:underline transition-colors"
+                        title={t.market_title ?? t.token_id}
+                      >
+                        {t.market_title ?? t.token_id}
+                      </a>
                     </td>
                     <td className="py-1.5 pr-3 font-mono text-cyan-400">
                       {t.closed_at ? fmtNeonTime(t.closed_at) : '—'}

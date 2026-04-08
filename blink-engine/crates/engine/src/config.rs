@@ -93,6 +93,14 @@ pub struct Config {
     pub live_canary_max_reject_streak: usize,
     /// Optional allowlist of token IDs allowed during canary stages.
     pub live_canary_allowed_markets: Vec<String>,
+
+    // ── Alpha / AI autonomous trading ──────────────────────────────────────
+    /// When `true`, the engine accepts alpha signals from the Python sidecar.
+    /// Default: `false`.
+    pub alpha_enabled: bool,
+    /// URL of the Python alpha sidecar (for health checks).
+    /// Default: `http://127.0.0.1:7879`.
+    pub alpha_sidecar_url: String,
 }
 
 impl fmt::Debug for Config {
@@ -123,6 +131,8 @@ impl fmt::Debug for Config {
             .field("live_canary_end_hour_utc", &self.live_canary_end_hour_utc)
             .field("live_canary_max_reject_streak", &self.live_canary_max_reject_streak)
             .field("live_canary_allowed_markets", &self.live_canary_allowed_markets)
+            .field("alpha_enabled", &self.alpha_enabled)
+            .field("alpha_sidecar_url", &self.alpha_sidecar_url)
             .finish()
     }
 }
@@ -303,6 +313,12 @@ impl Config {
             live_canary_end_hour_utc,
             live_canary_max_reject_streak,
             live_canary_allowed_markets,
+
+            alpha_enabled: std::env::var("ALPHA_ENABLED")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false),
+            alpha_sidecar_url: std::env::var("ALPHA_SIDECAR_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:7879".to_string()),
         })
     }
 

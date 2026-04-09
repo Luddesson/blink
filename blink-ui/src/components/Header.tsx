@@ -143,11 +143,7 @@ export default function Header({
               <AlertTriangle size={10} /> PAUSED
             </span>
           )}
-<<<<<<< Updated upstream
           {metrics?.available && rejections > 0 && (
-=======
-          {(metrics?.available && rejections > 0) && (
->>>>>>> Stashed changes
             <span
               className={`flex items-center gap-1 font-mono ${rejections > 10 ? 'text-amber-400' : 'text-slate-500'}`}
               title={`Signals rejected last 60s: ${rejections}`}
@@ -162,11 +158,7 @@ export default function Header({
               WS {wsLabel}
             </span>
           </span>
-<<<<<<< Updated upstream
-          <span className="text-slate-600 font-mono">{seTime} SE</span>
-=======
-          <span className="text-slate-600 font-mono tabular-nums">{utcTime}</span>
->>>>>>> Stashed changes
+          <span className="text-slate-600 font-mono tabular-nums">{seTime} SE</span>
         </div>
       </header>
 

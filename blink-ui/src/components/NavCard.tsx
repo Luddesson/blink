@@ -171,10 +171,13 @@ export default function NavCard({
                   fontSize: 11,
                 }}
                 labelFormatter={(label) => fmtChartTime(Number(label))}
-                formatter={(v: number) => [
+                formatter={(value) => {
+                  const v = Number(value ?? 0)
+                  return [
                   `${v >= 0 ? '+' : ''}$${Math.abs(v).toFixed(2)}`,
                   'P&L',
-                ]}
+                  ]
+                }}
               />
               <Area
                 type="monotone"

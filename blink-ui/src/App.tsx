@@ -185,14 +185,9 @@ export default function App() {
       {activeTab === 'markets' && <MarketsPage />}
       {activeTab === 'history' && <HistoryPage />}
       {activeTab === 'intelligence' && <IntelligencePage />}
-<<<<<<< Updated upstream
       {activeTab === 'performance' && <PerformancePage portfolio={portfolio} positions={positions} />}
       {activeTab === 'config' && <ConfigPage risk={risk} />}
-=======
-      {activeTab === 'performance' && <PerformancePage portfolio={portfolio} />}
-      {activeTab === 'config' && <ConfigPage risk={risk} positions={positions} />}
       {activeTab === 'signal' && <SignalPage />}
->>>>>>> Stashed changes
 
       <StatusBar />
     </div>

@@ -234,11 +234,7 @@ export interface MetricsResponse {
 // ─── Order Book ──────────────────────────────────────────────────────────────
 export interface OrderBookResponse {
   token_id: string
-<<<<<<< Updated upstream
-  market_title?: string
-=======
   market_title?: string | null
->>>>>>> Stashed changes
   bids: [number, number][]  // [price, size]
   asks: [number, number][]
   best_bid: number | null

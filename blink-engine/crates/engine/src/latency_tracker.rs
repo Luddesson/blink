@@ -113,8 +113,6 @@ impl LatencyStats {
         Some(sorted[idx])
     }
 
-    fn ensure_sorted(&self) {}
-
     /// Returns the incrementally-maintained histogram buckets — O(1).
     pub fn histogram_buckets(&self) -> [u32; 6] { self.buckets }
 

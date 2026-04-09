@@ -111,8 +111,6 @@ struct VolatilityState {
 struct CachedSignalMeta {
     market_title: Option<String>,
     market_outcome: Option<String>,
-    event_start_time: Option<i64>,
-    event_end_time: Option<i64>,
     cached_at: Instant,
 }
 
@@ -1493,8 +1491,6 @@ impl PaperEngine {
             CachedSignalMeta {
                 market_title: title.clone(),
                 market_outcome: outcome.clone(),
-                event_start_time: None,
-                event_end_time: None,
                 cached_at: Instant::now(),
             },
         );

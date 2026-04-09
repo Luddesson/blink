@@ -1,16 +1,10 @@
 ﻿# start-blink.ps1
-<<<<<<< Updated upstream
-# Usage: .\start-blink.ps1                  (auto-detect build, release)
+# Usage: .\start-blink.ps1                  (release build, auto if needed)
 #        .\start-blink.ps1 -Debug            (debug build, fast compile)
-#        .\start-blink.ps1 -SkipBuild        (skip cargo entirely, run existing binary)
-#        .\start-blink.ps1 -Watch            (AFK mode — auto-restart engine on crash)
-#        .\start-blink.ps1 -SkipBuild -Watch (fast AFK restart — no rebuild)
+#        .\start-blink.ps1 -SkipBuild        (skip cargo, use existing binary)
+#        .\start-blink.ps1 -Watch            (auto-restart engine if it crashes)
+#        .\start-blink.ps1 -Debug -Watch     (debug + watchdog loop)
 param([switch]$Debug, [switch]$Watch, [switch]$SkipBuild)
-=======
-# Usage: .\start-blink.ps1          (debug build, fast)
-#        .\start-blink.ps1 -Release  (release build, optimized)
-param([switch]$Release)
->>>>>>> Stashed changes
 $root = $PSScriptRoot
 $logs = "$root\logs"
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
@@ -19,6 +13,15 @@ function Kill-Tree($id) {
     Get-WmiObject Win32_Process | Where-Object { $_.ParentProcessId -eq $id } |
         ForEach-Object { Kill-Tree $_.ProcessId }
     try { [System.Diagnostics.Process]::GetProcessById($id).Kill() } catch {}
+}
+
+function Start-EngineProcess($rootPath, $profile, $engineLogPath) {
+    $engineArgs = "-NoProfile -Command " +
+        "Set-Location '$rootPath\blink-engine'; " +
+        "`$env:WEB_UI='true'; `$env:WEB_UI_PORT='3030'; " +
+        "`$env:PAPER_TRADING='true'; `$env:TUI='false'; " +
+        ".\target\$profile\engine.exe >> '$engineLogPath' 2>&1"
+    return Start-Process powershell -ArgumentList $engineArgs -WindowStyle Hidden -PassThru
 }
 
 # Stop old processes
@@ -40,7 +43,6 @@ Start-Sleep 4
 Write-Host ""
 Write-Host "=== [1/4] Building engine (cargo build) ===" -ForegroundColor Cyan
 Push-Location "$root\blink-engine"
-<<<<<<< Updated upstream
 $cargoArgs = if ($Debug) { @("build") } else { @("build", "--release") }
 $buildProfile = if ($Debug) { "debug" } else { "release" }
 
@@ -72,16 +74,6 @@ if ($needsBuild) {
 } else {
     Pop-Location
     Write-Host "Engine build skipped" -ForegroundColor Green
-=======
-$cargoArgs = if ($Release) { @("build", "--release") } else { @("build") }
-$buildProfile = if ($Release) { "release" } else { "debug" }
-if ($Release) { Write-Host "  Mode: RELEASE (optimized)" -ForegroundColor Yellow }
-$p = Start-Process "cargo" -ArgumentList $cargoArgs -NoNewWindow -Wait -PassThru
-Pop-Location
-if ($p.ExitCode -ne 0) {
-    Write-Host "ERROR: cargo build failed (exit code $($p.ExitCode))" -ForegroundColor Red
-    exit 1
->>>>>>> Stashed changes
 }
 
 # ── [2/4] Frontend deps ───────────────────────────────────────────────────────
@@ -103,12 +95,7 @@ Write-Host ""
 Write-Host "=== [3/4] Starting engine ===" -ForegroundColor Cyan
 $engineLog = "$logs\engine-stdout.log"
 "" | Set-Content $engineLog
-$engineArgs = "-NoProfile -Command " +
-    "Set-Location '$root\blink-engine'; " +
-    "`$env:WEB_UI='true'; `$env:WEB_UI_PORT='3030'; " +
-    "`$env:PAPER_TRADING='true'; `$env:TUI='false'; " +
-    ".\target\$buildProfile\engine.exe >> '$engineLog' 2>&1"
-$ep = Start-Process powershell -ArgumentList $engineArgs -WindowStyle Hidden -PassThru
+$ep = Start-EngineProcess -rootPath $root -profile $buildProfile -engineLogPath $engineLog
 $ep.Id | Out-File "$logs\engine.pid"
 
 # ── [4/4] Start Vite ──────────────────────────────────────────────────────────
@@ -153,8 +140,6 @@ if ($ready) {
     Write-Host "ERROR: Engine did not respond. Check: $engineLog" -ForegroundColor Red
     exit 1
 }
-<<<<<<< Updated upstream
-
 # ── Watch mode: auto-restart engine on crash ──────────────────────────────────
 if ($Watch) {
     Write-Host ""
@@ -190,7 +175,7 @@ if ($Watch) {
             # Restart engine only (Vite stays running)
             $portInUse = (netstat -an | Select-String "0.0.0.0:3030.*LISTENING") -ne $null
             if (-not $portInUse) {
-                $ep2 = Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$engineLauncher`"" -WindowStyle Hidden -PassThru
+                $ep2 = Start-EngineProcess -rootPath $root -profile $buildProfile -engineLogPath $engineLog
                 $ep2.Id | Out-File "$logs\engine.pid"
                 Write-Host "  Engine restarted (PID $($ep2.Id))" -ForegroundColor Green
 
@@ -212,5 +197,3 @@ if ($Watch) {
         }
     }
 }
-=======
->>>>>>> Stashed changes

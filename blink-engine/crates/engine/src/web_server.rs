@@ -421,17 +421,12 @@ async fn get_all_orderbooks(State(state): State<AppState>) -> Json<serde_json::V
     };
 
     let books: Vec<serde_json::Value> = subs.iter().map(|token_id| {
-<<<<<<< Updated upstream
-        let title = title_map.get(token_id).cloned();
-=======
-        // Look up market title from discovery store if available
+        // Prefer discovery title, fallback to open-position map.
         let market_title: Option<String> = state.discovery_store.as_ref().and_then(|store| {
             store.try_read().ok().and_then(|s| {
                 s.get(token_id).and_then(|m| m.title.clone())
             })
-        });
-
->>>>>>> Stashed changes
+        }).or_else(|| title_map.get(token_id).cloned());
         if let Some(ob) = state.book_store.get_book_snapshot(token_id) {
             let bids: Vec<[f64; 2]> = ob.bids.iter().rev().take(15)
                 .map(|(&p, &s)| [p as f64 / 1000.0, s as f64 / 1000.0])
@@ -441,11 +436,7 @@ async fn get_all_orderbooks(State(state): State<AppState>) -> Json<serde_json::V
                 .collect();
             json!({
                 "token_id": token_id,
-<<<<<<< Updated upstream
-                "market_title": title,
-=======
                 "market_title": market_title,
->>>>>>> Stashed changes
                 "best_bid": ob.best_bid().map(|p| p as f64 / 1000.0),
                 "best_ask": ob.best_ask().map(|p| p as f64 / 1000.0),
                 "spread_bps": ob.spread_bps(),
@@ -455,11 +446,7 @@ async fn get_all_orderbooks(State(state): State<AppState>) -> Json<serde_json::V
         } else {
             json!({
                 "token_id": token_id,
-<<<<<<< Updated upstream
-                "market_title": title,
-=======
                 "market_title": market_title,
->>>>>>> Stashed changes
                 "best_bid": null,
                 "best_ask": null,
                 "spread_bps": null,

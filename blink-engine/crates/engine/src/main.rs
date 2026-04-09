@@ -675,7 +675,7 @@ async fn main() -> Result<()> {
             Arc::clone(&config),
             Arc::clone(&book_store),
             Some(activity.clone()),
-        ));
+        )?);
         live_for_web = Some(Arc::clone(&live));
         Arc::clone(&live).spawn_reconciliation_worker();
 

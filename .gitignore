@@ -3,6 +3,11 @@ blink-engine/target-*/
 blink-engine/.env
 *.log
 node_modules
+logs/*.pid
+blink-ui/tsconfig.tsbuildinfo
+*.tsbuildinfo
+.claude/settings.local.json
+.claude/launch.json
 
 # Secrets & credentials
 *.pem

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::bullpen_bridge::{BullpenBridge, DiscoverEvent, DiscoverResponse};
 

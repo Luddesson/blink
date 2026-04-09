@@ -14,7 +14,14 @@ function MarketList({ markets, selectedTokenId, onSelect }: Props) {
   const filtered = useMemo(() => {
     if (!query) return markets
     const q = query.toLowerCase()
+<<<<<<< Updated upstream
     return markets.filter((m) => m.token_id.toLowerCase().includes(q) || m.market_title?.toLowerCase().includes(q))
+=======
+    return markets.filter((m) =>
+      m.token_id.toLowerCase().includes(q) ||
+      (m.market_title ?? '').toLowerCase().includes(q)
+    )
+>>>>>>> Stashed changes
   }, [markets, query])
 
   return (
@@ -63,10 +70,19 @@ function MarketList({ markets, selectedTokenId, onSelect }: Props) {
                   ●
                 </span>
 
+<<<<<<< Updated upstream
                 <span className="text-slate-200 truncate min-w-0 flex-1 font-mono">
                   {m.market_title ?? (m.token_id.length > 12
                     ? `${m.token_id.slice(0, 12)}…`
                     : m.token_id)}
+=======
+                <span className="text-slate-200 truncate min-w-0 flex-1">
+                  {m.market_title
+                    ? m.market_title
+                    : m.token_id.length > 12
+                      ? `${m.token_id.slice(0, 12)}…`
+                      : m.token_id}
+>>>>>>> Stashed changes
                 </span>
 
                 {mid != null && (

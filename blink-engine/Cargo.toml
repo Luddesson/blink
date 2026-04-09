@@ -4,6 +4,7 @@ members = [
     "crates/market-scanner",
     "crates/tee-vault",
     "crates/bpf-probes",
+    "crates/blink-cli",
 ]
 resolver = "2"
 

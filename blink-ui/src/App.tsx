@@ -22,12 +22,14 @@ import ErrorBoundary from './components/ErrorBoundary'
 import BullpenHealth from './components/BullpenHealth'
 import DiscoveryPanel from './components/DiscoveryPanel'
 import ConvergenceAlert from './components/ConvergenceAlert'
+import { ToastProvider } from './components/ui'
 
 import MarketsPage from './pages/MarketsPage'
 import HistoryPage from './pages/HistoryPage'
 import IntelligencePage from './pages/IntelligencePage'
 import PerformancePage from './pages/PerformancePage'
 import ConfigPage from './pages/ConfigPage'
+import SignalPage from './pages/SignalPage'
 
 import type { RiskSummary } from './types'
 
@@ -92,8 +94,16 @@ export default function App() {
   })
 
   return (
+    <ToastProvider>
     <div className="h-screen flex flex-col overflow-hidden bg-surface-950 text-slate-100">
-      <Header wsConnected={connected} tradingPaused={wsPaused} />
+      <Header
+        wsConnected={connected}
+        tradingPaused={wsPaused}
+        nav={nav}
+        navDelta={navDelta}
+        navDeltaPct={navDeltaPct}
+        positionCount={positions.length}
+      />
       <TabBar activeTab={activeTab} onSwitch={switchTab} />
 
       {showWsBanner && (
@@ -175,10 +185,17 @@ export default function App() {
       {activeTab === 'markets' && <MarketsPage />}
       {activeTab === 'history' && <HistoryPage />}
       {activeTab === 'intelligence' && <IntelligencePage />}
+<<<<<<< Updated upstream
       {activeTab === 'performance' && <PerformancePage portfolio={portfolio} positions={positions} />}
       {activeTab === 'config' && <ConfigPage risk={risk} />}
+=======
+      {activeTab === 'performance' && <PerformancePage portfolio={portfolio} />}
+      {activeTab === 'config' && <ConfigPage risk={risk} positions={positions} />}
+      {activeTab === 'signal' && <SignalPage />}
+>>>>>>> Stashed changes
 
       <StatusBar />
     </div>
+    </ToastProvider>
   )
 }

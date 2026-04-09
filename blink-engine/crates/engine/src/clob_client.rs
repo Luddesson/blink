@@ -3,7 +3,7 @@
 //! All methods reuse a single [`reqwest::Client`] connection pool.  
 //! Every call is traced with its HTTP latency via [`tracing`].
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tracing::instrument;
@@ -27,6 +27,7 @@ impl ClobClient {
     pub fn new(base_url: &str) -> Self {
         let client = reqwest::Client::builder()
             .connection_verbose(false)
+            .timeout(Duration::from_secs(10))
             .build()
             .expect("failed to build reqwest client — TLS init error?");
 

@@ -1,4 +1,4 @@
-Set-Location 'C:\Users\ludvi\Documents\GitHub\blink\blink-engine'
+Set-Location 'C:\Users\Zephyrus g14\Documents\GitHub\Blink\blink-engine'
 $env:WEB_UI = 'true'
 $env:WEB_UI_PORT = '3030'
 $env:PAPER_TRADING = 'true'
@@ -7,4 +7,4 @@ $env:WS_BROADCAST_INTERVAL_SECS = '1'
 $env:VAR_THRESHOLD_PCT = '0.50'
 $env:MIN_SIGNAL_NOTIONAL_USD = '5.0'
 $env:TUI = 'false'
-& '.\target\release\engine.exe' > 'C:\Users\ludvi\Documents\GitHub\blink\logs\engine-stdout.log' 2>&1
+& '.\target\release\engine.exe' > 'C:\Users\Zephyrus g14\Documents\GitHub\Blink\logs\engine-stdout.log' 2>&1

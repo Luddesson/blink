@@ -61,7 +61,7 @@ export default function DiscoveryTable({ discovery }: Props) {
         <table className="w-full text-[11px]">
           <thead className="sticky top-0 z-10 bg-slate-900 border-b border-slate-800">
             <tr className="text-left text-slate-500 uppercase tracking-wider">
-              <th className="px-3 py-2 font-medium">Token ID</th>
+              <th className="px-3 py-2 font-medium">Market</th>
               <th className="px-3 py-2 font-medium">Lenses</th>
               <th
                 className="px-3 py-2 font-medium cursor-pointer hover:text-slate-300 select-none"
@@ -94,16 +94,30 @@ export default function DiscoveryTable({ discovery }: Props) {
                     key={m.token_id}
                     className="border-b border-slate-800/50 hover:bg-slate-800/30"
                   >
-                    {/* Token ID */}
+                    {/* Market title / Token ID */}
                     <td className="px-3 py-1.5">
-                      <span
-                        className="font-mono text-slate-300 truncate block max-w-[120px]"
-                        title={m.token_id}
-                      >
-                        {m.token_id.length > 16
-                          ? `${m.token_id.slice(0, 8)}…${m.token_id.slice(-6)}`
-                          : m.token_id}
-                      </span>
+                      {m.title ? (
+                        <div className="flex flex-col">
+                          <span className="text-slate-200 truncate block max-w-[200px]" title={m.title}>
+                            {m.title}
+                          </span>
+                          <span
+                            className="font-mono text-slate-600 text-[9px] truncate block max-w-[200px]"
+                            title={m.token_id}
+                          >
+                            {m.token_id.slice(0, 10)}…
+                          </span>
+                        </div>
+                      ) : (
+                        <span
+                          className="font-mono text-slate-300 truncate block max-w-[120px]"
+                          title={m.token_id}
+                        >
+                          {m.token_id.length > 16
+                            ? `${m.token_id.slice(0, 8)}…${m.token_id.slice(-6)}`
+                            : m.token_id}
+                        </span>
+                      )}
                     </td>
 
                     {/* Lenses */}

@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -102,7 +103,7 @@ struct CanaryState {
 }
 
 impl LiveEngine {
-    pub fn new(config: Arc<Config>, book_store: Arc<OrderBookStore>, activity: Option<ActivityLog>) -> Self {
+    pub fn new(config: Arc<Config>, book_store: Arc<OrderBookStore>, activity: Option<ActivityLog>) -> Result<Self> {
         let executor = OrderExecutor::from_config(&config);
 
         // Initialize the TEE vault for key isolation.
@@ -119,7 +120,7 @@ impl LiveEngine {
                 }
                 Err(e) => {
                     if config.live_trading {
-                        panic!(
+                        bail!(
                             "FATAL: LIVE_TRADING=true but TEE vault initialization failed: {e}. \
                              Refusing to start — fix vault configuration or disable live trading."
                         );
@@ -174,7 +175,7 @@ impl LiveEngine {
             None
         };
 
-        Self {
+        Ok(Self {
             portfolio: Arc::new(Mutex::new(PaperPortfolio::new())),
             book_store,
             activity,
@@ -191,7 +192,7 @@ impl LiveEngine {
             failsafe_metrics: std::sync::Mutex::new(FailsafeMetrics::default()),
             canary_policy,
             canary_state: std::sync::Mutex::new(CanaryState::default()),
-        }
+        })
     }
 
     pub fn spawn_reconciliation_worker(self: Arc<Self>) {
@@ -353,7 +354,7 @@ impl LiveEngine {
             }
             (true, None)
         } else {
-            let vault = self.vault.as_ref().unwrap();
+            let vault = self.vault.as_ref().expect("vault is Some; guarded by is_none() check above");
             let mut policy = self.signing_policy;
             policy.nonce = self.nonce_counter.fetch_add(1, Ordering::Relaxed);
             match sign_order_with_vault_policy(vault.as_ref(), &params, policy) {

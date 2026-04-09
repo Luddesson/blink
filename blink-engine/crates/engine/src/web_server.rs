@@ -11,7 +11,7 @@ use std::sync::{
 use axum::{
     extract::{Path, Query, State, WebSocketUpgrade},
     extract::ws::{Message, WebSocket},
-    http::Method,
+    http::{Method, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -421,26 +421,50 @@ async fn get_all_orderbooks(State(state): State<AppState>) -> Json<serde_json::V
     };
 
     let books: Vec<serde_json::Value> = subs.iter().map(|token_id| {
+<<<<<<< Updated upstream
         let title = title_map.get(token_id).cloned();
+=======
+        // Look up market title from discovery store if available
+        let market_title: Option<String> = state.discovery_store.as_ref().and_then(|store| {
+            store.try_read().ok().and_then(|s| {
+                s.get(token_id).and_then(|m| m.title.clone())
+            })
+        });
+
+>>>>>>> Stashed changes
         if let Some(ob) = state.book_store.get_book_snapshot(token_id) {
+            let bids: Vec<[f64; 2]> = ob.bids.iter().rev().take(15)
+                .map(|(&p, &s)| [p as f64 / 1000.0, s as f64 / 1000.0])
+                .collect();
+            let asks: Vec<[f64; 2]> = ob.asks.iter().take(15)
+                .map(|(&p, &s)| [p as f64 / 1000.0, s as f64 / 1000.0])
+                .collect();
             json!({
                 "token_id": token_id,
+<<<<<<< Updated upstream
                 "market_title": title,
+=======
+                "market_title": market_title,
+>>>>>>> Stashed changes
                 "best_bid": ob.best_bid().map(|p| p as f64 / 1000.0),
                 "best_ask": ob.best_ask().map(|p| p as f64 / 1000.0),
                 "spread_bps": ob.spread_bps(),
-                "bid_depth": ob.bids.len(),
-                "ask_depth": ob.asks.len(),
+                "bids": bids,
+                "asks": asks,
             })
         } else {
             json!({
                 "token_id": token_id,
+<<<<<<< Updated upstream
                 "market_title": title,
+=======
+                "market_title": market_title,
+>>>>>>> Stashed changes
                 "best_bid": null,
                 "best_ask": null,
                 "spread_bps": null,
-                "bid_depth": 0,
-                "ask_depth": 0,
+                "bids": [],
+                "asks": [],
             })
         }
     }).collect();
@@ -557,9 +581,9 @@ async fn post_submit_signed_tx(
     }))
 }
 
-async fn get_twin(State(state): State<AppState>) -> Json<serde_json::Value> {
+async fn get_twin(State(state): State<AppState>) -> impl IntoResponse {
     let Some(ref twin_lock) = state.twin_snapshot else {
-        return Json(json!({"error": "Twin not available"}));
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "Twin not available"}))).into_response();
     };
     let snap = twin_lock.lock().unwrap();
     match snap.as_ref() {
@@ -578,8 +602,8 @@ async fn get_twin(State(state): State<AppState>) -> Json<serde_json::Value> {
             "win_rate_pct": t.win_rate_pct,
             "nav_return_pct": t.nav_return_pct,
             "max_drawdown_pct": t.max_drawdown_pct,
-        })),
-        None => Json(json!({"error": "No twin snapshot yet"})),
+        })).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "No twin snapshot yet"}))).into_response(),
     }
 }
 
@@ -1004,6 +1028,23 @@ async fn get_bullpen_discovery(State(state): State<AppState>) -> impl IntoRespon
     if let Some(ref store) = state.discovery_store {
         let s = store.read().await;
         let summary = s.summary();
+        let mut markets: Vec<serde_json::Value> = s.all_markets().iter().map(|m| {
+            json!({
+                "token_id": m.token_id,
+                "title": m.title,
+                "lenses": m.discovery_lenses,
+                "viability_score": m.viability_score,
+                "conviction_boost": m.conviction_boost,
+                "smart_money_interest": m.smart_money_interest,
+                "seen_count": m.seen_count,
+            })
+        }).collect();
+        // Sort by viability descending for consistent display
+        markets.sort_by(|a, b| {
+            let va = a["viability_score"].as_f64().unwrap_or(0.0);
+            let vb = b["viability_score"].as_f64().unwrap_or(0.0);
+            vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
+        });
         Json(json!({
             "enabled": true,
             "total_markets": summary.total_markets,
@@ -1011,9 +1052,10 @@ async fn get_bullpen_discovery(State(state): State<AppState>) -> impl IntoRespon
             "avg_viability": summary.avg_viability,
             "scan_count": summary.scan_count,
             "last_scan_ago_secs": summary.last_scan_ago_secs,
-        }))
+            "markets": markets,
+        })).into_response()
     } else {
-        Json(json!({ "enabled": false }))
+        Json(json!({ "enabled": false })).into_response()
     }
 }
 
@@ -1023,7 +1065,7 @@ async fn get_bullpen_convergence(State(state): State<AppState>) -> impl IntoResp
         let summary = s.summary();
         let signals: Vec<serde_json::Value> = s.active_signals.iter().map(|sig| {
             json!({
-                "market": sig.market,
+                "market_title": sig.market,
                 "convergence_score": sig.convergence_score,
                 "net_direction": sig.net_direction,
                 "total_usd": sig.total_usd,

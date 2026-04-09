@@ -19,11 +19,17 @@ export default {
         },
         // Background layers
         surface: {
+          950: '#060911',
           900: '#0b0f19',
           800: '#111827',
           700: '#1f2937',
           600: '#374151',
         },
+        // Semantic trading colors
+        bull:   '#22c55e',
+        bear:   '#ef4444',
+        signal: '#3b82f6',
+        whale:  '#f59e0b',
       },
       fontFamily: {
         mono: ['JetBrains Mono', 'Fira Code', 'Consolas', 'monospace'],

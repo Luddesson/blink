@@ -124,6 +124,11 @@ impl DiscoveryStore {
         self.markets.keys().cloned().collect()
     }
 
+    /// All enriched markets for serialization.
+    pub fn all_markets(&self) -> Vec<&EnrichedMarket> {
+        self.markets.values().collect()
+    }
+
     /// Number of tracked markets.
     pub fn len(&self) -> usize {
         self.markets.len()

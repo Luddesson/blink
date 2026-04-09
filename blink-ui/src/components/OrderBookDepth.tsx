@@ -16,6 +16,14 @@ function OrderBookDepth({ orderbook }: Props) {
     )
   }
 
+  if (!orderbook.bids || !orderbook.asks) {
+    return (
+      <div className="card flex items-center justify-center h-full">
+        <p className="text-slate-500 text-[11px]">Order book data unavailable</p>
+      </div>
+    )
+  }
+
   const bids = orderbook.bids.slice(0, MAX_LEVELS)
   const asks = orderbook.asks.slice(0, MAX_LEVELS)
 

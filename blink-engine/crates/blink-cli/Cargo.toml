@@ -1,0 +1,23 @@
+[package]
+name    = "blink-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Interactive CLI for the Blink engine — inspect markets, manage positions, control the engine."
+
+[[bin]]
+name = "blink"
+path = "src/main.rs"
+
+[dependencies]
+tokio     = { workspace = true }
+reqwest   = { workspace = true }
+serde     = { workspace = true }
+serde_json = { workspace = true }
+anyhow    = { workspace = true }
+chrono    = { workspace = true }
+dotenvy   = { workspace = true }
+
+clap          = { version = "4", features = ["derive", "color", "env"] }
+comfy-table   = "7"
+colored       = "2"
+indicatif     = "0.17"

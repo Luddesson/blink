@@ -21,7 +21,7 @@ use crate::activity_log::{ActivityLog, EntryKind, push as log_push};
 use crate::exit_strategy::{ExitAction, ExitConfig, evaluate_exits};
 use crate::latency_tracker::LatencyStats;
 use crate::order_book::{OrderBook, OrderBookStore};
-use crate::paper_portfolio::{DRIFT_THRESHOLD, PaperPortfolio, STARTING_BALANCE_USDC, polymarket_taker_fee};
+use crate::paper_portfolio::{DRIFT_THRESHOLD, PaperPortfolio, STARTING_BALANCE_USDC, polymarket_taker_fee_with_rate};
 use crate::risk_manager::{RiskConfig, RiskManager};
 use crate::types::{OrderSide, RN1Signal, format_price};
 
@@ -615,10 +615,10 @@ impl PaperEngine {
             }) {
                 let pos = p.positions.remove(idx);
                 let exit_price = pos.current_price.clamp(0.001, 0.999);
-                let exit_fee = polymarket_taker_fee(pos.shares, exit_price);
-                let pnl = (exit_price - pos.entry_price) * pos.shares - exit_fee;
+                let exit_fee = polymarket_taker_fee_with_rate(pos.shares, exit_price, pos.fee_rate);
+                let pnl = (exit_price - pos.entry_price) * pos.shares;
                 p.total_fees_paid_usdc += exit_fee;
-                p.cash_usdc += pos.usdc_spent + pnl;
+                p.cash_usdc += pos.usdc_spent + pnl - exit_fee;
                 let dur = pos.opened_at.elapsed().as_secs();
                 p.closed_trades.push(crate::paper_portfolio::ClosedTrade {
                     token_id: pos.token_id.clone(),
@@ -627,7 +627,7 @@ impl PaperEngine {
                     entry_price: pos.entry_price,
                     exit_price,
                     shares: pos.shares,
-                    realized_pnl: pnl,
+                    realized_pnl: pnl - exit_fee,
                     fees_paid_usdc: pos.entry_fee_paid_usdc + exit_fee,
                     reason: "rn1_mirror_exit".to_string(),
                     opened_at_wall: pos.opened_at_wall,
@@ -641,14 +641,14 @@ impl PaperEngine {
                     event_start_time: pos.event_start_time,
                     event_end_time: pos.event_end_time,
                 });
-                self.risk.lock().unwrap().record_close(pnl);
+                self.risk.lock().unwrap().record_close(pnl - exit_fee);
                 if let Some(ref log) = self.activity {
                     log_push(log, EntryKind::Fill, format!(
-                        "RN1 EXIT: closed BUY @{:.3} (entry={:.3})  pnl={:+.3}  dur={}s",
-                        exit_price, pos.entry_price, pnl, dur,
+                        "RN1 EXIT: closed BUY @{:.3} (entry={:.3})  pnl={:+.3}  fee={:.4}  dur={}s",
+                        exit_price, pos.entry_price, pnl - exit_fee, exit_fee, dur,
                     ));
                 }
-                info!(token_id = %pos.token_id, exit_price, pnl, "🔴 RN1 mirror-exit: closed BUY position");
+                info!(token_id = %pos.token_id, exit_price, pnl = pnl - exit_fee, exit_fee, "🔴 RN1 mirror-exit: closed BUY position");
             } else {
                 // RN1 selling a token we don't hold — skip rather than open a short.
                 p.skipped_orders += 1;

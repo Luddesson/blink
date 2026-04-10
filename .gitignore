@@ -4,6 +4,9 @@ blink-engine/.env
 *.log
 node_modules
 
+# Editor local config (may contain credentials)
+.cursor/mcp.json
+
 # Secrets & credentials
 *.pem
 *.key

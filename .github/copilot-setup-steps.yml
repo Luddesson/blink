@@ -1,0 +1,42 @@
+# Pre-installs dependencies for the Copilot coding agent environment.
+# Without this, the agent must compile the full workspace cold on every session.
+# Docs: https://docs.github.com/en/copilot/customizing-copilot/customizing-the-development-environment-for-copilot-coding-agent
+
+steps:
+  - name: Install Rust stable toolchain
+    run: |
+      rustup update stable
+      rustup component add clippy rustfmt
+      rustup show  # log exact version
+
+  - name: Cache Cargo registry
+    uses: actions/cache@v4
+    with:
+      path: |
+        ~/.cargo/registry
+        ~/.cargo/git
+        blink-engine/target
+      key: ${{ runner.os }}-cargo-${{ hashFiles('blink-engine/Cargo.lock') }}
+      restore-keys: |
+        ${{ runner.os }}-cargo-
+
+  - name: Pre-build engine library (warm the cache)
+    run: |
+      cd blink-engine
+      cargo build --lib -p engine
+    env:
+      CARGO_INCREMENTAL: "1"
+
+  - name: Install Node.js dependencies (web UI)
+    run: |
+      cd blink-engine/web-ui
+      npm ci --prefer-offline
+
+  - name: Install Python + uv (alpha sidecar)
+    run: |
+      pip install uv --quiet
+      cd blink-engine/alpha-sidecar
+      pip install -e . --quiet
+
+  - name: Install Halmos for formal verification (optional)
+    run: pip install halmos --quiet || true

@@ -1,0 +1,64 @@
+{
+  "servers": {
+    "context7": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"],
+      "description": "Fetches live, version-accurate docs for any library (tokio, k256, serde_json, axum, etc). Add 'use context7' to any prompt."
+    },
+    "sequential-thinking": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "description": "Forces structured multi-step reasoning. Use for complex signal pipeline changes, risk manager redesigns, or architecture decisions."
+    },
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\Users\\ludvi\\Documents\\GitHub\\blink"
+      ],
+      "description": "Direct read/write access to the blink repo. Use for log analysis, portfolio state inspection, and batch file operations."
+    },
+    "clickhouse": {
+      "type": "stdio",
+      "command": "C:\\Users\\ludvi\\AppData\\Roaming\\Python\\Python314\\Scripts\\uvx.exe",
+      "args": ["clickhouse-mcp-server"],
+      "env": {
+        "CLICKHOUSE_HOST": "${input:clickhouseHost}",
+        "CLICKHOUSE_USER": "${input:clickhouseUser}",
+        "CLICKHOUSE_PASSWORD": "${input:clickhousePassword}",
+        "CLICKHOUSE_DATABASE": "${input:clickhouseDatabase}"
+      },
+      "description": "Query Blink's ClickHouse analytics DB — tick data, signal history, execution quality, RejectionAnalytics."
+    }
+  },
+  "inputs": [
+    {
+      "id": "clickhouseHost",
+      "type": "promptString",
+      "description": "ClickHouse host (from CLICKHOUSE_URL in .env)",
+      "default": "localhost"
+    },
+    {
+      "id": "clickhouseUser",
+      "type": "promptString",
+      "description": "ClickHouse user",
+      "default": "default"
+    },
+    {
+      "id": "clickhousePassword",
+      "type": "promptString",
+      "description": "ClickHouse password",
+      "password": true
+    },
+    {
+      "id": "clickhouseDatabase",
+      "type": "promptString",
+      "description": "ClickHouse database name",
+      "default": "blink"
+    }
+  ]
+}

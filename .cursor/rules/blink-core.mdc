@@ -1,0 +1,41 @@
+---
+description: Core Blink engine architecture — always loaded for every AI interaction in this repo.
+alwaysApply: true
+---
+
+# Blink Engine — Core Context
+
+Blink is a high-frequency **shadow-maker bot** for Polymarket. It tracks whale wallet RN1, mirrors their CLOB orders as post-only maker orders, and runs an AI alpha sidecar (Grok/GPT). Rust backend + React/Vite dashboard + Python sidecar.
+
+## Operating modes (env-driven, never CLI args)
+- `PAPER_TRADING=true` — full pipeline, virtual $100 USDC, no real orders
+- `LIVE_TRADING=true` — real EIP-712 signed orders (also needs `TRADING_ENABLED=true` + `BLINK_LIVE_PROFILE=canonical-v1`)
+- Both mutually exclusive — engine exits with error if both set
+
+## Price scaling — most critical rule
+All prices/sizes in the hot path are **`u64 × 1000`** — zero floats. `parse_price("0.65")` → `650`. `f64` only in `PaperPortfolio`/`PaperPosition`/`ClosedTrade`.
+
+## Signal pipeline (17 steps, short-circuits early)
+1. order_id dedup → 2. per-token dedup → 3. match concentration (max 2/event) → 4. event horizon (skip >6h) → 5. min notional ($10) → 6. extreme price (skip <0.10 or >0.95) → 7. esports blocklist → 8. fee-aware cash gate → 9. fee-to-edge (skip if fee >60% edge) → 10. BinaryHeap by edge_score → 11. metadata enrichment → 12. conviction sizing → 13. RiskManager (7 checks) → 14. drift cooldown → 15. InPlayFailsafe → 16. EIP-712 sign → 17. submit (4 retries)
+
+## Critical anti-patterns — never do these
+- Floats in `OrderBook`, `Sniffer`, `ws_client`
+- Call `run_autoclaim()` outside the 5s background timer
+- Call `BullpenBridge` from the signal → order path
+- Record a fill before `truth_reconciler` confirms it (live mode)
+- Side effects in `exit_strategy::evaluate_exits()` — must stay pure
+- Version numbers in crate `Cargo.toml` — use `{ workspace = true }`
+- Enable TCP_NODELAY on the WS socket — immediate Cloudflare RSTs
+- Set both `PAPER_TRADING=true` and `LIVE_TRADING=true`
+- Skip zero-size order book levels — they are removals
+
+## Build commands
+```bash
+cd blink-engine
+cargo build --release
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+```
+```bash
+cd blink-engine/web-ui && npm run dev
+```

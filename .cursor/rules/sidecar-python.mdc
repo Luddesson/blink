@@ -1,0 +1,26 @@
+---
+description: Python conventions for the Blink alpha sidecar (AI signal generator).
+globs: ["blink-engine/alpha-sidecar/**"]
+alwaysApply: false
+---
+
+## General
+- Python 3.12+. `from __future__ import annotations`. Full type annotations everywhere.
+- `ruff check . && ruff format .` for lint/format. `mypy` for type checking.
+
+## Engine communication
+- Connect to `BLINK_RPC_URL` (default `http://127.0.0.1:7878`). Use `submit_alpha_signal` JSON-RPC method.
+- Handle `ConnectionRefusedError` — engine must start before sidecar.
+- Required `AlphaSignal` fields: `token_id`, `side` (`"YES"`/`"NO"`), `confidence` (0.0–1.0), `edge_bps` (int), `source` (`"AiAutonomous"`).
+
+## Signal gates (sidecar-side — engine has its own independent layer too)
+- Only submit if `confidence >= ALPHA_CONFIDENCE_FLOOR` (default 0.65)
+- Only submit if `edge_bps >= ALPHA_MIN_EDGE_BPS` (default 500 = 5%)
+
+## LLM calls
+- Default: Grok-3 via xAI (`XAI_API_KEY`). Switchable via `LLM_BASE_URL` + `OPENAI_API_KEY`.
+- Always set `timeout=30` on LLM calls. Never block signal loop indefinitely.
+
+## Logging
+- Use `structlog` — never bare `print()`.
+- Catch and log LLM errors without crashing the main loop.

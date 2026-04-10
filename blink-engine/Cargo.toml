@@ -27,6 +27,7 @@ thiserror          = "2"
 anyhow             = "1"
 dotenvy            = "0.15"
 crossbeam-channel  = "0.5"
+crossbeam          = "0.8"
 ratatui            = "0.29"
 crossterm          = { version = "0.28", features = ["event-stream"] }
 chrono             = "0.4"

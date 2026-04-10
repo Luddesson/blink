@@ -1,0 +1,26 @@
+# Blink Engine - Compiler Optimization Flags
+# Generates CPU-specific instructions (AVX2, SIMD, etc.) for maximum performance
+
+[build]
+rustflags = [
+    "-C", "target-cpu=native",
+    "-C", "opt-level=3",
+]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+    "-C", "target-cpu=native",
+    "-C", "opt-level=3",
+]
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+    "-C", "target-cpu=native",
+    "-C", "opt-level=3",
+]
+
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C", "target-cpu=native",
+    "-C", "opt-level=3",
+]

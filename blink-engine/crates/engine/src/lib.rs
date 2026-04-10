@@ -44,6 +44,7 @@ pub mod activity_log;
 pub mod agent_rpc;
 pub mod backtest_engine;
 pub mod blink_twin;
+pub mod buffer_pool;
 pub mod bullpen_bridge;
 pub mod bullpen_discovery;
 pub mod bullpen_reconciler;

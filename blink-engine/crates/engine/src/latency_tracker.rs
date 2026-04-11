@@ -113,6 +113,7 @@ impl LatencyStats {
         Some(sorted[idx])
     }
 
+    #[allow(dead_code)]
     fn ensure_sorted(&self) {}
 
     /// Returns the incrementally-maintained histogram buckets — O(1).

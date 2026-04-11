@@ -44,6 +44,7 @@ const INITIAL_BACKOFF:     Duration = Duration::from_millis(1_000);
 const MAX_BACKOFF:         Duration = Duration::from_secs(30);
 /// If we receive no data at all (neither market events nor pong replies) for
 /// this long, the connection is considered dead and we force a reconnect.
+#[allow(dead_code)] // reserved for pong watchdog
 const PONG_TIMEOUT:        Duration = Duration::from_secs(45);
 const CONNECT_TIMEOUT:     Duration = Duration::from_secs(10);
 const BACKOFF_RESET_AFTER: Duration = Duration::from_secs(15);
@@ -308,7 +309,7 @@ async fn connect_and_run(
     let reconnect_debounce = Duration::from_millis(config.ws_reconnect_debounce_ms.max(250));
     let connected_at = Instant::now();
     let mut parse_counters = MessageParseCounters::default();
-    let mut last_data_at = Instant::now(); // pong watchdog: track last sign of life
+    let mut _last_data_at = Instant::now(); // pong watchdog: track last sign of life
 
     loop {
         tokio::select! {
@@ -327,7 +328,7 @@ async fn connect_and_run(
                         return Err(anyhow::anyhow!("WebSocket read error: {err}"));
                     }
                     Some(Ok(msg)) => {
-                        last_data_at = Instant::now();
+                        _last_data_at = Instant::now();
                         handle_message(
                             msg,
                             book_store,

@@ -793,7 +793,7 @@ impl PaperPortfolio {
         let now_ms = chrono::Utc::now().timestamp_millis();
         if let Some(&last) = self.equity_curve.last() {
             let elapsed_ms = now_ms - self.last_equity_push_ts;
-            if (new_nav - last).abs() < 0.001 && elapsed_ms < 60_000 {
+            if (new_nav - last).abs() < 0.001 && elapsed_ms < 10_000 {
                 return;
             }
             tracing::info!(

@@ -144,7 +144,7 @@ struct ActivityEntry {
 /// wallets can be tracked concurrently by spawning one poller per wallet.
 #[allow(unused_assignments)]
 pub async fn run_rn1_poller(
-    config:        Arc<Config>,
+    _config:       Arc<Config>,
     wallet:        String,
     wallet_weight: f64,
     signal_tx:     tokio::sync::mpsc::Sender<RN1Signal>,

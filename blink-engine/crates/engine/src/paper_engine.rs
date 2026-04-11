@@ -1704,6 +1704,7 @@ impl PaperEngine {
         depth_score * 0.35 + spread_score * 0.25 + recency_score * 0.25 + price_score * 0.15
     }
 
+    #[allow(dead_code)]
     fn estimate_slippage_bps(&self, token_id: &str, side: OrderSide, fill_price: f64) -> f64 {
         let ref_price = self
             .book_store

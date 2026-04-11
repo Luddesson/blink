@@ -1331,7 +1331,7 @@ struct BacktestRequest {
 /// Run a backtest synchronously using a local tick CSV file.
 /// Accepts optional overrides; falls back to env-defaults and BacktestConfig::default().
 async fn post_backtest(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<BacktestRequest>,
 ) -> Json<serde_json::Value> {
     // Resolve tick file path.

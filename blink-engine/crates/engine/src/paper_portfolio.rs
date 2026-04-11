@@ -898,9 +898,14 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
                 .timestamp_millis_opt(p.opened_at_wall_ms)
                 .single()
                 .unwrap_or_else(Local::now);
-            let opened_at = now
-                .checked_sub(Duration::from_secs(p.opened_age_secs))
-                .unwrap_or(now);
+            let opened_at = {
+                // Compute actual age from wall clock — survives engine restarts.
+                let wall_ms = opened_at_wall.timestamp_millis();
+                let now_ms = chrono::Local::now().timestamp_millis();
+                let real_age_secs = ((now_ms - wall_ms) / 1000).max(0) as u64;
+                now.checked_sub(Duration::from_secs(real_age_secs))
+                    .unwrap_or(now)
+            };
             PaperPosition {
                 id: p.id,
                 token_id: p.token_id,
@@ -968,7 +973,7 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
             equity_curve: value.equity_curve,
             equity_timestamps: value.equity_timestamps,
             next_id: value.next_id.max(1),
-            last_equity_push_ts: 0,
+            last_equity_push_ts: chrono::Utc::now().timestamp_millis(),
         }
     }
 }

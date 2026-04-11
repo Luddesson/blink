@@ -205,10 +205,15 @@ fn build_portfolio_json(p: &PaperPortfolio, uptime_secs: u64, max_equity_points:
     let (equity_curve, equity_timestamps) = if equity_len <= max_equity_points {
         (p.equity_curve.clone(), p.equity_timestamps.clone())
     } else {
-        let step = equity_len as f64 / max_equity_points as f64;
-        let indices: Vec<usize> = (0..max_equity_points)
+        // Downsample but always include the very last point so the chart
+        // reflects the most recent NAV, not data from minutes ago.
+        let n = max_equity_points.max(2);
+        let step = equity_len as f64 / (n - 1) as f64;
+        let mut indices: Vec<usize> = (0..n - 1)
             .map(|i| ((i as f64 * step) as usize).min(equity_len - 1))
             .collect();
+        indices.push(equity_len - 1); // always include last
+        indices.dedup(); // remove duplicate if last was already included
         let curve: Vec<f64> = indices.iter().map(|&i| p.equity_curve[i]).collect();
         let ts: Vec<i64> = if p.equity_timestamps.len() == equity_len {
             indices.iter().map(|&i| p.equity_timestamps[i]).collect()

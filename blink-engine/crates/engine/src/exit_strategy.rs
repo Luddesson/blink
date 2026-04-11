@@ -325,11 +325,10 @@ where
             }
         }
 
-        // 7. Market not live (stale data)
+        // 7. Market not live (stale data) — close if no fresh order book price
+        //    exists AND position has been held long enough.
         if config.stale_close_secs > 0 && held_secs >= config.stale_close_secs {
-            let has_fresh = has_live_price(&pos.token_id)
-                || (pos.current_price - pos.entry_price).abs() > 0.001;
-            if !has_fresh {
+            if !has_live_price(&pos.token_id) {
                 decisions.push(ExitDecision {
                     position_idx: idx,
                     action: ExitAction::MarketNotLive { held_secs },

@@ -2132,6 +2132,8 @@ impl PaperEngine {
         }
 
         // Refresh prices from live order book before evaluating exits.
+        // Positions without a live price keep their last-known current_price
+        // so time-based exits (max_hold, stale, stagnant) still fire.
         let token_prices: Vec<(String, f64)> = p.positions
             .iter()
             .filter_map(|pos| self.get_market_price(&pos.token_id).map(|pr| (pos.token_id.clone(), pr)))
@@ -2139,6 +2141,13 @@ impl PaperEngine {
         for (token_id, price) in token_prices {
             p.update_price(&token_id, price);
         }
+
+        // Collect which tokens currently have a live order book price.
+        let live_tokens: std::collections::HashSet<String> = p.positions
+            .iter()
+            .filter(|pos| self.get_market_price(&pos.token_id).is_some())
+            .map(|pos| pos.token_id.clone())
+            .collect();
 
         // Delegate exit decisions to the pure exit_strategy module.
         // 4C: Per-category exit config override — evaluate each position with its own
@@ -2149,7 +2158,7 @@ impl PaperEngine {
             .flat_map(|(real_idx, pos)| {
                 let patched = patched_exit_config_for_category(&exit_config, pos.market_title.as_deref());
                 evaluate_exits(std::slice::from_ref(pos), &patched, |tid| {
-                    self.get_market_price(tid).is_some()
+                    live_tokens.contains(tid)
                 })
                 .into_iter()
                 .map(move |mut d| { d.position_idx = real_idx; d })

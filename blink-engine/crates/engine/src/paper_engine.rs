@@ -2229,6 +2229,7 @@ impl PaperEngine {
 
         let mut total_realized = 0.0f64;
         let mut action_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        let mut new_closed_trades: Vec<crate::paper_portfolio::ClosedTrade> = Vec::new();
 
         for decision in &sorted_decisions {
             let idx = decision.position_idx;
@@ -2256,29 +2257,37 @@ impl PaperEngine {
             let before = p.closed_trades.len();
             let _removed = p.close_position_fraction(idx, fraction, reason);
 
-            // Emit ClosedTrade events to ClickHouse for each newly closed slice.
-            if let Some(ref tx) = self.warehouse_tx {
-                for ct in &p.closed_trades[before..] {
-                    let ev = ClosedTradeFull {
-                        timestamp_ms:   crate::clickhouse_logger::now_ms(),
-                        token_id:       ct.token_id.clone(),
-                        market_title:   ct.market_title.clone().unwrap_or_default(),
-                        side:           format!("{:?}", ct.side),
-                        entry_price:    ct.entry_price,
-                        exit_price:     ct.exit_price,
-                        shares:         ct.shares,
-                        realized_pnl:   ct.realized_pnl,
-                        fees_paid_usdc: ct.fees_paid_usdc,
-                        duration_secs:  ct.duration_secs,
-                        reason:         ct.reason.clone(),
-                    };
-                    let _ = tx.try_send(WarehouseEvent::ClosedTrade(ev));
-                }
+            // Collect newly closed trades for ClickHouse emission after lock drop.
+            for ct in &p.closed_trades[before..] {
+                new_closed_trades.push(ct.clone());
             }
 
             // Sum realized P&L from newly closed trades.
             let slice_pnl: f64 = p.closed_trades[before..].iter().map(|t| t.realized_pnl).sum();
             total_realized += slice_pnl;
+        }
+
+        // Drop portfolio lock BEFORE side effects (ClickHouse, risk, logging, save).
+        drop(p);
+
+        // Emit ClosedTrade events to ClickHouse.
+        if let Some(ref tx) = self.warehouse_tx {
+            for ct in &new_closed_trades {
+                let ev = ClosedTradeFull {
+                    timestamp_ms:   crate::clickhouse_logger::now_ms(),
+                    token_id:       ct.token_id.clone(),
+                    market_title:   ct.market_title.clone().unwrap_or_default(),
+                    side:           format!("{:?}", ct.side),
+                    entry_price:    ct.entry_price,
+                    exit_price:     ct.exit_price,
+                    shares:         ct.shares,
+                    realized_pnl:   ct.realized_pnl,
+                    fees_paid_usdc: ct.fees_paid_usdc,
+                    duration_secs:  ct.duration_secs,
+                    reason:         ct.reason.clone(),
+                };
+                let _ = tx.try_send(WarehouseEvent::ClosedTrade(ev));
+            }
         }
 
         // Update risk manager with total realized P&L.
@@ -2296,7 +2305,7 @@ impl PaperEngine {
             info!("{msg}");
         }
 
-        // Immediate save after any position close.
+        // Immediate save after any position close (lock is free now).
         if !action_counts.is_empty() {
             let state_path = std::env::var("PAPER_STATE_PATH")
                 .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());

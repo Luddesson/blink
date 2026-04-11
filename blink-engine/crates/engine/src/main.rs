@@ -219,8 +219,8 @@ async fn main() -> Result<()> {
 
     // ── ClickHouse tick recorder (optional — activated by CLICKHOUSE_URL) ─
     let tick_tx: Option<crossbeam_channel::Sender<TickRecord>> =
-        match std::env::var("CLICKHOUSE_URL") {
-            Ok(url) => {
+        match std::env::var("CLICKHOUSE_URL").ok().filter(|s| !s.is_empty()) {
+            Some(url) => {
                 let (tx, rx) = crossbeam_channel::bounded::<TickRecord>(10_000);
                 let recorder = TickRecorder::new(&url);
                 let act = activity.clone();
@@ -236,7 +236,7 @@ async fn main() -> Result<()> {
                 info!("ClickHouse tick recording enabled");
                 Some(tx)
             }
-            Err(_) => {
+            None => {
                 info!("CLICKHOUSE_URL not set — tick recording disabled");
                 None
             }
@@ -244,8 +244,8 @@ async fn main() -> Result<()> {
 
     // ── ClickHouse data warehouse (optional — activated by CLICKHOUSE_URL) ─
     let warehouse_tx: Option<crossbeam_channel::Sender<WarehouseEvent>> =
-        match std::env::var("CLICKHOUSE_URL") {
-            Ok(ref url) => {
+        match std::env::var("CLICKHOUSE_URL").ok().filter(|s| !s.is_empty()) {
+            Some(ref url) => {
                 let (tx, rx) = crossbeam_channel::bounded::<WarehouseEvent>(10_000);
                 let logger = ClickHouseLogger::new(url);
                 let act = activity.clone();
@@ -262,7 +262,7 @@ async fn main() -> Result<()> {
                 info!("ClickHouse data warehouse enabled");
                 Some(tx)
             }
-            Err(_) => {
+            None => {
                 info!("CLICKHOUSE_URL not set — data warehouse disabled");
                 None
             }
@@ -675,9 +675,11 @@ async fn main() -> Result<()> {
             let pd = Arc::clone(&paper);
             let sd_mt = Arc::clone(&shutdown);
             tokio::spawn(async move {
+                tracing::info!("tick_mark_prices task STARTED");
                 let mut consecutive_ok: u64 = 0;
                 loop {
                     if sd_mt.load(Ordering::Relaxed) {
+                        tracing::info!("tick_mark_prices task exiting (shutdown)");
                         break;
                     }
                     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -687,8 +689,8 @@ async fn main() -> Result<()> {
                     match result {
                         Ok(()) => {
                             consecutive_ok += 1;
-                            if consecutive_ok == 1 || consecutive_ok % 60 == 0 {
-                                tracing::debug!(tick = consecutive_ok, "tick_mark_prices alive");
+                            if consecutive_ok == 1 || consecutive_ok % 30 == 0 {
+                                tracing::info!(tick = consecutive_ok, "tick_mark_prices heartbeat");
                             }
                         }
                         Err(e) => {
@@ -728,7 +730,7 @@ async fn main() -> Result<()> {
                         break;
                     }
                     match ps.save_portfolio(&psp).await {
-                        Ok(()) => tracing::debug!("autosave: portfolio saved"),
+                        Ok(()) => tracing::info!("autosave: portfolio saved"),
                         Err(e) => tracing::error!(err = %e, "autosave: save_portfolio FAILED"),
                     }
                     let subs = subs_save.lock().unwrap().clone();

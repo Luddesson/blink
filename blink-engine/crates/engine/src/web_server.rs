@@ -295,7 +295,16 @@ pub async fn run_web_server(
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
             loop {
                 interval.tick().await;
-                let p = paper.portfolio.lock().await;
+                let p = match tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    paper.portfolio.lock(),
+                ).await {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        tracing::warn!("portfolio cache refresher: lock timeout (2s) — skipping refresh");
+                        continue;
+                    }
+                };
                 let uptime_secs = started_at.elapsed().as_secs();
                 let portfolio_json = build_portfolio_json(&p, uptime_secs, 300);
                 drop(p);
@@ -1576,7 +1585,16 @@ async fn get_analytics_equity(
 
     // ── Fallback: in-memory equity curve ──────────────────────────────────────
     if let Some(ref paper) = state.paper {
-        let p = paper.portfolio.lock().await;
+        let p = match tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            paper.portfolio.lock(),
+        ).await {
+            Ok(guard) => guard,
+            Err(_) => {
+                return Json(json!({ "source": "timeout", "range": range, "points": Vec::<EquityPoint>::new() }))
+                    .into_response();
+            }
+        };
         let cutoff_ms = clickhouse_logger::now_ms().saturating_sub(minutes * 60 * 1_000);
         let points: Vec<EquityPoint> = p
             .equity_curve

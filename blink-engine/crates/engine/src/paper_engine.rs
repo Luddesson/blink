@@ -403,7 +403,16 @@ impl PaperEngine {
     }
 
     pub async fn save_portfolio(&self, path: &str) -> std::io::Result<()> {
-        let p = self.portfolio.lock().await;
+        let p = match tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            self.portfolio.lock(),
+        ).await {
+            Ok(guard) => guard,
+            Err(_) => {
+                tracing::warn!("save_portfolio: lock timeout (2s) — skipping save");
+                return Ok(());
+            }
+        };
         let mut tmp = p.save_to_path(path);
         if tmp.is_ok() {
             let data = std::fs::read_to_string(path)?;
@@ -1883,7 +1892,17 @@ impl PaperEngine {
     pub async fn tick_mark_prices(&self) {
         let tick = self.equity_tick.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let should_push = tick % 1 == 0; // push every tick (called every 1s)
-        let mut p = self.portfolio.lock().await;
+        // Use try_lock first to detect contention
+        let mut p = match tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            self.portfolio.lock(),
+        ).await {
+            Ok(guard) => guard,
+            Err(_) => {
+                tracing::warn!(tick, "tick_mark_prices: portfolio lock timeout (500ms) — skipping tick");
+                return;
+            }
+        };
         if p.positions.is_empty() {
             if should_push {
                 p.push_equity_snapshot();

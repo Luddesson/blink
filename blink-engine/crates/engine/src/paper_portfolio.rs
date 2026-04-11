@@ -796,7 +796,7 @@ impl PaperPortfolio {
             if (new_nav - last).abs() < 0.001 && elapsed_ms < 60_000 {
                 return;
             }
-            tracing::debug!(
+            tracing::info!(
                 new_nav,
                 last_nav = last,
                 delta = new_nav - last,

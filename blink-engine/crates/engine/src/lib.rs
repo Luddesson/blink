@@ -71,6 +71,7 @@ pub mod order_signer;
 pub mod paper_engine;
 pub mod paper_portfolio;
 pub mod position_tracker;
+pub mod r2_uploader;
 pub mod risk_manager;
 pub mod rn1_poller;
 pub mod sniffer;

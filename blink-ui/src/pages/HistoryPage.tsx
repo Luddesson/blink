@@ -8,7 +8,7 @@ import DrawdownTracker from '../components/DrawdownTracker'
 import type { ClosedTrade } from '../types'
 import { useState, useEffect } from 'react'
 
-export default function HistoryPage() {
+export default function HistoryPage({ equityCurve }: { equityCurve: number[] }) {
   const { data: history } = usePoll(() => api.history(1, 200), 10_000)
   const [allTrades, setAllTrades] = useState<ClosedTrade[]>([])
 
@@ -28,10 +28,10 @@ export default function HistoryPage() {
 
       <div className="grid grid-cols-2 gap-2">
         <ErrorBoundary label="PnlAttribution">
-          <PnlAttribution trades={allTrades} />
+          <PnlAttribution />
         </ErrorBoundary>
         <ErrorBoundary label="DrawdownTracker">
-          <DrawdownTracker equityCurve={[]} />
+          <DrawdownTracker equityCurve={equityCurve} />
         </ErrorBoundary>
       </div>
     </div>

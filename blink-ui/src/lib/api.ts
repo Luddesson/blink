@@ -18,7 +18,7 @@ import type {
 } from '../types'
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(path)
+  const res = await fetch(path, { signal: AbortSignal.timeout(10_000) })
   if (!res.ok) throw new Error(`HTTP ${res.status} ${path}`)
   return res.json() as Promise<T>
 }
@@ -28,6 +28,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status} ${path}`)
   return res.json() as Promise<T>

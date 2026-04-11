@@ -6,6 +6,7 @@ import LatencyHistogram from '../components/LatencyHistogram'
 import ExecutionKpi from '../components/ExecutionKpi'
 import RejectionTrend from '../components/RejectionTrend'
 import ExposureHeatmap from '../components/ExposureHeatmap'
+import CorrelationHeatmap from '../components/CorrelationHeatmap'
 import { fmt, fmtPnl, fmtDuration, pnlClass } from '../lib/format'
 import type { PortfolioSummary, Position } from '../types'
 
@@ -63,6 +64,13 @@ export default function PerformancePage({ portfolio, positions = [] }: Props) {
           <ExposureHeatmap positions={positions} />
         </ErrorBoundary>
       </div>
+
+      {/* Correlation heatmap */}
+      {positions.length >= 2 && (
+        <ErrorBoundary label="CorrelationHeatmap">
+          <CorrelationHeatmap positions={positions} />
+        </ErrorBoundary>
+      )}
 
       {/* Trading stats */}
       <div className="card">

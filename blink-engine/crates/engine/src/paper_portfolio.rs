@@ -157,6 +157,10 @@ pub struct PaperPosition {
     pub event_start_time: Option<i64>,
     /// Unix timestamp — market resolution deadline (from Gamma API).
     pub event_end_time: Option<i64>,
+    /// Reference price for momentum tracking (reset by autoclaim every momentum_check_interval_secs).
+    pub momentum_ref_price: f64,
+    /// Unix timestamp of last momentum reference price reset.
+    pub momentum_ref_ts: i64,
 }
 
 impl PaperPosition {
@@ -251,6 +255,8 @@ pub struct PaperPortfolio {
     /// Unix-ms timestamp for each equity_curve sample.
     pub equity_timestamps: Vec<i64>,
     next_id: usize,
+    /// Unix-ms timestamp of the last equity snapshot push (for heartbeat forcing).
+    last_equity_push_ts: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -285,6 +291,10 @@ struct PersistedPaperPosition {
     event_start_time: Option<i64>,
     #[serde(default)]
     event_end_time: Option<i64>,
+    #[serde(default)]
+    momentum_ref_price: f64,
+    #[serde(default)]
+    momentum_ref_ts: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -344,6 +354,7 @@ impl PaperPortfolio {
             equity_curve:       Vec::with_capacity(EQUITY_CURVE_MAX),
             equity_timestamps:  Vec::with_capacity(EQUITY_CURVE_MAX),
             next_id:        1,
+            last_equity_push_ts: 0,
         }
     }
 
@@ -507,6 +518,8 @@ impl PaperPortfolio {
             experiment_variant: experiment_variant.to_string(),
             event_start_time,
             event_end_time,
+            momentum_ref_price: entry_price,
+            momentum_ref_ts: chrono::Utc::now().timestamp(),
         });
         self.filled_orders += 1;
         id
@@ -777,9 +790,12 @@ impl PaperPortfolio {
     /// Called by the TUI loop every ~150 ms to build the equity curve.
     pub fn push_equity_snapshot(&mut self) {
         let new_nav = self.nav();
+        let now_ms = chrono::Utc::now().timestamp_millis();
         // Only record a new point if NAV has actually changed — avoids 90%+ duplicate entries.
+        // Exception: always push a heartbeat at least every 60s so the chart never goes stale.
         if let Some(&last) = self.equity_curve.last() {
-            if (new_nav - last).abs() < 0.001 {
+            let elapsed_ms = now_ms - self.last_equity_push_ts;
+            if (new_nav - last).abs() < 0.001 && elapsed_ms < 60_000 {
                 return;
             }
         }
@@ -790,7 +806,8 @@ impl PaperPortfolio {
             }
         }
         self.equity_curve.push(new_nav);
-        self.equity_timestamps.push(chrono::Utc::now().timestamp_millis());
+        self.equity_timestamps.push(now_ms);
+        self.last_equity_push_ts = now_ms;
     }
 
     pub fn save_to_path(&self, path: &str) -> std::io::Result<()> {
@@ -842,6 +859,8 @@ impl From<&PaperPortfolio> for PersistedPaperPortfolio {
                 fee_rate: p.fee_rate,
                 event_start_time: p.event_start_time,
                 event_end_time: p.event_end_time,
+                momentum_ref_price: p.momentum_ref_price,
+                momentum_ref_ts: p.momentum_ref_ts,
             }).collect(),
             closed_trades: value.closed_trades.iter().map(|t| PersistedClosedTrade {
                 token_id: t.token_id.clone(),
@@ -904,6 +923,8 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
                 fee_category: if p.fee_category.is_empty() { "other".to_string() } else { p.fee_category },
                 event_start_time: p.event_start_time,
                 event_end_time: p.event_end_time,
+                momentum_ref_price: if p.momentum_ref_price == 0.0 { p.entry_price } else { p.momentum_ref_price },
+                momentum_ref_ts: p.momentum_ref_ts,
             }
         }).collect();
 
@@ -947,6 +968,7 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
             equity_curve: value.equity_curve,
             equity_timestamps: value.equity_timestamps,
             next_id: value.next_id.max(1),
+            last_equity_push_ts: 0,
         }
     }
 }

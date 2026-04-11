@@ -72,6 +72,8 @@ impl Sniffer {
             detected_at: Instant::now(),
             event_start_time: None,
             event_end_time: None,
+            source_wallet: self.rn1_wallet.clone(),
+            wallet_weight: 1.0,
         }
     }
 

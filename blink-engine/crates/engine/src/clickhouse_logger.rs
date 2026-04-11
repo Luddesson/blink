@@ -107,6 +107,32 @@ pub struct LatencySample {
     pub token_id:         String,
 }
 
+/// A periodic NAV snapshot for the PnL curve — persists across restarts.
+#[derive(Row, Serialize, Debug, Clone)]
+pub struct EquitySnapshot {
+    pub timestamp_ms:    u64,
+    pub nav_usdc:        f64,
+    pub cash_usdc:       f64,
+    pub unrealised_pnl:  f64,
+    pub open_positions:  u32,
+}
+
+/// Full P&L record for a closed position.
+#[derive(Row, Serialize, Debug, Clone)]
+pub struct ClosedTradeFull {
+    pub timestamp_ms:   u64,
+    pub token_id:       String,
+    pub market_title:   String,
+    pub side:           String,
+    pub entry_price:    f64,
+    pub exit_price:     f64,
+    pub shares:         f64,
+    pub realized_pnl:   f64,
+    pub fees_paid_usdc: f64,
+    pub duration_secs:  u64,
+    pub reason:         String,
+}
+
 // ─── Envelope ────────────────────────────────────────────────────────────────
 
 /// Unified event envelope sent through the channel.
@@ -118,6 +144,8 @@ pub enum WarehouseEvent {
     Metric(SystemMetric),
     Risk(RiskEvent),
     Latency(LatencySample),
+    EquitySnapshot(EquitySnapshot),
+    ClosedTrade(ClosedTradeFull),
 }
 
 // ─── ClickHouseLogger ────────────────────────────────────────────────────────
@@ -298,7 +326,41 @@ impl ClickHouseLogger {
             .execute()
             .await?;
 
-        info!("ClickHouse warehouse schema ready (10 tables)");
+        self.client
+            .query(
+                "CREATE TABLE IF NOT EXISTS blink.equity_snapshots (
+                    timestamp_ms   UInt64,
+                    nav_usdc       Float64,
+                    cash_usdc      Float64,
+                    unrealised_pnl Float64,
+                    open_positions UInt32
+                ) ENGINE = MergeTree()
+                ORDER BY timestamp_ms",
+            )
+            .execute()
+            .await?;
+
+        self.client
+            .query(
+                "CREATE TABLE IF NOT EXISTS blink.closed_trades_full (
+                    timestamp_ms   UInt64,
+                    token_id       String,
+                    market_title   String,
+                    side           String,
+                    entry_price    Float64,
+                    exit_price     Float64,
+                    shares         Float64,
+                    realized_pnl   Float64,
+                    fees_paid_usdc Float64,
+                    duration_secs  UInt64,
+                    reason         String
+                ) ENGINE = MergeTree()
+                ORDER BY (token_id, timestamp_ms)",
+            )
+            .execute()
+            .await?;
+
+        info!("ClickHouse warehouse schema ready (12 tables)");
         Ok(())
     }
 
@@ -316,27 +378,33 @@ impl ClickHouseLogger {
         let mut met_batch: Vec<SystemMetric>       = Vec::with_capacity(BATCH_SIZE);
         let mut risk_batch: Vec<RiskEvent>         = Vec::with_capacity(BATCH_SIZE);
         let mut lat_batch:  Vec<LatencySample>     = Vec::with_capacity(BATCH_SIZE);
+        let mut eq_batch:   Vec<EquitySnapshot>    = Vec::with_capacity(BATCH_SIZE);
+        let mut ct_batch:   Vec<ClosedTradeFull>   = Vec::with_capacity(BATCH_SIZE);
 
         let mut last_flush = Instant::now();
 
         loop {
             while let Ok(event) = rx.try_recv() {
                 match event {
-                    WarehouseEvent::OrderBook(e) => ob_batch.push(e),
-                    WarehouseEvent::Rn1Signal(e) => rn1_batch.push(e),
-                    WarehouseEvent::Trade(e)     => tx_batch.push(e),
-                    WarehouseEvent::Metric(e)    => met_batch.push(e),
-                    WarehouseEvent::Risk(e)      => risk_batch.push(e),
-                    WarehouseEvent::Latency(e)   => lat_batch.push(e),
+                    WarehouseEvent::OrderBook(e)       => ob_batch.push(e),
+                    WarehouseEvent::Rn1Signal(e)       => rn1_batch.push(e),
+                    WarehouseEvent::Trade(e)           => tx_batch.push(e),
+                    WarehouseEvent::Metric(e)          => met_batch.push(e),
+                    WarehouseEvent::Risk(e)            => risk_batch.push(e),
+                    WarehouseEvent::Latency(e)         => lat_batch.push(e),
+                    WarehouseEvent::EquitySnapshot(e)  => eq_batch.push(e),
+                    WarehouseEvent::ClosedTrade(e)     => ct_batch.push(e),
                 }
 
                 let total = ob_batch.len() + rn1_batch.len()
                           + tx_batch.len() + met_batch.len()
-                          + risk_batch.len() + lat_batch.len();
+                          + risk_batch.len() + lat_batch.len()
+                          + eq_batch.len() + ct_batch.len();
                 if total >= BATCH_SIZE {
                     self.flush_all(&mut ob_batch, &mut rn1_batch,
                                    &mut tx_batch, &mut met_batch,
-                                   &mut risk_batch, &mut lat_batch).await;
+                                   &mut risk_batch, &mut lat_batch,
+                                   &mut eq_batch, &mut ct_batch).await;
                     last_flush = Instant::now();
                 }
             }
@@ -344,11 +412,13 @@ impl ClickHouseLogger {
             if last_flush.elapsed() >= FLUSH_INTERVAL {
                 let total = ob_batch.len() + rn1_batch.len()
                           + tx_batch.len() + met_batch.len()
-                          + risk_batch.len() + lat_batch.len();
+                          + risk_batch.len() + lat_batch.len()
+                          + eq_batch.len() + ct_batch.len();
                 if total > 0 {
                     self.flush_all(&mut ob_batch, &mut rn1_batch,
                                    &mut tx_batch, &mut met_batch,
-                                   &mut risk_batch, &mut lat_batch).await;
+                                   &mut risk_batch, &mut lat_batch,
+                                   &mut eq_batch, &mut ct_batch).await;
                 }
                 last_flush = Instant::now();
             }
@@ -365,6 +435,8 @@ impl ClickHouseLogger {
         met:  &mut Vec<SystemMetric>,
         risk: &mut Vec<RiskEvent>,
         lat:  &mut Vec<LatencySample>,
+        eq:   &mut Vec<EquitySnapshot>,
+        ct:   &mut Vec<ClosedTradeFull>,
     ) {
         self.flush_table("blink.order_book_snapshots", ob).await;
         self.flush_table("blink.rn1_signals", rn1).await;
@@ -372,6 +444,8 @@ impl ClickHouseLogger {
         self.flush_table("blink.system_metrics", met).await;
         self.flush_table("blink.risk_events", risk).await;
         self.flush_table("blink.latency_samples", lat).await;
+        self.flush_table("blink.equity_snapshots", eq).await;
+        self.flush_table("blink.closed_trades_full", ct).await;
     }
 
     async fn flush_table<T: Row + Serialize>(

@@ -59,9 +59,10 @@ npm run lint     # Check code quality
 ```
 
 ### 3. Agent System
-**Location:** `Blink-agents/` — 5 trading/analytics agents
+**Location:** `Blink-agents/` — 6 trading/analytics agents
 
 - **aura-architect** — Strategic analysis
+- **meridian-api-sync** — API integrity, reconciliation, visual truth, and low-latency sync
 - **nexus-automator** — Automated task execution
 - **qsigma-quant** — Quantitative analysis
 - **sentinel-risk** — Risk monitoring & alerts

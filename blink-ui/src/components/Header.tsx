@@ -9,9 +9,15 @@ import type { EngineMode } from '../types'
 interface HeaderProps {
   wsConnected: boolean
   tradingPaused: boolean
+  /** Server timestamp from last WS snapshot (ms since epoch) */
+  snapshotTimestampMs?: number
+  /** Portfolio cache age from engine (ms) */
+  portfolioAgeMs?: number
+  /** Engine uptime from server */
+  engineUptimeSecs?: number
 }
 
-export default function Header({ wsConnected, tradingPaused }: HeaderProps) {
+export default function Header({ wsConnected, tradingPaused, snapshotTimestampMs, portfolioAgeMs }: HeaderProps) {
   const { viewMode, setViewMode, liveAvailable } = useMode()
   const [showConfirm, setShowConfirm] = useState(false)
   const fmtSE = () =>
@@ -105,6 +111,25 @@ export default function Header({ wsConnected, tradingPaused }: HeaderProps) {
               {rejections}/min rejected
             </span>
           )}
+          {/* Data freshness badge */}
+          {snapshotTimestampMs && (() => {
+            const ageS = Math.floor((Date.now() - snapshotTimestampMs) / 1000)
+            const stale = ageS > 10
+            const portfolioStale = (portfolioAgeMs ?? 0) > 5000
+            return (
+              <span
+                className={`flex items-center gap-1 font-mono ${
+                  stale ? 'text-amber-400' : portfolioStale ? 'text-yellow-600' : 'text-slate-600'
+                }`}
+                title={`Snapshot age: ${ageS}s | Portfolio cache age: ${Math.round((portfolioAgeMs ?? 0) / 1000)}s`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${
+                  stale ? 'bg-amber-400 animate-pulse' : 'bg-slate-600'
+                }`} />
+                {stale ? `${ageS}s stale` : `${ageS}s`}
+              </span>
+            )
+          })()}
           <span className="flex items-center gap-1.5">
             <Activity size={11} className={wsConnected ? 'text-emerald-400' : 'text-red-400'} />
             <span className={wsConnected ? 'text-emerald-400' : 'text-red-400'}>

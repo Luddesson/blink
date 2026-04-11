@@ -7,7 +7,8 @@ const TAB_META: { id: TabId; label: string; key: string }[] = [
   { id: 'history',      label: 'History',       key: '3' },
   { id: 'intelligence', label: 'Intelligence', key: '4' },
   { id: 'performance',  label: 'Performance',  key: '5' },
-  { id: 'config',       label: 'Config',       key: '6' },
+  { id: 'backtest',     label: 'Backtest',     key: '6' },
+  { id: 'config',       label: 'Config',       key: '7' },
 ]
 
 interface Props {

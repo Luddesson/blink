@@ -1,9 +1,10 @@
-﻿# start-blink.ps1
-# Usage: .\start-blink.ps1              (auto-detect build, release — watchdog always on)
+# start-blink.ps1
+# Starts Blink in web-dashboard mode (TUI archived).
+# Usage: .\start-blink.ps1              (auto-detect build, release - watchdog always on)
 #        .\start-blink.ps1 -Debug        (debug build, fast compile)
 #        .\start-blink.ps1 -SkipBuild    (skip cargo entirely, run existing binary)
 #        .\start-blink.ps1 -NoWatch      (disable auto-restart watchdog)
-param([switch]$Debug, [switch]$SkipBuild, [switch]$NoWatch, [switch]$Watch)
+param([switch]$Debug, [switch]$SkipBuild, [switch]$NoWatch, [switch]$Watch, [switch]$Tunnel)
 $root = $PSScriptRoot
 $logs = "$root\logs"
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
@@ -29,7 +30,7 @@ Get-Process | Where-Object { $_.Name -eq "engine" } | ForEach-Object {
 }
 Start-Sleep 4
 
-# ── [1/4] Build Engine ────────────────────────────────────────────────────────
+# -- [1/4] Build Engine --------------------------------------------------------
 Write-Host ""
 Write-Host "=== [1/4] Building engine (cargo build) ===" -ForegroundColor Cyan
 Push-Location "$root\blink-engine"
@@ -40,7 +41,7 @@ $buildProfile = if ($Debug) { "debug" } else { "release" }
 $binaryPath = "$root\blink-engine\target\$buildProfile\engine.exe"
 $needsBuild = $true
 if ($SkipBuild) {
-    Write-Host "  -SkipBuild flag set — skipping cargo build" -ForegroundColor Green
+    Write-Host "  -SkipBuild flag set - skipping cargo build" -ForegroundColor Green
     $needsBuild = $false
 } elseif (Test-Path $binaryPath) {
     $binaryTime = (Get-Item $binaryPath).LastWriteTime
@@ -48,7 +49,8 @@ if ($SkipBuild) {
                    Where-Object { $_.FullName -notlike "*\target\*" }
     $latestSource = ($sourceFiles | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
     if ($latestSource -and $binaryTime -gt $latestSource) {
-        Write-Host "  Binary is up to date ($(Split-Path $binaryPath -Leaf) newer than all sources) — skipping build" -ForegroundColor Green
+        $binaryName = Split-Path $binaryPath -Leaf
+        Write-Host ('  Binary is up to date (' + $binaryName + ' newer than all sources) - skipping build') -ForegroundColor Green
         $needsBuild = $false
     }
 }
@@ -66,7 +68,7 @@ if ($needsBuild) {
     Write-Host "Engine build skipped" -ForegroundColor Green
 }
 
-# ── [2/4] Frontend deps ───────────────────────────────────────────────────────
+# -- [2/4] Frontend deps -------------------------------------------------------
 Write-Host ""
 Write-Host "=== [2/4] Frontend dependencies ===" -ForegroundColor Cyan
 if (-not (Test-Path "$root\blink-ui\node_modules")) {
@@ -80,7 +82,7 @@ if (-not (Test-Path "$root\blink-ui\node_modules")) {
 }
 Write-Host "Frontend deps OK" -ForegroundColor Green
 
-# ── [3/4] Start Engine ────────────────────────────────────────────────────────
+# -- [3/4] Start Engine --------------------------------------------------------
 Write-Host ""
 Write-Host "=== [3/4] Starting engine ===" -ForegroundColor Cyan
 $engineLog = "$logs\engine-stdout.log"
@@ -104,13 +106,13 @@ Set-Location '$root\blink-engine'
 # Check if port 3030 is already in use (e.g., from a previous run that wasn't stopped)
 $portInUse = (netstat -an | Select-String "0.0.0.0:3030.*LISTENING") -ne $null
 if ($portInUse) {
-    Write-Host "  Port 3030 already in use — skipping engine launch (already running?)" -ForegroundColor Yellow
+    Write-Host "  Port 3030 already in use - skipping engine launch (already running?)" -ForegroundColor Yellow
 } else {
     $ep = Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$engineLauncher`"" -WindowStyle Hidden -PassThru
     $ep.Id | Out-File "$logs\engine.pid"
 }
 
-# ── [4/4] Start Vite ──────────────────────────────────────────────────────────
+# -- [4/4] Start Vite ----------------------------------------------------------
 Write-Host ""
 Write-Host "=== [4/4] Starting Web UI ===" -ForegroundColor Cyan
 $viteLog = "$logs\vite-stdout.log"
@@ -120,7 +122,7 @@ $viteBat = "$logs\run-vite.bat"
 $vp = Start-Process "cmd" -ArgumentList "/c `"$viteBat`"" -WindowStyle Hidden -PassThru
 $vp.Id | Out-File "$logs\vite.pid"
 
-# ── Wait for engine ───────────────────────────────────────────────────────────
+# -- Wait for engine -----------------------------------------------------------
 Write-Host ""
 Write-Host "Waiting for engine (up to 120s)..." -ForegroundColor Yellow
 $ready = $false
@@ -143,6 +145,9 @@ if ($ready) {
     Write-Host "  Logs      : $logs\" -ForegroundColor Gray
     Write-Host ""
     Write-Host "  To stop   : .\stop-blink.ps1" -ForegroundColor Gray
+    if ($Tunnel) {
+        Write-Host "  Remote    : .\cloudflare-tunnel.ps1 (starting...)" -ForegroundColor Cyan
+    }
     Write-Host "================================================" -ForegroundColor Green
     Start-Process "http://localhost:5173"
 } else {
@@ -150,7 +155,15 @@ if ($ready) {
     exit 1
 }
 
-# ── Watchdog: always-on auto-restart (detached background process) ────────────
+# -- Optional Cloudflare Tunnel ------------------------------------------------
+if ($Tunnel) {
+    Write-Host ""
+    Write-Host "Starting Cloudflare Tunnel in new window..." -ForegroundColor Cyan
+    Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$root\cloudflare-tunnel.ps1`"" -NoNewWindow
+}
+
+
+# -- Watchdog: always-on auto-restart (detached background process) ------------
 # Only skip if -NoWatch was explicitly passed
 if (-not $NoWatch) {
     Write-Host ""

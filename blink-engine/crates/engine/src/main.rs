@@ -3,7 +3,8 @@
 //! Modes controlled by `.env` variables:
 //! - Default (read-only): connect, maintain order books, log RN1 activity.
 //! - `PAPER_TRADING=true`: simulate mirror orders with virtual $100 USDC.
-//! - `TUI=true`: full ratatui terminal dashboard for paper or live mode.
+//! - Web UI is the active dashboard. The legacy ratatui TUI is archived and no
+//!   longer launched, even if `TUI=true` is present in the environment.
 //!   Tracing is always persisted to `logs/engine.log` + per-session log files.
 
 use std::sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc, Mutex};
@@ -30,6 +31,7 @@ use engine::tick_recorder::{TickRecord, TickRecorder};
 use engine::tui_app::run_tui;
 use engine::blink_twin::TwinSnapshot;
 use engine::types::RN1Signal;
+use engine::r2_uploader;
 use engine::web_server::{AppState, run_web_server};
 use engine::ws_client::run_ws;
 use engine::rn1_poller::{run_rn1_poller, Rn1PollDiagnostics, Rn1PollDiagnosticsHandle};
@@ -82,7 +84,10 @@ async fn main() -> Result<()> {
     // ── Feature flags ────────────────────────────────────────────────────
     let paper_mode = env_flag("PAPER_TRADING");
     let live_mode  = env_flag("LIVE_TRADING");
-    let tui_mode   = (paper_mode || live_mode) && env_flag("TUI");
+    let tui_requested = (paper_mode || live_mode) && env_flag("TUI");
+    let web_ui_requested = env_flag("WEB_UI");
+    let web_ui_enabled = web_ui_requested || paper_mode || live_mode || tui_requested;
+    let tui_mode = false;
 
     if live_mode && paper_mode {
         eprintln!("Error: Cannot enable both PAPER_TRADING and LIVE_TRADING. Pick one.");
@@ -172,6 +177,20 @@ async fn main() -> Result<()> {
     log_push(&activity, EntryKind::Engine,
         format!("Engine started — PAPER={paper_mode} TUI={tui_mode} RN1={}...", &rn1_wallet[..10]));
     log_push(&activity, EntryKind::Engine, format!("Session log: {session_log_path}"));
+    if tui_requested {
+        log_push(
+            &activity,
+            EntryKind::Warn,
+            "TUI request redirected: ratatui dashboard is archived; using the web UI instead".to_string(),
+        );
+    }
+    if web_ui_enabled && !web_ui_requested {
+        log_push(
+            &activity,
+            EntryKind::Engine,
+            "Web UI auto-enabled for paper/live mode".to_string(),
+        );
+    }
 
     // ── eBPF kernel telemetry ───────────────────────────────────────────────
     let kernel_snapshot: Option<Arc<Mutex<bpf_probes::KernelSnapshot>>> =
@@ -223,7 +242,7 @@ async fn main() -> Result<()> {
         };
 
     // ── ClickHouse data warehouse (optional — activated by CLICKHOUSE_URL) ─
-    let _warehouse_tx: Option<crossbeam_channel::Sender<WarehouseEvent>> =
+    let warehouse_tx: Option<crossbeam_channel::Sender<WarehouseEvent>> =
         match std::env::var("CLICKHOUSE_URL") {
             Ok(ref url) => {
                 let (tx, rx) = crossbeam_channel::bounded::<WarehouseEvent>(10_000);
@@ -247,6 +266,9 @@ async fn main() -> Result<()> {
                 None
             }
         };
+
+    // ── Cloudflare R2 uploader (optional — activated by R2_ACCESS_KEY_ID) ───
+    r2_uploader::start_r2_uploader();
 
     // ── Gas oracle (optional — activated by ETHERSCAN_API_KEY) ────────────
     let _gas_oracle = {
@@ -309,15 +331,45 @@ async fn main() -> Result<()> {
     };
 
     // ── Task: RN1 trade poller (REST-based detection) ────────────────────
+    // Primary wallet from RN1_WALLET; additional wallets from TRACK_WALLETS=addr:weight,...
     let rn1_task = {
-        let cfg = Arc::clone(&config);
-        let tx  = signal_tx.clone();
-        let act = Some(activity.clone());
-        let diag = Arc::clone(&rn1_diagnostics);
-        tokio::spawn(async move {
-            run_rn1_poller(cfg, tx, act, diag).await;
-        })
+        // Build the list of wallets to track: primary first, then any extras.
+        let primary_wallet = config.rn1_wallet.clone();
+        let mut wallet_list: Vec<(String, f64)> = vec![(primary_wallet, 1.0)];
+        if let Ok(extra) = std::env::var("TRACK_WALLETS") {
+            for entry in extra.split(',') {
+                let entry = entry.trim();
+                if entry.is_empty() { continue; }
+                let (addr, weight) = if let Some(pos) = entry.rfind(':') {
+                    let w = entry[pos+1..].parse::<f64>().unwrap_or(0.8).clamp(0.0, 2.0);
+                    (entry[..pos].to_string(), w)
+                } else {
+                    (entry.to_string(), 0.8)
+                };
+                if !addr.is_empty() { wallet_list.push((addr, weight)); }
+            }
+        }
+        if wallet_list.len() > 1 {
+            tracing::info!(
+                n = wallet_list.len(),
+                wallets = ?wallet_list.iter().map(|(w, _)| &w[..w.len().min(10)]).collect::<Vec<_>>(),
+                "1A: Multi-wallet tracking enabled"
+            );
+        }
+        // Spawn one poller task per wallet; share a single diagnostics handle for the primary.
+        let _tasks: Vec<_> = wallet_list.into_iter().map(|(wallet, weight)| {
+            let cfg  = Arc::clone(&config);
+            let tx   = signal_tx.clone();
+            let act  = Some(activity.clone());
+            let diag = Arc::clone(&rn1_diagnostics);
+            tokio::spawn(async move {
+                run_rn1_poller(cfg, wallet, weight, tx, act, diag).await;
+            })
+        }).collect();
+        // Return the first task handle for join tracking (primary wallet).
+        _tasks.into_iter().next()
     };
+    let rn1_task = rn1_task.unwrap_or_else(|| tokio::spawn(async {}));
 
     // ── Optional Agent JSON-RPC server (for orchestrator/agents) ─────────
 
@@ -403,6 +455,7 @@ async fn main() -> Result<()> {
             Some(activity.clone()),
             Arc::clone(&market_subscriptions),
             Arc::clone(&ws_force_reconnect),
+            warehouse_tx.clone(),
         );
         paper_inner.discovery_store = Some(Arc::clone(&discovery_store));
         paper_inner.convergence_store = convergence_store.clone();
@@ -586,7 +639,7 @@ async fn main() -> Result<()> {
                     eprintln!("TUI error: {e}");
                 }
             }));
-        } else {
+        } else if !web_ui_enabled {
             let pd = Arc::clone(&paper);
             tokio::spawn(async move {
                 loop {
@@ -894,6 +947,8 @@ async fn main() -> Result<()> {
                         detected_at: signal.received_at.unwrap_or_else(std::time::Instant::now),
                         event_start_time: None,
                         event_end_time: None,
+                        source_wallet: "alpha-sidecar".to_string(),
+                        wallet_weight: 1.0,
                     };
 
                     let p = Arc::clone(paper);
@@ -948,8 +1003,7 @@ async fn main() -> Result<()> {
         info!("AGENT_RPC_ENABLED not set — agent RPC server disabled");
     }
 
-    // ── Optional Web UI server (WEB_UI=true) ─────────────────────────────
-    let web_ui_enabled = env_flag("WEB_UI");
+    // ── Optional Web UI server (auto-enabled for paper/live mode) ────────
     if web_ui_enabled {
         let web_ui_port = std::env::var("WEB_UI_PORT")
             .ok()
@@ -980,9 +1034,17 @@ async fn main() -> Result<()> {
             discovery_store: Some(Arc::clone(&discovery_store)),
             convergence_store: convergence_store.clone(),
             slug_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            portfolio_cache: Arc::new(std::sync::RwLock::new(None)),
+            clickhouse_url: std::env::var("CLICKHOUSE_URL").ok(),
+            snapshot_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            portfolio_cached_at_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
 
         let static_dir = std::env::var("WEB_UI_STATIC_DIR").ok()
+            .or_else(|| {
+                let candidate = "static/ui".to_string();
+                if std::path::Path::new(&candidate).exists() { Some(candidate) } else { None }
+            })
             .or_else(|| {
                 let candidate = "web-ui/dist".to_string();
                 if std::path::Path::new(&candidate).exists() { Some(candidate) } else { None }

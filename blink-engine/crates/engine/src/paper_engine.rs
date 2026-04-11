@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use chrono::Datelike;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -18,6 +19,7 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::activity_log::{ActivityLog, EntryKind, push as log_push};
+use crate::clickhouse_logger::{ClosedTradeFull, EquitySnapshot, WarehouseEvent};
 use crate::exit_strategy::{ExitAction, ExitConfig, evaluate_exits};
 use crate::latency_tracker::LatencyStats;
 use crate::order_book::{OrderBook, OrderBookStore};
@@ -26,6 +28,39 @@ use crate::risk_manager::{RiskConfig, RiskManager};
 use crate::types::{OrderSide, RN1Signal, format_price};
 
 // ─── PaperEngine ─────────────────────────────────────────────────────────────
+
+/// 4C: Build a category-specific ExitConfig patch.
+///
+/// Checks env vars like `EXIT_SPORTS_STOP_LOSS_PCT`, `EXIT_CRYPTO_MAX_HOLD_SECS`,
+/// etc.  Falls back to the base config for any field without an override.
+/// Valid category prefixes: SPORTS, POLITICS, CRYPTO, GEO, OTHER.
+fn patched_exit_config_for_category(base: &ExitConfig, market_title: Option<&str>) -> ExitConfig {
+    let (category, _) = crate::paper_portfolio::detect_fee_category(market_title.unwrap_or(""));
+    let prefix = match category {
+        "sports"      => "SPORTS",
+        "politics"    => "POLITICS",
+        "crypto"      => "CRYPTO",
+        "geopolitics" => "GEO",
+        _             => "OTHER",
+    };
+    let mut cfg = base.clone();
+    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_STOP_LOSS_PCT")) {
+        if let Ok(pct) = v.parse::<f64>() { cfg.stop_loss_pct = pct.clamp(1.0, 99.0); }
+    }
+    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_TRAILING_ACTIVATE_PCT")) {
+        if let Ok(pct) = v.parse::<f64>() { cfg.trailing_stop_activate_pct = pct.clamp(1.0, 99.0); }
+    }
+    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_TRAILING_DROP_PCT")) {
+        if let Ok(pct) = v.parse::<f64>() { cfg.trailing_stop_drop_pct = pct.clamp(1.0, 99.0); }
+    }
+    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_MAX_HOLD_SECS")) {
+        if let Ok(s) = v.parse::<u64>() { cfg.max_hold_secs = s; }
+    }
+    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_EVENT_AWARE_SECS")) {
+        if let Ok(s) = v.parse::<u64>() { cfg.event_aware_exit_secs = s; }
+    }
+    cfg
+}
 
 /// Paper trading engine — simulates order placement without touching real funds.
 pub struct PaperEngine {
@@ -61,6 +96,12 @@ pub struct PaperEngine {
     pub discovery_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_discovery::DiscoveryStore>>>,
     /// Optional Bullpen convergence store for whale convergence sizing boost.
     pub convergence_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_smart_money::ConvergenceStore>>>,
+    /// Per-"token_id:side" fill timestamps for soft deduplication window (2C).
+    recent_fills: Arc<std::sync::Mutex<HashMap<String, Instant>>>,
+    /// Session-start NAV for intraday drawdown gating (3B): (nav, ordinal_day).
+    session_start_nav: Arc<std::sync::Mutex<Option<(f64, u32)>>>,
+    /// Optional warehouse sender — emits equity snapshots and closed trades to ClickHouse.
+    warehouse_tx: Option<crossbeam_channel::Sender<WarehouseEvent>>,
 }
 
 /// Snapshot of the currently active fill window, if any.
@@ -258,7 +299,7 @@ impl PaperEngine {
     ///
     /// Pass `Some(log)` to feed a TUI activity panel; pass `None` for plain
     /// terminal output.
-    pub fn new(book_store: Arc<OrderBookStore>, activity: Option<ActivityLog>, market_subscriptions: Arc<std::sync::Mutex<Vec<String>>>, ws_force_reconnect: Arc<std::sync::atomic::AtomicBool>) -> Self {
+    pub fn new(book_store: Arc<OrderBookStore>, activity: Option<ActivityLog>, market_subscriptions: Arc<std::sync::Mutex<Vec<String>>>, ws_force_reconnect: Arc<std::sync::atomic::AtomicBool>, warehouse_tx: Option<crossbeam_channel::Sender<WarehouseEvent>>) -> Self {
         if activity.is_none() {
             // Only print the text banner when not in TUI mode.
             println!();
@@ -306,6 +347,9 @@ impl PaperEngine {
             drift_abort_cooldown: Arc::new(std::sync::Mutex::new(HashMap::new())),
             discovery_store: None,
             convergence_store: None,
+            recent_fills: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            session_start_nav: Arc::new(std::sync::Mutex::new(None)),
+            warehouse_tx,
         }
     }
 
@@ -319,6 +363,11 @@ impl PaperEngine {
 
     pub fn risk_status(&self) -> String {
         self.risk.lock().unwrap().status_line()
+    }
+
+    /// Returns the current global volatility in basis points (coefficient of variation × 10 000).
+    pub fn vol_bps(&self) -> f64 {
+        self.volatility_state.lock().unwrap().volatility_bps()
     }
 
     pub async fn load_portfolio_if_present(&self, path: &str) -> std::io::Result<bool> {
@@ -369,6 +418,23 @@ impl PaperEngine {
 
     /// Process one RN1 signal end-to-end (async — runs fill simulation).
     pub async fn handle_signal(&self, signal: RN1Signal) {
+        // 5B: Live tick recording — write every RN1 signal to CSV for backtesting.
+        {
+            let tick_path = std::env::var("TICK_RECORD_PATH")
+                .unwrap_or_else(|_| "logs\\ticks.csv".to_string());
+            if tick_path != "off" && tick_path != "false" {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .append(true).create(true).open(&tick_path)
+                {
+                    let ts_ms = chrono::Utc::now().timestamp_millis();
+                    let _ = writeln!(f, "{},{},{},{},{},{}",
+                        ts_ms, signal.token_id, signal.side,
+                        signal.price, signal.size, signal.source_wallet);
+                }
+            }
+        }
+
         // ── Order-ID dedup: skip if we've already processed this transaction ──
         {
             let mut seen = self.seen_order_ids.lock().await;
@@ -412,6 +478,46 @@ impl PaperEngine {
                         return;
                     }
                 }
+            }
+        }
+
+        // Compute vol_bps once — reused for gating (1B) and adaptive sizing (2A).
+        let vol_bps = self.volatility_state.lock().unwrap().volatility_bps();
+
+        // 2C: Soft dedup window — skip if we filled this (token, side) recently.
+        {
+            let dedup_window_ms = std::env::var("DEDUP_WINDOW_MS")
+                .ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(30_000);
+            let dedup_key = format!("{}:{}", signal.token_id, signal.side);
+            let blocked = {
+                let mut rf = self.recent_fills.lock().unwrap();
+                rf.retain(|_, t: &mut Instant| t.elapsed().as_millis() < dedup_window_ms as u128);
+                rf.contains_key(&dedup_key)
+            };
+            if blocked {
+                warn!(token_id = %signal.token_id, "⏭️  Soft dedup window — recently filled this token/side");
+                let mut p = self.portfolio.lock().await;
+                p.skipped_orders += 1;
+                drop(p);
+                self.record_rejection("dedup_window").await;
+                return;
+            }
+        }
+
+        // 1B: Volatility gate — skip when the signal environment is too noisy.
+        {
+            let vol_gate_threshold: f64 = std::env::var("VOL_GATE_THRESHOLD_BPS")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(800.0);
+            if vol_bps > vol_gate_threshold {
+                warn!(
+                    vol_bps, threshold = vol_gate_threshold,
+                    "⏭️  Signal gated — volatility too high"
+                );
+                let mut p = self.portfolio.lock().await;
+                p.skipped_orders += 1;
+                drop(p);
+                self.record_rejection("vol_gate").await;
+                return;
             }
         }
 
@@ -572,6 +678,79 @@ impl PaperEngine {
                 return;
             }
         }
+
+        // 3A: Per-market exposure limit — cap total invested in one market.
+        // 3B: Intraday drawdown gating — throttle or pause on session loss.
+        let drawdown_halving: bool;
+        {
+            let max_market_pct = std::env::var("MAX_EXPOSURE_PER_MARKET_PCT")
+                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(15.0) / 100.0;
+            let max_intraday_dd: f64 = std::env::var("MAX_INTRADAY_DRAWDOWN_PCT")
+                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(5.0);
+            let pause_dd = max_intraday_dd + 3.0;
+
+            let mut p = self.portfolio.lock().await;
+            let nav = p.nav();
+
+            // 3A: per-market check
+            if let Some(title) = signal.market_title.as_deref() {
+                let market_invested: f64 = p.positions.iter()
+                    .filter(|pos| pos.market_title.as_deref() == Some(title))
+                    .map(|pos| pos.usdc_spent)
+                    .sum();
+                let market_limit = nav * max_market_pct;
+                if market_invested >= market_limit {
+                    warn!(
+                        market = %title,
+                        invested = %format!("${:.2}", market_invested),
+                        limit   = %format!("${:.2}", market_limit),
+                        "⏭️  Per-market exposure limit — skipping"
+                    );
+                    p.skipped_orders += 1;
+                    drop(p);
+                    self.record_rejection("market_concentration").await;
+                    return;
+                }
+            }
+
+            // 3B: intraday drawdown
+            let day_of_year = chrono::Utc::now().ordinal();
+            let session_nav = {
+                let mut ssn = self.session_start_nav.lock().unwrap();
+                match *ssn {
+                    None => { *ssn = Some((nav, day_of_year)); nav }
+                    Some((_, d)) if d != day_of_year => { *ssn = Some((nav, day_of_year)); nav }
+                    Some((s, _)) => s,
+                }
+            };
+            let drawdown_pct = if session_nav > 0.0 {
+                (session_nav - nav) / session_nav * 100.0
+            } else {
+                0.0
+            };
+            if drawdown_pct >= pause_dd {
+                warn!(
+                    drawdown_pct = %format!("{:.1}%", drawdown_pct),
+                    "🛑 Intraday drawdown pause — trading halted"
+                );
+                if let Some(ref log) = self.activity {
+                    log_push(log, EntryKind::Warn, format!(
+                        "INTRADAY PAUSE — drawdown {:.1}%", drawdown_pct
+                    ));
+                }
+                p.skipped_orders += 1;
+                drop(p);
+                self.record_rejection("intraday_drawdown_pause").await;
+                return;
+            }
+            drawdown_halving = drawdown_pct >= max_intraday_dd;
+            if drawdown_halving {
+                info!(
+                    drawdown_pct = %format!("{:.1}%", drawdown_pct),
+                    "⚠️  Intraday drawdown warning — will halve position size"
+                );
+            }
+        } // portfolio lock released
 
         // ── Conviction-based sizing ──────────────────────────────────────
         // Compute a dynamic multiplier using FilterConfig bonuses based on
@@ -761,6 +940,27 @@ impl PaperEngine {
             size_usdc *= throttle;
         }
 
+        // 2A: Adaptive sizing by volatility regime — shrink orders when signal environment is noisy.
+        {
+            let adaptive = std::env::var("ADAPTIVE_SIZING")
+                .ok().map(|v| v != "false" && v != "0").unwrap_or(true);
+            if adaptive && vol_bps > 0.0 {
+                let vol_discount = 1.0 - (vol_bps.clamp(0.0, 2000.0) / 4000.0);
+                size_usdc *= vol_discount;
+                if vol_discount < 0.99 {
+                    info!(
+                        vol_bps, vol_discount = %format!("{:.2}", vol_discount),
+                        "📉 Adaptive sizing: vol discount applied"
+                    );
+                }
+            }
+        }
+
+        // 3B: Intraday drawdown warning — halve size when session loss exceeds warning threshold.
+        if drawdown_halving {
+            size_usdc *= 0.5;
+        }
+
         // Price-confidence sizing: reduce position size for mid-range prices where
         // outcome uncertainty is highest. Prices near 0.1 or 0.9 get full size;
         // prices near 0.5 are capped at CONF_DISCOUNT of full size.
@@ -775,6 +975,29 @@ impl PaperEngine {
             let uncertainty = 1.0 - (2.0 * (entry_price - 0.5).abs()).clamp(0.0, 1.0);
             let conf_mult = 1.0 - discount * uncertainty;
             size_usdc *= conf_mult;
+        }
+
+        // 2D: Aggression ramp near event start — boost size when start is imminent.
+        if let Some(event_start) = signal.event_start_time {
+            let secs_until_start = event_start - chrono::Utc::now().timestamp();
+            let ramp_window: i64 = std::env::var("AGGRESSION_RAMP_SECS")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(300);
+            if secs_until_start > 0 && secs_until_start <= ramp_window {
+                let ramp_mult: f64 = std::env::var("AGGRESSION_RAMP_MULT")
+                    .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.3).clamp(1.0, 3.0);
+                size_usdc *= ramp_mult;
+                info!(
+                    token_id = %signal.token_id,
+                    secs_until_start,
+                    ramp_mult,
+                    "🚀 Aggression ramp — event start imminent, boosting size"
+                );
+            }
+        }
+
+        // 1A: Secondary wallet weight — scale size by the wallet's configured weight.
+        if signal.wallet_weight != 1.0 {
+            size_usdc *= signal.wallet_weight.clamp(0.0, 2.0);
         }
 
         let min_trade_usdc = std::env::var("PAPER_MIN_TRADE_USDC")
@@ -806,6 +1029,100 @@ impl PaperEngine {
                 log_push(log, EntryKind::Warn, format!("Liquidity guard downsized to ${:.2}", size_usdc));
             }
             self.record_rejection("liquidity_downsize").await;
+        }
+
+        // 1C: Order book imbalance filter — avoid buying into heavy sell pressure.
+        {
+            let imbalance_gate = std::env::var("IMBALANCE_GATE")
+                .ok().map(|v| v != "false" && v != "0").unwrap_or(true);
+            if imbalance_gate {
+                if let Some(book) = self.book_store.get_book_snapshot(&signal.token_id) {
+                    let bid_depth: f64 = book.bids.values().map(|&s| s as f64).sum::<f64>() / 1_000.0;
+                    let ask_depth: f64 = book.asks.values().map(|&s| s as f64).sum::<f64>() / 1_000.0;
+                    let total = bid_depth + ask_depth;
+                    if total > 0.0 {
+                        let imbalance = (bid_depth - ask_depth) / total; // −1 (sell-heavy) to +1 (buy-heavy)
+                        let blocked = match signal.side {
+                            OrderSide::Buy  => imbalance < -0.15,
+                            OrderSide::Sell => imbalance > 0.15,
+                        };
+                        if blocked {
+                            warn!(
+                                token_id = %signal.token_id,
+                                imbalance = %format!("{:.3}", imbalance),
+                                "⏭️  Imbalance gate — adverse book pressure"
+                            );
+                            let mut p = self.portfolio.lock().await;
+                            p.skipped_orders += 1;
+                            drop(p);
+                            self.record_rejection("imbalance_gate").await;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1D: Signal confidence composite score gate.
+        {
+            let floor = std::env::var("ALPHA_CONFIDENCE_FLOOR")
+                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0).clamp(0.0, 1.0);
+            if floor > 0.0 {
+                let recency_ms = signal.detected_at.elapsed().as_millis() as f64;
+                let confidence = self.compute_signal_confidence(
+                    &signal.token_id, signal.side, entry_price, size_usdc, recency_ms,
+                );
+                if confidence < floor {
+                    warn!(
+                        token_id   = %signal.token_id,
+                        confidence = %format!("{:.3}", confidence),
+                        floor      = %format!("{:.3}", floor),
+                        "⏭️  Signal skipped — confidence below floor"
+                    );
+                    let mut p = self.portfolio.lock().await;
+                    p.skipped_orders += 1;
+                    drop(p);
+                    self.record_rejection("low_confidence").await;
+                    return;
+                }
+            }
+        }
+
+        // 3D: Dynamic concurrent position cap — scales with win rate and cash.
+        {
+            let p = self.portfolio.lock().await;
+            let n_positions = p.positions.len();
+            let win_trades  = p.closed_trades.iter().filter(|t| t.realized_pnl > 0.0).count();
+            let total_closed = p.closed_trades.len().max(1);
+            let cash_pct     = p.cash_usdc / p.nav().max(1.0);
+            drop(p);
+
+            let base: f64 = std::env::var("DYNAMIC_POS_CAP_BASE")
+                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(5.0).clamp(1.0, 50.0);
+            let min_cap: usize = std::env::var("DYNAMIC_POS_CAP_MIN")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+            let max_cap: usize = std::env::var("DYNAMIC_POS_CAP_MAX")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(10);
+
+            let win_rate    = win_trades as f64 / total_closed as f64;
+            let win_factor  = (0.5 + win_rate).clamp(0.5, 1.5);
+            let cash_factor = (cash_pct / 0.5).clamp(0.5, 1.5);
+            let dynamic_cap = ((base * win_factor * cash_factor) as usize).clamp(min_cap, max_cap);
+
+            if n_positions >= dynamic_cap {
+                warn!(
+                    n_positions,
+                    dynamic_cap,
+                    win_rate   = %format!("{:.2}", win_rate),
+                    cash_pct   = %format!("{:.0}%", cash_pct * 100.0),
+                    "⏭️  Dynamic position cap reached"
+                );
+                let mut p = self.portfolio.lock().await;
+                p.skipped_orders += 1;
+                drop(p);
+                self.record_rejection("dynamic_pos_cap").await;
+                return;
+            }
         }
 
         // ── Risk check ────────────────────────────────────────────────────
@@ -868,7 +1185,11 @@ impl PaperEngine {
             return;
         }
 
-        let slippage_bps = self.estimate_slippage_bps(&signal.token_id, signal.side, entry_price);
+        // 2B: Depth-weighted VWAP slippage — walk the order book to compute realistic fill price.
+        let (slippage_bps, vwap_price) = self.compute_vwap_slippage(&signal.token_id, signal.side, size_usdc);
+        if vwap_price > 0.0 {
+            entry_price = vwap_price.clamp(0.001, 0.999);
+        }
         let variant = if self.experiments.lock().unwrap().sizing_variant_b { "B" } else { "A" };
 
         // ── Record virtual fill ───────────────────────────────────────
@@ -895,6 +1216,12 @@ impl PaperEngine {
         };
         // Record fill in risk manager for VaR tracking (does not affect daily P&L).
         self.risk.lock().unwrap().record_fill(size_usdc);
+
+        // 2C: Mark this (token, side) as recently filled to prevent tranche re-entry.
+        {
+            let dedup_key = format!("{}:{}", signal.token_id, signal.side);
+            self.recent_fills.lock().unwrap().insert(dedup_key, Instant::now());
+        }
 
         // Ensure this token is subscribed in the WS feed so get_market_price() stays live.
         {
@@ -1267,6 +1594,106 @@ impl PaperEngine {
         (None, "reject")
     }
 
+    /// 2B: Depth-weighted VWAP slippage — walks the order book to simulate realistic fill cost.
+    ///
+    /// Returns `(slippage_bps, vwap_price)` where `vwap_price` is 0.0 when the book is empty
+    /// on the relevant side (caller should keep the original entry_price).
+    /// Falls back to a sqrt market-impact model when our side has no depth.
+    fn compute_vwap_slippage(&self, token_id: &str, side: OrderSide, size_usdc: f64) -> (f64, f64) {
+        let exponent: f64 = std::env::var("SLIPPAGE_IMPACT_EXPONENT")
+            .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.5).clamp(0.1, 1.0);
+        let coeff: f64 = std::env::var("SLIPPAGE_IMPACT_COEFF_BPS")
+            .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(50.0).clamp(0.0, 500.0);
+
+        let Some(book) = self.book_store.get_book_snapshot(token_id) else {
+            return (0.0, 0.0);
+        };
+
+        let ref_price_u = match side {
+            OrderSide::Buy  => book.best_ask(),
+            OrderSide::Sell => book.best_bid(),
+        };
+
+        let Some(ref_price_u) = ref_price_u else {
+            // Our side is empty — fall back to sqrt market-impact over total book depth.
+            let total_depth_usdc: f64 = book.bids.iter()
+                .chain(book.asks.iter())
+                .map(|(p, s)| (*p as f64 / 1_000.0) * (*s as f64 / 1_000.0))
+                .sum::<f64>()
+                .max(1.0);
+            let impact = coeff * (size_usdc / total_depth_usdc).powf(exponent);
+            return (impact.clamp(0.0, 500.0), 0.0);
+        };
+
+        let ref_price = ref_price_u as f64 / 1_000.0;
+
+        // Walk the book and consume `size_usdc` notional.
+        let levels: Vec<(f64, f64)> = match side {
+            OrderSide::Buy  => book.asks.iter()
+                .map(|(p, s)| (*p as f64 / 1_000.0, *s as f64 / 1_000.0))
+                .collect(),
+            OrderSide::Sell => book.bids.iter().rev()
+                .map(|(p, s)| (*p as f64 / 1_000.0, *s as f64 / 1_000.0))
+                .collect(),
+        };
+
+        let mut remaining   = size_usdc;
+        let mut total_cost  = 0.0_f64;
+        let mut total_shares = 0.0_f64;
+        for (px, shares) in levels {
+            if remaining <= 0.0 { break; }
+            let level_usdc   = shares * px;
+            let filled_usdc  = remaining.min(level_usdc);
+            let filled_shares = filled_usdc / px;
+            total_cost   += filled_shares * px;
+            total_shares += filled_shares;
+            remaining    -= filled_usdc;
+        }
+
+        if total_shares <= 0.0 || ref_price <= 0.0 {
+            return (0.0, ref_price);
+        }
+
+        let vwap     = total_cost / total_shares;
+        let slip_bps = ((vwap - ref_price).abs() / ref_price * 10_000.0).clamp(0.0, 500.0);
+        (slip_bps, vwap)
+    }
+
+    /// 1D: Composite signal confidence score [0.0, 1.0].
+    ///
+    /// Combines book depth coverage, spread quality, signal recency, and price certainty.
+    fn compute_signal_confidence(
+        &self,
+        token_id:   &str,
+        side:       OrderSide,
+        entry_price: f64,
+        size_usdc:  f64,
+        recency_ms: f64,
+    ) -> f64 {
+        let (depth_score, spread_score) = if let Some(book) = self.book_store.get_book_snapshot(token_id) {
+            let side_depth_usdc: f64 = match side {
+                OrderSide::Buy  => book.asks.iter()
+                    .map(|(p, s)| (*p as f64 / 1_000.0) * (*s as f64 / 1_000.0))
+                    .sum(),
+                OrderSide::Sell => book.bids.iter()
+                    .map(|(p, s)| (*p as f64 / 1_000.0) * (*s as f64 / 1_000.0))
+                    .sum(),
+            };
+            let d = (side_depth_usdc / size_usdc.max(1.0) / 10.0).clamp(0.0, 1.0);
+            let spread = book.spread_bps().unwrap_or(500) as f64;
+            let s = (1.0 - spread / 500.0).clamp(0.0, 1.0);
+            (d, s)
+        } else {
+            (0.3, 0.3) // no book data — moderate penalty
+        };
+        let recency_score  = (1.0 - recency_ms / 5_000.0).clamp(0.0, 1.0);
+        // Prices far from 0.5 are more certain; near 0.5 outcome is least predictable.
+        let certainty      = (2.0 * (entry_price - 0.5).abs()).clamp(0.0, 1.0);
+        let price_score    = 0.3 + 0.7 * certainty;
+
+        depth_score * 0.35 + spread_score * 0.25 + recency_score * 0.25 + price_score * 0.15
+    }
+
     fn estimate_slippage_bps(&self, token_id: &str, side: OrderSide, fill_price: f64) -> f64 {
         let ref_price = self
             .book_store
@@ -1458,7 +1885,10 @@ impl PaperEngine {
         let should_push = tick % 1 == 0; // push every tick (called every 1s)
         let mut p = self.portfolio.lock().await;
         if p.positions.is_empty() {
-            if should_push { p.push_equity_snapshot(); }
+            if should_push {
+                p.push_equity_snapshot();
+                self.emit_equity_snapshot(&p);
+            }
             return;
         }
         let updates: Vec<(String, f64)> = p
@@ -1472,7 +1902,24 @@ impl PaperEngine {
         for (token_id, price) in updates {
             p.update_price(&token_id, price);
         }
-        if should_push { p.push_equity_snapshot(); }
+        if should_push {
+            p.push_equity_snapshot();
+            self.emit_equity_snapshot(&p);
+        }
+    }
+
+    fn emit_equity_snapshot(&self, p: &PaperPortfolio) {
+        let Some(ref tx) = self.warehouse_tx else { return };
+        let nav = p.nav();
+        let unrealised_pnl = nav - p.cash_usdc;
+        let ev = EquitySnapshot {
+            timestamp_ms:   crate::clickhouse_logger::now_ms(),
+            nav_usdc:        nav,
+            cash_usdc:       p.cash_usdc,
+            unrealised_pnl,
+            open_positions:  p.positions.len() as u32,
+        };
+        let _ = tx.try_send(WarehouseEvent::EquitySnapshot(ev));
     }
 
     async fn enrich_signal_metadata(&self, signal: &mut RN1Signal) {
@@ -1694,9 +2141,53 @@ impl PaperEngine {
         }
 
         // Delegate exit decisions to the pure exit_strategy module.
-        let decisions = evaluate_exits(&p.positions, &exit_config, |token_id| {
-            self.get_market_price(token_id).is_some()
-        });
+        // 4C: Per-category exit config override — evaluate each position with its own
+        // patched ExitConfig so e.g. sports positions can have tighter stops than crypto.
+        let decisions: Vec<crate::exit_strategy::ExitDecision> = p.positions
+            .iter()
+            .enumerate()
+            .flat_map(|(real_idx, pos)| {
+                let patched = patched_exit_config_for_category(&exit_config, pos.market_title.as_deref());
+                evaluate_exits(std::slice::from_ref(pos), &patched, |tid| {
+                    self.get_market_price(tid).is_some()
+                })
+                .into_iter()
+                .map(move |mut d| { d.position_idx = real_idx; d })
+            })
+            .collect();
+
+        // 3C: emit warnings for positions approaching event close (not yet in force-close window).
+        // 4A: update momentum reference prices for positions that aren't being closed.
+        let now_ts_check = chrono::Utc::now().timestamp();
+        let pre_event_warn_secs = 600i64;
+        let pre_close_secs = exit_config.pre_event_close_secs as i64;
+        let momentum_interval = exit_config.momentum_check_interval_secs as i64;
+        let exiting_set: std::collections::HashSet<usize> =
+            decisions.iter().map(|d| d.position_idx).collect();
+        for pos in p.positions.iter() {
+            if let Some(end_ts) = pos.event_end_time {
+                let secs_left = end_ts - now_ts_check;
+                if secs_left > pre_close_secs && secs_left <= pre_event_warn_secs {
+                    let msg = format!(
+                        "⏳ {}s to event close for {} — position approaching auto-close window",
+                        secs_left,
+                        pos.market_title.as_deref().unwrap_or(&pos.token_id)
+                    );
+                    if let Some(ref log) = self.activity {
+                        log_push(log, EntryKind::Warn, msg.clone());
+                    }
+                    info!("{msg}");
+                }
+            }
+        }
+        for (i, pos) in p.positions.iter_mut().enumerate() {
+            if !exiting_set.contains(&i)
+                && now_ts_check - pos.momentum_ref_ts >= momentum_interval
+            {
+                pos.momentum_ref_price = pos.current_price;
+                pos.momentum_ref_ts = now_ts_check;
+            }
+        }
 
         if decisions.is_empty() {
             return;
@@ -1726,11 +2217,34 @@ impl PaperEngine {
                 ExitAction::Resolved { .. } => "RESOLVED",
                 ExitAction::MarketNotLive { .. } => "STALE-CLOSE",
                 ExitAction::MaxHoldExpired { .. } => "MAX-HOLD",
+                ExitAction::PreResolutionStop { .. } => "PRE-RESOLUTION",
+                ExitAction::PreEventClose { .. } => "PRE-EVENT-CLOSE",
+                ExitAction::AdverseMomentum { .. } => "ADVERSE-MOMENTUM",
             };
             *action_counts.entry(action_key).or_insert(0) += 1;
 
             let before = p.closed_trades.len();
             let _removed = p.close_position_fraction(idx, fraction, reason);
+
+            // Emit ClosedTrade events to ClickHouse for each newly closed slice.
+            if let Some(ref tx) = self.warehouse_tx {
+                for ct in &p.closed_trades[before..] {
+                    let ev = ClosedTradeFull {
+                        timestamp_ms:   crate::clickhouse_logger::now_ms(),
+                        token_id:       ct.token_id.clone(),
+                        market_title:   ct.market_title.clone().unwrap_or_default(),
+                        side:           format!("{:?}", ct.side),
+                        entry_price:    ct.entry_price,
+                        exit_price:     ct.exit_price,
+                        shares:         ct.shares,
+                        realized_pnl:   ct.realized_pnl,
+                        fees_paid_usdc: ct.fees_paid_usdc,
+                        duration_secs:  ct.duration_secs,
+                        reason:         ct.reason.clone(),
+                    };
+                    let _ = tx.try_send(WarehouseEvent::ClosedTrade(ev));
+                }
+            }
 
             // Sum realized P&L from newly closed trades.
             let slice_pnl: f64 = p.closed_trades[before..].iter().map(|t| t.realized_pnl).sum();

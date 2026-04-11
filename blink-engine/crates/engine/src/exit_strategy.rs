@@ -27,6 +27,12 @@ pub enum ExitAction {
     MarketNotLive { held_secs: u64 },
     /// Max hold duration exceeded (absolute time limit).
     MaxHoldExpired { held_secs: u64 },
+    /// Exit a losing position when event resolution is imminent (4B).
+    PreResolutionStop { remaining_secs: i64, pnl_pct: f64 },
+    /// Force-close ALL positions within N seconds of event resolution (3C).
+    PreEventClose { secs_left: i64 },
+    /// Exit a profitable position due to adverse price momentum (4A).
+    AdverseMomentum { price_change_bps: i64 },
 }
 
 impl ExitAction {
@@ -47,6 +53,12 @@ impl ExitAction {
                 "autoclaim@market_not_live".to_string(),
             Self::MaxHoldExpired { held_secs } =>
                 format!("max_hold@{}s", held_secs),
+            Self::PreResolutionStop { remaining_secs, .. } =>
+                format!("pre_resolution_stop@{}s_left", remaining_secs),
+            Self::PreEventClose { secs_left } =>
+                format!("pre_event_close@{}s_left", secs_left),
+            Self::AdverseMomentum { price_change_bps } =>
+                format!("adverse_momentum@{}bps", price_change_bps),
         }
     }
 
@@ -90,6 +102,18 @@ pub struct ExitConfig {
 
     // Stale market close
     pub stale_close_secs: u64,
+
+    // Event-aware confidence exit (4B): exit a losing position when resolution is near.
+    pub event_aware_exit_secs: u64,
+    pub event_aware_exit_loss_pct: f64,
+
+    // Force-close ALL positions within this many seconds of event resolution (3C).
+    pub pre_event_close_secs: u64,
+
+    // Adverse momentum exit (4A): exit profitable position if price moved this many bps against us.
+    pub momentum_exit_threshold_bps: u64,
+    /// How often (secs) the momentum reference price is refreshed by autoclaim.
+    pub momentum_check_interval_secs: u64,
 }
 
 impl ExitConfig {
@@ -106,6 +130,11 @@ impl ExitConfig {
             stagnant_threshold_pct: env_f64("STAGNANT_THRESHOLD_PCT", 5.0),
             max_hold_secs: env_u64("MAX_HOLD_SECS", 432_000), // 5 days
             stale_close_secs: env_u64("STALE_CLOSE_SECS", 300),
+            event_aware_exit_secs: env_u64("EVENT_AWARE_EXIT_SECS", 3600),
+            event_aware_exit_loss_pct: env_f64("EVENT_AWARE_EXIT_LOSS_PCT", 5.0),
+            pre_event_close_secs: env_u64("PRE_EVENT_CLOSE_SECS", 60),
+            momentum_exit_threshold_bps: env_u64("MOMENTUM_EXIT_THRESHOLD_BPS", 300),
+            momentum_check_interval_secs: env_u64("MOMENTUM_CHECK_INTERVAL_SECS", 60),
         }
     }
 }
@@ -123,6 +152,11 @@ impl Default for ExitConfig {
             stagnant_threshold_pct: 5.0,
             max_hold_secs: 432_000,
             stale_close_secs: 300,
+            event_aware_exit_secs: 3600,
+            event_aware_exit_loss_pct: 5.0,
+            pre_event_close_secs: 60,
+            momentum_exit_threshold_bps: 300,
+            momentum_check_interval_secs: 60,
         }
     }
 }
@@ -170,6 +204,21 @@ where
             continue;
         }
 
+        // 1.5. Time-decay force-close (3C): close ALL positions within N secs of event end.
+        if config.pre_event_close_secs > 0 {
+            if let Some(end_ts) = pos.event_end_time {
+                let now_ts = chrono::Utc::now().timestamp();
+                let remaining = end_ts - now_ts;
+                if remaining > 0 && remaining <= config.pre_event_close_secs as i64 {
+                    decisions.push(ExitDecision {
+                        position_idx: idx,
+                        action: ExitAction::PreEventClose { secs_left: remaining },
+                    });
+                    continue;
+                }
+            }
+        }
+
         // 2. Stop-loss
         let sl_threshold = if pos.usdc_spent < config.stop_loss_small_notional_usdc {
             config.stop_loss_small_pct
@@ -182,6 +231,44 @@ where
                 action: ExitAction::StopLoss { threshold_pct: sl_threshold },
             });
             continue;
+        }
+
+        // 2.5. Pre-resolution stop (4B): exit a losing position before event resolves.
+        if config.event_aware_exit_secs > 0 {
+            if let Some(end_ts) = pos.event_end_time {
+                let now_ts = chrono::Utc::now().timestamp();
+                let remaining = end_ts - now_ts;
+                if remaining > 0 && remaining < config.event_aware_exit_secs as i64
+                    && pnl_pct <= -config.event_aware_exit_loss_pct
+                {
+                    decisions.push(ExitDecision {
+                        position_idx: idx,
+                        action: ExitAction::PreResolutionStop { remaining_secs: remaining, pnl_pct },
+                    });
+                    continue;
+                }
+            }
+        }
+
+        // 2.7. Adverse momentum exit (4A): exit profitable position if price moved adversely.
+        if config.momentum_exit_threshold_bps > 0 && pnl_pct > 0.0 {
+            let now_ts = chrono::Utc::now().timestamp();
+            if now_ts - pos.momentum_ref_ts >= config.momentum_check_interval_secs as i64 {
+                let price_change_bps = ((pos.current_price - pos.momentum_ref_price)
+                    / pos.momentum_ref_price.max(0.001)
+                    * 10_000.0) as i64;
+                let adverse = match pos.side {
+                    OrderSide::Buy => price_change_bps < -(config.momentum_exit_threshold_bps as i64),
+                    OrderSide::Sell => price_change_bps > (config.momentum_exit_threshold_bps as i64),
+                };
+                if adverse {
+                    decisions.push(ExitDecision {
+                        position_idx: idx,
+                        action: ExitAction::AdverseMomentum { price_change_bps: price_change_bps.abs() },
+                    });
+                    continue;
+                }
+            }
         }
 
         // 3. Trailing stop
@@ -414,6 +501,8 @@ mod tests {
             experiment_variant: "A".to_string(),
             event_start_time: None,
             event_end_time: None,
+            momentum_ref_price: entry,
+            momentum_ref_ts: 0,
         }
     }
 }

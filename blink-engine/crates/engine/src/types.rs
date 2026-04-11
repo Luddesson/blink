@@ -229,6 +229,10 @@ pub struct RN1Signal {
     pub event_start_time: Option<i64>,
     /// Unix timestamp — market resolution deadline (from Gamma API).
     pub event_end_time: Option<i64>,
+    /// Address of the tracked wallet that originated this signal.
+    pub source_wallet: String,
+    /// Sizing weight for this wallet (1.0 = primary, <1.0 = secondary).
+    pub wallet_weight: f64,
 }
 
 /// Simplified signal used for position tracking and hedge detection

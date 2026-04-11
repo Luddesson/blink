@@ -19,15 +19,13 @@ import FailsafePanel from './components/FailsafePanel'
 import CircuitBreakerAlarm from './components/CircuitBreakerAlarm'
 import PortfolioStats from './components/PortfolioStats'
 import ErrorBoundary from './components/ErrorBoundary'
-import BullpenHealth from './components/BullpenHealth'
-import DiscoveryPanel from './components/DiscoveryPanel'
-import ConvergenceAlert from './components/ConvergenceAlert'
 
 import MarketsPage from './pages/MarketsPage'
 import HistoryPage from './pages/HistoryPage'
 import IntelligencePage from './pages/IntelligencePage'
 import PerformancePage from './pages/PerformancePage'
 import ConfigPage from './pages/ConfigPage'
+import BacktestPage from './pages/BacktestPage'
 
 import type { RiskSummary } from './types'
 
@@ -50,9 +48,6 @@ export default function App() {
   const [cbDismissed, setCbDismissed] = useState(false)
 
   const { data: livePortfolio } = usePoll(api.livePortfolio, 5_000, isLive)
-  const { data: bullpenHealth } = usePoll(api.bullpenHealth, 10_000)
-  const { data: bullpenDiscovery } = usePoll(api.bullpenDiscovery, 15_000)
-  const { data: bullpenConvergence } = usePoll(api.bullpenConvergence, 5_000)
 
   const wsPaused = snapshot?.trading_paused ?? tradingPaused
   const risk: RiskSummary = snapshot?.risk ?? EMPTY_RISK
@@ -93,7 +88,13 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-surface-950 text-slate-100">
-      <Header wsConnected={connected} tradingPaused={wsPaused} />
+      <Header
+        wsConnected={connected}
+        tradingPaused={wsPaused}
+        snapshotTimestampMs={snapshot?.timestamp_ms}
+        portfolioAgeMs={snapshot?.portfolio_age_ms}
+        engineUptimeSecs={snapshot?.engine_uptime_secs}
+      />
       <TabBar activeTab={activeTab} onSwitch={switchTab} />
 
       {showWsBanner && (
@@ -114,7 +115,12 @@ export default function App() {
 
           <aside className="hidden md:flex flex-col gap-2 overflow-y-auto min-h-0">
             <ErrorBoundary label="RiskPanel">
-              <RiskPanel risk={risk} />
+              <RiskPanel
+                risk={risk}
+                volBps={snapshot?.vol_bps}
+                equityCurve={equityCurve}
+                currentNav={nav}
+              />
             </ErrorBoundary>
             <ErrorBoundary label="PortfolioStats">
               <PortfolioStats portfolio={portfolio} />
@@ -158,24 +164,16 @@ export default function App() {
             <ErrorBoundary label="FailsafePanel">
               <FailsafePanel />
             </ErrorBoundary>
-            <ErrorBoundary label="BullpenHealth">
-              <BullpenHealth health={bullpenHealth} />
-            </ErrorBoundary>
-            <ErrorBoundary label="DiscoveryPanel">
-              <DiscoveryPanel discovery={bullpenDiscovery} />
-            </ErrorBoundary>
-            <ErrorBoundary label="ConvergenceAlert">
-              <ConvergenceAlert convergence={bullpenConvergence} />
-            </ErrorBoundary>
           </aside>
 
         </main>
       )}
 
       {activeTab === 'markets' && <MarketsPage />}
-      {activeTab === 'history' && <HistoryPage />}
+      {activeTab === 'history' && <HistoryPage equityCurve={equityCurve} />}
       {activeTab === 'intelligence' && <IntelligencePage />}
       {activeTab === 'performance' && <PerformancePage portfolio={portfolio} positions={positions} />}
+      {activeTab === 'backtest' && <BacktestPage />}
       {activeTab === 'config' && <ConfigPage risk={risk} />}
 
       <StatusBar />

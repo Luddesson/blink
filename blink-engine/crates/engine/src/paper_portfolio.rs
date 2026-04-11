@@ -791,13 +791,19 @@ impl PaperPortfolio {
     pub fn push_equity_snapshot(&mut self) {
         let new_nav = self.nav();
         let now_ms = chrono::Utc::now().timestamp_millis();
-        // Only record a new point if NAV has actually changed — avoids 90%+ duplicate entries.
-        // Exception: always push a heartbeat at least every 60s so the chart never goes stale.
         if let Some(&last) = self.equity_curve.last() {
             let elapsed_ms = now_ms - self.last_equity_push_ts;
             if (new_nav - last).abs() < 0.001 && elapsed_ms < 60_000 {
                 return;
             }
+            tracing::debug!(
+                new_nav,
+                last_nav = last,
+                delta = new_nav - last,
+                elapsed_ms,
+                curve_len = self.equity_curve.len(),
+                "equity push"
+            );
         }
         if self.equity_curve.len() >= EQUITY_CURVE_MAX {
             self.equity_curve.remove(0);

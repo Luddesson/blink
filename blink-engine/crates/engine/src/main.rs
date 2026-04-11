@@ -10,6 +10,7 @@
 use std::sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc, Mutex};
 use std::time::Duration;
 use std::io::{BufRead, BufReader, Write};
+use futures_util::FutureExt as _; // .catch_unwind() on futures
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -674,12 +675,30 @@ async fn main() -> Result<()> {
             let pd = Arc::clone(&paper);
             let sd_mt = Arc::clone(&shutdown);
             tokio::spawn(async move {
+                let mut consecutive_ok: u64 = 0;
                 loop {
                     if sd_mt.load(Ordering::Relaxed) {
                         break;
                     }
                     tokio::time::sleep(Duration::from_secs(1)).await;
-                    pd.tick_mark_prices().await;
+                    let result = std::panic::AssertUnwindSafe(pd.tick_mark_prices())
+                        .catch_unwind()
+                        .await;
+                    match result {
+                        Ok(()) => {
+                            consecutive_ok += 1;
+                            if consecutive_ok == 1 || consecutive_ok % 60 == 0 {
+                                tracing::debug!(tick = consecutive_ok, "tick_mark_prices alive");
+                            }
+                        }
+                        Err(e) => {
+                            let msg = e.downcast_ref::<String>()
+                                .map(|s| s.as_str())
+                                .or_else(|| e.downcast_ref::<&str>().copied())
+                                .unwrap_or("unknown panic");
+                            tracing::error!(err = msg, "tick_mark_prices PANICKED — recovering");
+                        }
+                    }
                 }
             });
         }
@@ -708,7 +727,10 @@ async fn main() -> Result<()> {
                     if sd_save.load(Ordering::Relaxed) {
                         break;
                     }
-                    let _ = ps.save_portfolio(&psp).await;
+                    match ps.save_portfolio(&psp).await {
+                        Ok(()) => tracing::debug!("autosave: portfolio saved"),
+                        Err(e) => tracing::error!(err = %e, "autosave: save_portfolio FAILED"),
+                    }
                     let subs = subs_save.lock().unwrap().clone();
                     let _ = ps.save_warm_state(&wsp, &subs, &psp).await;
                     let _ = ps.save_rejections(&rsp).await;
@@ -1035,7 +1057,7 @@ async fn main() -> Result<()> {
             convergence_store: convergence_store.clone(),
             slug_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
             portfolio_cache: Arc::new(std::sync::RwLock::new(None)),
-            clickhouse_url: std::env::var("CLICKHOUSE_URL").ok(),
+            clickhouse_url: std::env::var("CLICKHOUSE_URL").ok().filter(|s| !s.is_empty()),
             snapshot_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             portfolio_cached_at_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };

@@ -116,13 +116,29 @@ export default function NavCard({
 
   // Prefer fetched historical data when available; fall back to in-memory WS curve
   const START_BALANCE = 100
-  const chartData: { t: number; v: number }[] = fetchedPoints.length > 0
+  const rawChartData: { t: number; v: number }[] = fetchedPoints.length > 0
     ? fetchedPoints.map(p => ({ t: p.timestamp_ms, v: p.nav_usdc - START_BALANCE }))
     : equityCurve.map((v, i) => ({ t: equityTimestamps[i] ?? i, v: v - START_BALANCE }))
 
   // Chart window: right edge = now, left = now - selected range
   const chartWindowMs = WINDOW_MS[range]
   const windowStart = nowMs - chartWindowMs
+
+  // Filter data to the visible window and inject a "now" anchor point
+  const filteredData = rawChartData.filter(d => d.t >= windowStart && d.t <= nowMs)
+  const currentPnl = nav - START_BALANCE
+  // Append a synthetic "now" point so the chart always extends to the right edge
+  if (filteredData.length > 0) {
+    const last = filteredData[filteredData.length - 1]
+    if (nowMs - last.t > 2000) {
+      filteredData.push({ t: nowMs, v: currentPnl })
+    }
+  } else {
+    // No data in window — show a flat line at current NAV
+    filteredData.push({ t: windowStart, v: currentPnl })
+    filteredData.push({ t: nowMs, v: currentPnl })
+  }
+  const chartData = filteredData
 
   // Generate tick marks — 6 evenly-spaced ticks
   const TICK_COUNT = 6
@@ -218,6 +234,7 @@ export default function NavCard({
                 type="number"
                 scale="time"
                 domain={[windowStart, nowMs]}
+                allowDataOverflow={true}
                 ticks={xTicks}
                 tickFormatter={fmtTickTime}
                 tick={{ fill: '#475569', fontSize: 9 }}

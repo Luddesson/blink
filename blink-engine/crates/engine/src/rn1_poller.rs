@@ -147,7 +147,7 @@ pub async fn run_rn1_poller(
     config:        Arc<Config>,
     wallet:        String,
     wallet_weight: f64,
-    signal_tx:     crossbeam_channel::Sender<RN1Signal>,
+    signal_tx:     tokio::sync::mpsc::Sender<RN1Signal>,
     activity:      Option<ActivityLog>,
     diagnostics:   Rn1PollDiagnosticsHandle,
 ) {

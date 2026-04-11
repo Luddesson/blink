@@ -278,12 +278,12 @@ async fn main() -> Result<()> {
     };
 
     // ── Channels ──────────────────────────────────────────────────────────
-    let (signal_tx, signal_rx) = crossbeam_channel::bounded::<RN1Signal>(1024);
+    let (signal_tx, signal_rx) = tokio::sync::mpsc::channel::<RN1Signal>(1024);
 
     // Alpha signal channel (AI sidecar → engine). Only allocated when enabled.
     let alpha_enabled = config.alpha_enabled;
     let (alpha_signal_tx, alpha_signal_rx) = if alpha_enabled {
-        let (tx, rx) = crossbeam_channel::bounded::<engine::alpha_signal::AlphaSignal>(256);
+        let (tx, rx) = tokio::sync::mpsc::channel::<engine::alpha_signal::AlphaSignal>(256);
         (Some(tx), Some(rx))
     } else {
         (None, None)
@@ -744,10 +744,10 @@ async fn main() -> Result<()> {
         let twin_opt = twin_engine.clone();
         let subs_for_signals = Arc::clone(&market_subscriptions);
         let ws_reconnect_for_signals = Arc::clone(&ws_force_reconnect);
+        let mut signal_rx = signal_rx;
+        let handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all().build().expect("paper rt");
-            for signal in &signal_rx {
+            while let Some(signal) = handle.block_on(signal_rx.recv()) {
                 latency.lock().unwrap().record(signal.detected_at.elapsed());
                 if tp.load(Ordering::Relaxed) { continue; }
                 {
@@ -760,13 +760,13 @@ async fn main() -> Result<()> {
                 let p = Arc::clone(&paper);
                 let t_opt = twin_opt.clone();
                 let sig = signal.clone();
-                rt.block_on(async move {
-                    if let Some(twin) = t_opt {
+                if let Some(twin) = t_opt {
+                    handle.block_on(async {
                         tokio::join!(p.handle_signal(sig.clone()), twin.handle_signal(sig));
-                    } else {
-                        p.handle_signal(sig).await;
-                    }
-                });
+                    });
+                } else {
+                    handle.block_on(p.handle_signal(sig));
+                }
             }
         })
     } else if live_mode {
@@ -920,28 +920,29 @@ async fn main() -> Result<()> {
 
         let tp = Arc::clone(&trading_paused);
         let twin_opt = twin_engine.clone();
+        let mut signal_rx = signal_rx;
+        let handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all().build().expect("live rt");
-            for signal in &signal_rx {
+            while let Some(signal) = handle.block_on(signal_rx.recv()) {
                 latency.lock().unwrap().record(signal.detected_at.elapsed());
                 if tp.load(Ordering::Relaxed) { continue; }
                 let l = Arc::clone(&live);
                 let t_opt = twin_opt.clone();
                 let sig = signal.clone();
-                rt.block_on(async move {
-                    if let Some(twin) = t_opt {
+                if let Some(twin) = t_opt {
+                    handle.block_on(async {
                         tokio::join!(l.handle_signal(sig.clone()), twin.handle_signal(sig));
-                    } else {
-                        l.handle_signal(sig).await;
-                    }
-                });
+                    });
+                } else {
+                    handle.block_on(l.handle_signal(sig));
+                }
             }
         })
     } else {
         // Read-only mode
-        tokio::task::spawn_blocking(move || {
-            for signal in &signal_rx {
+        let mut signal_rx = signal_rx;
+        tokio::spawn(async move {
+            while let Some(signal) = signal_rx.recv().await {
                 latency.lock().unwrap().record(signal.detected_at.elapsed());
                 tracing::warn!(token_id = %signal.token_id, "RN1 signal — read-only");
             }
@@ -949,17 +950,15 @@ async fn main() -> Result<()> {
     };
 
     // ── Alpha signal consumer (AI sidecar → PaperEngine) ────────────────
-    if let Some(alpha_rx) = alpha_signal_rx {
+    if let Some(mut alpha_rx) = alpha_signal_rx {
         let alpha_paper = paper_for_persist.as_ref().map(Arc::clone);
         let alpha_act = activity.clone();
         let alpha_analytics_ref = alpha_analytics.clone();
+        let alpha_handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
-            for signal in &alpha_rx {
+            while let Some(signal) = alpha_handle.block_on(alpha_rx.recv()) {
                 let source_label = format!("AI/{}", signal.analysis_id);
                 if let Some(ref paper) = alpha_paper {
-                    // Convert alpha signal to RN1Signal for the existing pipeline.
-                    // This is a deliberate bridge: the paper engine processes it
-                    // through the same risk checks and fill simulation.
                     let rn1_compat = RN1Signal {
                         token_id: signal.token_id.clone(),
                         market_title: Some(format!("[ALPHA] {}", signal.analysis_id)),
@@ -975,13 +974,7 @@ async fn main() -> Result<()> {
                         wallet_weight: 1.0,
                     };
 
-                    let p = Arc::clone(paper);
-                    // Use a lightweight runtime for the blocking bridge.
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all().build().expect("alpha rt");
-                    rt.block_on(async move {
-                        p.handle_signal(rn1_compat).await;
-                    });
+                    alpha_handle.block_on(paper.handle_signal(rn1_compat));
 
                     if let Some(ref analytics) = alpha_analytics_ref {
                         if let Ok(mut a) = analytics.lock() {

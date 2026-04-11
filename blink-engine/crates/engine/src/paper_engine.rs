@@ -1135,8 +1135,9 @@ impl PaperEngine {
         }
 
         // ── Risk check ────────────────────────────────────────────────────
+        let position_count = {let p = self.portfolio.lock().await; p.positions.len()};
         if let Err(violation) = self.risk.lock().unwrap().check_pre_order(
-            size_usdc, {let p = self.portfolio.lock().await; p.positions.len()},
+            size_usdc, position_count,
             current_nav, STARTING_BALANCE_USDC,
         ) {
             warn!("🛑 Risk check blocked paper order: {violation}");

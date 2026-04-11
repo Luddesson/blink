@@ -101,8 +101,7 @@ fn jittered(d: Duration) -> Duration {
 pub async fn run_ws(
     config:               Arc<Config>,
     book_store:           Arc<OrderBookStore>,
-    signal_tx:            crossbeam_channel::Sender<RN1Signal>,
-    ws_live:              Arc<AtomicBool>,
+    signal_tx:            tokio::sync::mpsc::Sender<RN1Signal>,    ws_live:              Arc<AtomicBool>,
     activity:             Option<ActivityLog>,
     msg_count:            Arc<AtomicU64>,
     tick_tx:              Option<crossbeam_channel::Sender<TickRecord>>,
@@ -231,8 +230,7 @@ async fn connect_and_run(
     config:               &Config,
     book_store:           &Arc<OrderBookStore>,
     sniffer:              &Sniffer,
-    signal_tx:            &crossbeam_channel::Sender<RN1Signal>,
-    ws_live:              &Arc<AtomicBool>,
+    signal_tx:            &tokio::sync::mpsc::Sender<RN1Signal>,    ws_live:              &Arc<AtomicBool>,
     activity:             &Option<ActivityLog>,
     msg_count:            &Arc<AtomicU64>,
     tick_tx:              &Option<crossbeam_channel::Sender<TickRecord>>,
@@ -427,7 +425,7 @@ mod tests {
         }"#;
         let store = Arc::new(OrderBookStore::new());
         let sniffer = Sniffer::new("0xdeadbeef");
-        let (signal_tx, _rx) = crossbeam_channel::bounded(16);
+        let (signal_tx, _rx) = tokio::sync::mpsc::channel(16);
         let msg_count = Arc::new(AtomicU64::new(0));
         let mut counters = MessageParseCounters::default();
 
@@ -469,7 +467,7 @@ mod tests {
         ]"#;
         let store = Arc::new(OrderBookStore::new());
         let sniffer = Sniffer::new("0xdeadbeef");
-        let (signal_tx, _rx) = crossbeam_channel::bounded(16);
+        let (signal_tx, _rx) = tokio::sync::mpsc::channel(16);
         let msg_count = Arc::new(AtomicU64::new(0));
         let mut counters = MessageParseCounters::default();
 
@@ -504,8 +502,7 @@ fn handle_message(
     msg:        Message,
     book_store: &Arc<OrderBookStore>,
     sniffer:    &Sniffer,
-    signal_tx:  &crossbeam_channel::Sender<RN1Signal>,
-    msg_count:  &Arc<AtomicU64>,
+    signal_tx:  &tokio::sync::mpsc::Sender<RN1Signal>,    msg_count:  &Arc<AtomicU64>,
     tick_tx:    &Option<crossbeam_channel::Sender<TickRecord>>,
     parse_counters: &mut MessageParseCounters,
     parse_error_preview_chars: usize,

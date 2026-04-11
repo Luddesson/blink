@@ -34,7 +34,7 @@ pub struct AgentRpcState {
     pub discovery_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_discovery::DiscoveryStore>>>,
     pub convergence_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_smart_money::ConvergenceStore>>>,
     /// Channel for submitting AI-generated alpha signals into the engine.
-    pub alpha_signal_tx: Option<crossbeam_channel::Sender<AlphaSignal>>,
+    pub alpha_signal_tx: Option<tokio::sync::mpsc::Sender<AlphaSignal>>,
     /// Alpha trading analytics (accept/reject counts, P&L attribution).
     pub alpha_analytics: Option<Arc<Mutex<AlphaAnalytics>>>,
     /// Alpha-specific risk configuration.
@@ -402,11 +402,11 @@ async fn submit_alpha_signal(params: Value, state: &AgentRpcState) -> std::resul
             tracing::info!(analysis_id = %analysis_id, "Alpha signal accepted");
             Ok(json!({ "accepted": true, "analysis_id": analysis_id }))
         }
-        Err(crossbeam_channel::TrySendError::Full(_)) => {
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             analytics.lock().unwrap().record_reject("queue_full");
             Ok(json!({ "accepted": false, "reason": "Signal queue full" }))
         }
-        Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
             analytics.lock().unwrap().record_reject("engine_shutdown");
             Err(RpcError { code: -32000, message: "Engine shutting down".into() })
         }

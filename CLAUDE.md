@@ -161,4 +161,141 @@ npm run lint             # TypeScript linting
 
 ---
 
-*Last updated: 2026-04-05*
+## Session Handoff — 2026-04-13
+
+### What Was Done This Session (12 commits)
+
+#### 1. Profitability Overhaul (5 commits: 397af8a → c203347)
+Complete 5-phase overhaul based on live paper trading data:
+- Phase 1: Max order cap $8, exit slippage 10bps, momentum 150bps, stale 60s
+- Phase 2: Graduated drawdown sizing, partial momentum exit 50%
+- Phase 3: Sharpe/Sortino/fee-drag metrics API endpoints
+- Phase 4: Simplified sizing (7→3 multipliers), fee-edge precheck, depth gate
+- Phase 5: Confidence floor 0.55, realism mode, entry spread cost
+
+#### 2. UI Bug Fixes (fe7bc77)
+- Fixed "Closes in 2682h" (used event_end_time → event_start_time)
+- Fixed Polymarket 404 links (market_slug → events[0].slug)
+
+#### 3. Infrastructure Hardening (f550c57)
+- Heartbeat circuit breaker (3 consecutive failures → trip)
+- Persistent nonce storage (data/live_nonce.json)
+- Pending orders WAL (data/pending_orders.json)
+- Graceful shutdown (reconcile → cancel → persist)
+- Daily risk reset at UTC midnight
+
+#### 4. Zero-Fills Fix (ac6113b)
+Fixed 5 stacked blockers that prevented paper engine from filling:
+- TRADING_ENABLED=true, VAR_THRESHOLD_PCT=0.35, IMBALANCE_THRESHOLD=0.50
+- MIN_SIGNAL_NOTIONAL_USD=3, PAPER_MIN_TRADE_USDC=2
+
+#### 5. Dust Trades Fix (8766d46)
+- Added `last_claimed_tier_pct` to prevent autoclaim re-triggering every 5s
+- Dust guard: minimum close size $0.25
+
+#### 6. Live Engine Hardening (6f5e265)
+- Canary halt now cancels all open exchange orders (bump_reject_streak → async)
+- Preflight expanded from 4→7 checks (all tokens, heartbeat, vault sign_digest, writability)
+- WAL CRC32 checksum header with corruption detection
+
+#### 7. Profitability Optimization — Phase A+B (c7f97e3)
+Data-driven from 817-trade simulation:
+- Max order $8→$4 (trades ≤$4 had 100% win rate)
+- Stop-loss 25%→40% (stop-losses were bleeding -$147)
+- Autoclaim tiers 40/70/100% → 60/100/150%
+- Exit slippage 10→100bps (reality was 540bps avg)
+- Momentum grace period 60s
+- Entry delay (ENTRY_DELAY_SECS, configurable)
+- Quadratic price-confidence sizing
+
+#### 8. Encrypted Keystore + Wallet Generator (92377fd)
+- AES-256-GCM encrypted keystore with PBKDF2-HMAC-SHA256 (600k iterations)
+- CLI commands: `--generate-wallet`, `--encrypt-key`, `--decrypt-key`
+- Config auto-loads from KEYSTORE_PATH, falls back to env vars
+- `.env.live.template` with complete Canary Stage 1 configuration
+
+### Current Engine Status
+- **183 tests passing** (173 engine + 10 tee-vault)
+- Paper trading mode active on port 3030
+- Sharpe ratio ~16.5, Sortino ~50
+- Web UI on port 5173 (Vite dev server)
+
+### What Needs to Happen Next — GO LIVE
+
+The entire code infrastructure for live trading is complete. The remaining work is **operational** (wallet setup + funding):
+
+```bash
+cd blink-engine
+
+# Step 1: Generate a fresh trading wallet
+cargo run -p engine -- --generate-wallet --save data/keystore.json
+
+# Step 2: Register the generated address on Polymarket
+#   → Visit polymarket.com, connect with the wallet address
+#   → Note the "funder address" (proxy wallet) shown in account settings
+
+# Step 3: Fund the account with ~$200 USDC on Polygon
+#   → Bridge USDC from Ethereum to Polygon (or buy USDC on Polygon directly)
+#   → Deposit to Polymarket proxy wallet
+#   → Approve token spenders (Exchange, NegRisk Exchange, NegRisk Adapter)
+
+# Step 4: Get CLOB API credentials
+#   → POST /auth/api-key with EIP-712 signature from signer wallet
+#   → Receive: api_key, api_secret (base64), api_passphrase
+
+# Step 5: Encrypt all credentials into keystore
+cargo run -p engine -- --encrypt-key data/keystore.json
+
+# Step 6: Configure live mode
+#   → Copy .env.live.template to .env
+#   → Set KEYSTORE_PATH=data/keystore.json
+#   → Set KEYSTORE_PASSPHRASE=<your-passphrase>
+#   → Set RN1_WALLET=<whale-address>
+
+# Step 7: Preflight validation
+cargo run --release -p engine -- --preflight-live
+
+# Step 8: Start Canary Stage 1
+cargo run --release -p engine
+```
+
+### Canary Stage Progression
+
+| Stage | Max Order | Orders/Session | Hours | Duration | Success Criteria |
+|-------|-----------|---------------|-------|----------|-----------------|
+| 1 | $5 | 20 | UTC 08-22 | 1-3 days | 20+ fills, 0 orphans, heartbeat stable |
+| 2 | $8 | 100 | 24/7 | 3-7 days | 100+ fills, ≥80% win rate, Sharpe >5 |
+| 3 | Full | Unlimited | 24/7 | Ongoing | Production monitoring |
+
+Advance by changing `LIVE_ROLLOUT_STAGE` in .env (1→2→3).
+
+### Key Architecture Decisions (Don't Change These)
+1. **Post-only maker orders** — no taker fees, earns liquidity rebates
+2. **Exchange-first reconciliation** — never trust local state for fill confirmation
+3. **Canary rollout** — progressive scaling with hard guardrails
+4. **Portfolio lock timeouts** — all lock acquisitions use tokio::time::timeout (500ms-2s)
+5. **run_autoclaim on 5s timer** — never call from hot signal/TUI paths
+6. **Signal consumers use spawn_blocking** — avoids cross-runtime deadlocks
+
+### Critical .env Variables for Live Mode
+```
+LIVE_TRADING=true
+TRADING_ENABLED=true
+BLINK_LIVE_PROFILE=canonical-v1
+KEYSTORE_PATH=data/keystore.json
+KEYSTORE_PASSPHRASE=<passphrase>
+LIVE_ROLLOUT_STAGE=1
+```
+
+### Build & Test Commands
+```bash
+cargo build --release -p engine          # Release build (~2min)
+cargo test -p engine --lib               # 173 tests (skip doctests)
+cargo test -p tee-vault                  # 10 tests (keystore roundtrip)
+cargo run -p engine -- --preflight-live  # 7-point live validation
+cargo run -p engine -- --emergency-stop  # Cancel all orders + halt
+```
+
+---
+
+*Last updated: 2026-04-13*

@@ -554,13 +554,28 @@ impl PaperPortfolio {
         event_start_time: Option<i64>,
         event_end_time: Option<i64>,
     ) -> usize {
-        let shares = usdc_size / entry_price;
+        // Apply entry spread cost when realism mode is on.
+        // For BUY: we pay slightly more; for SELL: we receive slightly less.
+        let realism = std::env::var("PAPER_REALISM_MODE")
+            .ok().map(|v| v == "true" || v == "1").unwrap_or(true);
+        let effective_entry = if realism {
+            let spread_bps = std::env::var("PAPER_ENTRY_SPREAD_BPS")
+                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(5.0).clamp(0.0, 100.0);
+            let spread = entry_price * spread_bps / 10_000.0;
+            match side {
+                OrderSide::Buy  => (entry_price + spread).min(0.999),
+                OrderSide::Sell => (entry_price - spread).max(0.001),
+            }
+        } else {
+            entry_price
+        };
+        let shares = usdc_size / effective_entry;
         let id     = self.next_id;
         self.next_id   += 1;
         let (fee_cat, fee_rate) = detect_fee_category(
             market_title.as_deref().unwrap_or(""),
         );
-        let entry_fee = polymarket_taker_fee_with_rate(shares, entry_price, fee_rate);
+        let entry_fee = polymarket_taker_fee_with_rate(shares, effective_entry, fee_rate);
         self.cash_usdc -= usdc_size + entry_fee;
         // Track entry fee in the global fees counter and per-position for accounting.
         self.total_fees_paid_usdc += entry_fee;
@@ -570,12 +585,12 @@ impl PaperPortfolio {
             market_title,
             market_outcome,
             side,
-            entry_price,
+            entry_price: effective_entry,
             shares,
             usdc_spent:    usdc_size,
             entry_fee_paid_usdc: entry_fee,
-            current_price: entry_price,
-            peak_price: entry_price,
+            current_price: effective_entry,
+            peak_price: effective_entry,
             fee_category: fee_cat.to_string(),
             fee_rate,
             opened_at:     Instant::now(),
@@ -586,7 +601,7 @@ impl PaperPortfolio {
             experiment_variant: experiment_variant.to_string(),
             event_start_time,
             event_end_time,
-            momentum_ref_price: entry_price,
+            momentum_ref_price: effective_entry,
             momentum_ref_ts: chrono::Utc::now().timestamp(),
         });
         self.filled_orders += 1;
@@ -1091,25 +1106,28 @@ mod tests {
 
     #[test]
     fn nav_decreases_after_open() {
+        // Disable realism for deterministic test math
+        std::env::set_var("PAPER_REALISM_MODE", "false");
         let mut p = PaperPortfolio::new();
         p.open_position("tok".into(), OrderSide::Buy, 0.65, 20.0, "oid".into());
-        // cash = 100 - 20 - entry_fee; position worth 20 at entry → NAV ≈ 100 - entry_fee
-        // Entry fee = shares * rate * p * (1-p) where shares = 20/0.65, rate = 0.004
         let shares = 20.0 / 0.65;
         let entry_fee = polymarket_taker_fee(shares, 0.65);
         assert!((p.nav() - (100.0 - entry_fee)).abs() < 0.01,
             "nav={} expected={}", p.nav(), 100.0 - entry_fee);
         assert!((p.cash_usdc - (80.0 - entry_fee)).abs() < 0.01,
             "cash={} expected={}", p.cash_usdc, 80.0 - entry_fee);
+        std::env::remove_var("PAPER_REALISM_MODE");
     }
 
     #[test]
     fn unrealized_pnl_buy() {
+        std::env::set_var("PAPER_REALISM_MODE", "false");
         let mut p = PaperPortfolio::new();
         p.open_position("tok".into(), OrderSide::Buy, 0.50, 10.0, "o1".into());
-        p.update_price("tok", 0.60); // price up 20 %
+        p.update_price("tok", 0.60);
         // shares = 10 / 0.50 = 20 → PnL = (0.60 - 0.50) × 20 = 2.0
         assert!((p.unrealized_pnl() - 2.0).abs() < 1e-9);
+        std::env::remove_var("PAPER_REALISM_MODE");
     }
 
     #[test]

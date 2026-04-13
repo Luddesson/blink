@@ -1036,7 +1036,7 @@ impl PaperEngine {
         // 1D: Signal confidence composite score gate.
         {
             let floor = std::env::var("ALPHA_CONFIDENCE_FLOOR")
-                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0).clamp(0.0, 1.0);
+                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.55).clamp(0.0, 1.0);
             if floor > 0.0 {
                 let recency_ms = signal.detected_at.elapsed().as_millis() as f64;
                 let confidence = self.compute_signal_confidence(

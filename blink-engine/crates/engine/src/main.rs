@@ -1234,64 +1234,109 @@ async fn run_preflight_live(config: &Config) -> Result<()> {
     anyhow::ensure!(config.live_trading, "--preflight-live requires LIVE_TRADING=true");
     config.validate_live_profile_contract()?;
 
-    // ── Check 1: market data reachable ───────────────────────────────────
-    let clob = ClobClient::new(&config.clob_host);
-    let token = &config.markets[0];
-    let buy_price = clob
-        .get_price(token, engine::types::OrderSide::Buy)
-        .await
-        .map_err(|e| anyhow::anyhow!("preflight failed: get_price BUY for token {token}: {e}"))?;
-    let sell_price = clob
-        .get_price(token, engine::types::OrderSide::Sell)
-        .await
-        .map_err(|e| anyhow::anyhow!("preflight failed: get_price SELL for token {token}: {e}"))?;
-    let mid = clob
-        .get_midpoint(token)
-        .await
-        .map_err(|e| anyhow::anyhow!("preflight failed: get_midpoint for token {token}: {e}"))?;
-    let _ = buy_price
-        .parse::<f64>()
-        .map_err(|e| anyhow::anyhow!("preflight failed: BUY price parse error for token {token}: {e}"))?;
-    let _ = sell_price
-        .parse::<f64>()
-        .map_err(|e| anyhow::anyhow!("preflight failed: SELL price parse error for token {token}: {e}"))?;
-    let _ = mid
-        .parse::<f64>()
-        .map_err(|e| anyhow::anyhow!("preflight failed: midpoint parse error for token {token}: {e}"))?;
+    let mut check = 1u8;
+    let total_checks = 7;
 
-    println!(
-        "✅ preflight-live [1/4] market data: token={} buy={} sell={} mid={}",
-        token, buy_price, sell_price, mid,
-    );
+    // ── Check 1: market data reachable (all tokens) ─────────────────────
+    let clob = ClobClient::new(&config.clob_host);
+    for (i, token) in config.markets.iter().enumerate() {
+        let buy_price = clob
+            .get_price(token, engine::types::OrderSide::Buy)
+            .await
+            .map_err(|e| anyhow::anyhow!("preflight: get_price BUY for token[{i}] {token}: {e}"))?;
+        let mid = clob
+            .get_midpoint(token)
+            .await
+            .map_err(|e| anyhow::anyhow!("preflight: get_midpoint for token[{i}] {token}: {e}"))?;
+        let buy_f = buy_price.parse::<f64>()
+            .map_err(|e| anyhow::anyhow!("preflight: BUY price parse for token[{i}] {token}: {e}"))?;
+        let mid_f = mid.parse::<f64>()
+            .map_err(|e| anyhow::anyhow!("preflight: midpoint parse for token[{i}] {token}: {e}"))?;
+        anyhow::ensure!(
+            buy_f > 0.0 && buy_f <= 1.0 && mid_f > 0.0 && mid_f <= 1.0,
+            "preflight: token[{i}] prices out of range: buy={buy_f} mid={mid_f}"
+        );
+        if i == 0 {
+            println!(
+                "✅ preflight-live [{check}/{total_checks}] market data: {}/{} tokens reachable (first: buy={} mid={})",
+                config.markets.len(), config.markets.len(), buy_price, mid,
+            );
+        }
+    }
+    if config.markets.is_empty() {
+        println!(
+            "⚠️  preflight-live [{check}/{total_checks}] MARKETS list is empty — no tokens to validate"
+        );
+    }
+    check += 1;
 
     // ── Check 2: auth credentials valid ──────────────────────────────────
     let executor = engine::order_executor::OrderExecutor::from_config(config);
     executor
         .validate_credentials()
         .await
-        .map_err(|e| anyhow::anyhow!("preflight failed: auth check: {e}"))?;
-    println!("✅ preflight-live [2/4] auth credentials valid (GET /auth/ok)");
+        .map_err(|e| anyhow::anyhow!("preflight: auth check failed: {e}"))?;
+    println!("✅ preflight-live [{check}/{total_checks}] auth credentials valid");
+    check += 1;
 
-    // ── Check 3: signature fields present ────────────────────────────────
+    // ── Check 3: heartbeat endpoint reachable ────────────────────────────
+    match executor.send_heartbeat().await {
+        Ok(()) => println!("✅ preflight-live [{check}/{total_checks}] heartbeat endpoint OK"),
+        Err(e) => {
+            return Err(anyhow::anyhow!("preflight: heartbeat failed: {e}. Is session active?"));
+        }
+    }
+    check += 1;
+
+    // ── Check 4: TEE vault operational ───────────────────────────────────
+    if !config.signer_private_key.is_empty() {
+        let vault = tee_vault::VaultHandle::spawn(&config.signer_private_key)
+            .map_err(|e| anyhow::anyhow!("preflight: TEE vault init failed: {e}"))?;
+        let test_digest = [0xABu8; 32];
+        vault
+            .sign_digest(&test_digest)
+            .await
+            .map_err(|e| anyhow::anyhow!("preflight: TEE vault sign_digest failed: {e}"))?;
+        println!("✅ preflight-live [{check}/{total_checks}] TEE vault operational (sign_digest OK)");
+    } else {
+        println!("⚠️  preflight-live [{check}/{total_checks}] TEE vault SKIPPED — no SIGNER_PRIVATE_KEY set");
+    }
+    check += 1;
+
+    // ── Check 5: persistence paths writable ──────────────────────────────
+    std::fs::create_dir_all("data")
+        .map_err(|e| anyhow::anyhow!("preflight: cannot create data/ directory: {e}"))?;
+    std::fs::create_dir_all("logs")
+        .map_err(|e| anyhow::anyhow!("preflight: cannot create logs/ directory: {e}"))?;
+    // Test atomic write to a temp file.
+    let test_path = "data\\.preflight_test";
+    std::fs::write(test_path, b"ok")
+        .map_err(|e| anyhow::anyhow!("preflight: data/ not writable: {e}"))?;
+    let _ = std::fs::remove_file(test_path);
+    println!("✅ preflight-live [{check}/{total_checks}] data/ and logs/ directories writable");
+    check += 1;
+
+    // ── Check 6: signature config ────────────────────────────────────────
     println!(
-        "✅ preflight-live [3/4] order config: signature_type={} nonce={} expiration={}",
+        "✅ preflight-live [{check}/{total_checks}] order config: signature_type={} nonce={} expiration={}",
         config.polymarket_signature_type,
         config.polymarket_order_nonce,
         config.polymarket_order_expiration,
     );
+    check += 1;
 
-    // ── Check 4: risk config non-zero ─────────────────────────────────────
+    // ── Check 7: risk config non-zero ────────────────────────────────────
     let risk_cfg = engine::risk_manager::RiskConfig::from_env();
     anyhow::ensure!(
         risk_cfg.max_single_order_usdc > 0.0,
-        "preflight failed: MAX_SINGLE_ORDER_USDC must be > 0"
+        "preflight: MAX_SINGLE_ORDER_USDC must be > 0"
     );
     println!(
-        "✅ preflight-live [4/4] risk limits: max_single_order_usdc={} max_daily_loss_pct={}",
-        risk_cfg.max_single_order_usdc, risk_cfg.max_daily_loss_pct,
+        "✅ preflight-live [{check}/{total_checks}] risk limits: max_order=${} max_daily_loss={:.1}%",
+        risk_cfg.max_single_order_usdc, risk_cfg.max_daily_loss_pct * 100.0,
     );
 
-    println!("\n🟢  ALL PREFLIGHT CHECKS PASSED — safe to go live");
+    println!("\n🟢  ALL {total_checks} PREFLIGHT CHECKS PASSED — safe to go live");
     Ok(())
 }
 

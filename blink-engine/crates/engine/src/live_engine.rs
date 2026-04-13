@@ -411,7 +411,7 @@ impl LiveEngine {
         };
 
         if !accepted {
-            self.bump_reject_streak();
+            self.bump_reject_streak().await;
             warn!(
                 token_id = %signal.token_id,
                 side = %signal.side,
@@ -519,32 +519,43 @@ impl LiveEngine {
         Ok(())
     }
 
-    fn bump_reject_streak(&self) {
-        let mut state = self.canary_state.lock().unwrap();
-        state.reject_streak += 1;
-        if state.reject_streak >= self.canary_policy.max_reject_streak {
-            state.halted = true;
-            let _ = std::fs::write(
-                "logs\\CANARY_HALTED.flag",
-                format!(
-                    "halted=true reject_streak={} threshold={}\n",
-                    state.reject_streak, self.canary_policy.max_reject_streak
-                ),
-            );
-            error!(
-                reject_streak = state.reject_streak,
-                threshold = self.canary_policy.max_reject_streak,
-                "CANARY HALTED: operator intervention required"
-            );
-            if let Some(ref log) = self.activity {
-                log_push(
-                    log,
-                    EntryKind::Warn,
+    async fn bump_reject_streak(&self) {
+        let should_cancel = {
+            let mut state = self.canary_state.lock().unwrap();
+            state.reject_streak += 1;
+            if state.reject_streak >= self.canary_policy.max_reject_streak {
+                state.halted = true;
+                let _ = std::fs::write(
+                    "logs\\CANARY_HALTED.flag",
                     format!(
-                        "CANARY HALTED: reject_streak={} threshold={} (logs\\CANARY_HALTED.flag)",
+                        "halted=true reject_streak={} threshold={}\n",
                         state.reject_streak, self.canary_policy.max_reject_streak
                     ),
                 );
+                error!(
+                    reject_streak = state.reject_streak,
+                    threshold = self.canary_policy.max_reject_streak,
+                    "CANARY HALTED: cancelling open orders + operator intervention required"
+                );
+                if let Some(ref log) = self.activity {
+                    log_push(
+                        log,
+                        EntryKind::Warn,
+                        format!(
+                            "CANARY HALTED: reject_streak={} threshold={} — cancelling all open orders",
+                            state.reject_streak, self.canary_policy.max_reject_streak
+                        ),
+                    );
+                }
+                true
+            } else {
+                false
+            }
+        }; // drop std::sync::Mutex before .await
+        if should_cancel {
+            match self.executor.cancel_all_orders().await {
+                Ok(()) => info!("Canary halt: all open orders cancelled"),
+                Err(e) => error!(error = %e, "Canary halt: cancel_all_orders failed"),
             }
         }
     }
@@ -699,7 +710,7 @@ impl LiveEngine {
                             format!("NO FILL {token_id}: {reason}"),
                         );
                     }
-                    self.bump_reject_streak();
+                    self.bump_reject_streak().await;
                     resolved += 1;
                     self.failsafe_metrics.lock().unwrap().no_fills += 1;
                     self.pending_orders.lock().await.remove(&order_id);
@@ -926,7 +937,34 @@ fn load_pending_orders_wal() -> HashMap<String, PendingOrder> {
     let _ = std::fs::create_dir_all("data");
     match std::fs::read_to_string(PENDING_ORDERS_FILE) {
         Ok(contents) if !contents.trim().is_empty() => {
-            match serde_json::from_str::<Vec<PendingOrderRecord>>(&contents) {
+            // Parse checksum-wrapped format: first line = "CRC32:<hex>", rest = JSON
+            let (json_part, expected_crc) = if let Some(rest) = contents.strip_prefix("CRC32:") {
+                if let Some(newline_pos) = rest.find('\n') {
+                    let crc_hex = rest[..newline_pos].trim();
+                    let payload = &rest[newline_pos + 1..];
+                    let expected = u32::from_str_radix(crc_hex, 16).ok();
+                    (payload.to_string(), expected)
+                } else {
+                    (contents.clone(), None)
+                }
+            } else {
+                // Legacy format without checksum — accept as-is
+                (contents.clone(), None)
+            };
+
+            if let Some(expected) = expected_crc {
+                let actual = crc32_simple(json_part.as_bytes());
+                if actual != expected {
+                    error!(
+                        expected = format!("{:08x}", expected),
+                        actual = format!("{:08x}", actual),
+                        "WAL checksum mismatch — file corrupted, starting with empty pending orders"
+                    );
+                    return HashMap::new();
+                }
+            }
+
+            match serde_json::from_str::<Vec<PendingOrderRecord>>(&json_part) {
                 Ok(records) => {
                     let mut map = HashMap::new();
                     for rec in records {
@@ -960,16 +998,35 @@ fn persist_pending_orders_wal(orders: &HashMap<String, PendingOrder>) {
         side: format!("{}", p.side),
         size_usdc: p.expected_size_usdc,
         price: p.submitted_price,
-        submitted_at: chrono::Utc::now().to_rfc3339(), // approximate — Instant is not serializable
+        submitted_at: chrono::Utc::now().to_rfc3339(),
     }).collect();
     match serde_json::to_string_pretty(&records) {
         Ok(json) => {
-            if let Err(e) = atomic_write(PENDING_ORDERS_FILE, json.as_bytes()) {
+            let crc = crc32_simple(json.as_bytes());
+            let with_checksum = format!("CRC32:{:08x}\n{}", crc, json);
+            if let Err(e) = atomic_write(PENDING_ORDERS_FILE, with_checksum.as_bytes()) {
                 warn!(error = %e, "Failed to persist pending orders WAL");
             }
         }
         Err(e) => warn!(error = %e, "Failed to serialize pending orders"),
     }
+}
+
+/// Minimal CRC32 (IEEE/ISO 3309 polynomial). No external crate needed — the
+/// WAL is small (<10 KB) so performance is irrelevant.
+fn crc32_simple(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    !crc
 }
 
 /// Atomic file write: write to .tmp then rename (prevents corruption on crash).

@@ -442,6 +442,7 @@ async fn main() -> Result<()> {
     let mut tui_thread: Option<std::thread::JoinHandle<()>> = None;
     let mut paper_for_persist: Option<Arc<PaperEngine>> = None;
     let mut live_for_web: Option<Arc<engine::live_engine::LiveEngine>> = None;
+    let mut live_for_shutdown: Option<Arc<engine::live_engine::LiveEngine>> = None;
     
     let twin_enabled = env_flag("BLINK_TWIN");
     let twin_engine = if twin_enabled {
@@ -776,12 +777,14 @@ async fn main() -> Result<()> {
             Some(activity.clone()),
         ));
         live_for_web = Some(Arc::clone(&live));
+        live_for_shutdown = Some(Arc::clone(&live));
         Arc::clone(&live).spawn_reconciliation_worker();
 
-        // Spawn heartbeat — keeps the Polymarket session alive every 29s.
+        // Spawn heartbeat — keeps the Polymarket session alive every 8s.
         {
             let hb_executor = live.executor.clone();
-            let hb_metrics = engine::heartbeat::spawn_heartbeat_worker(hb_executor, None);
+            let hb_risk = Arc::clone(&live.risk);
+            let hb_metrics = engine::heartbeat::spawn_heartbeat_worker(hb_executor, None, Some(hb_risk));
             let l = Arc::clone(&live);
             tokio::spawn(async move {
                 let mut t = tokio::time::interval(Duration::from_secs(30));
@@ -826,6 +829,26 @@ async fn main() -> Result<()> {
                         heartbeat_fail = fs.heartbeat_fail_count,
                         "Live SLO heartbeat"
                     );
+                }
+            });
+        }
+        // ── Daily risk reset (UTC midnight) ───────────────────────────────
+        {
+            let risk_for_reset = Arc::clone(&live.risk);
+            let sd = Arc::clone(&shutdown);
+            tokio::spawn(async move {
+                loop {
+                    // Sleep until next UTC midnight.
+                    let now = chrono::Utc::now();
+                    let tomorrow = (now + chrono::Duration::days(1)).date_naive().and_hms_opt(0, 0, 0).unwrap();
+                    let until_midnight = chrono::NaiveDateTime::signed_duration_since(tomorrow, now.naive_utc());
+                    let secs = until_midnight.num_seconds().max(1) as u64;
+                    tracing::info!(secs_until_reset = secs, "Daily risk reset scheduled");
+                    tokio::time::sleep(Duration::from_secs(secs)).await;
+
+                    if sd.load(Ordering::Relaxed) { break; }
+                    risk_for_reset.lock().unwrap().reset_daily();
+                    tracing::info!("🔄 Daily risk counters reset (UTC midnight)");
                 }
             });
         }
@@ -1088,6 +1111,19 @@ async fn main() -> Result<()> {
     drop(signal_tx);
     signal_task.abort();
     let _ = tokio::time::timeout(Duration::from_secs(2), signal_task).await;
+
+    // ── Live mode: graceful shutdown with reconciliation + state persist ──
+    if let Some(live) = live_for_shutdown.take() {
+        info!("Running live engine graceful shutdown (reconcile + cancel + persist)…");
+        let shutdown_timeout = tokio::time::timeout(
+            Duration::from_secs(30),
+            live.graceful_shutdown(),
+        ).await;
+        if shutdown_timeout.is_err() {
+            tracing::warn!("Live engine graceful shutdown timed out after 30s");
+        }
+    }
+
     if paper_mode {
         let paper_state_path = std::env::var("PAPER_STATE_PATH")
             .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());

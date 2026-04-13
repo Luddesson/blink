@@ -18,6 +18,13 @@ use crate::risk_manager::{RiskConfig, RiskManager};
 use crate::truth_reconciler::{PendingOrder, process_order_status, ReconciliationOutcome};
 use crate::types::{OrderSide, RN1Signal, TimeInForce};
 
+// ─── Persistence paths ────────────────────────────────────────────────────────
+
+const NONCE_FILE:          &str = "data\\live_nonce.json";
+const PENDING_ORDERS_FILE: &str = "data\\pending_orders.json";
+/// Safety gap added to persisted nonce on restart to avoid replays.
+const NONCE_RESTART_GAP: u64 = 100;
+
 pub struct LiveEngine {
     pub portfolio: Arc<Mutex<PaperPortfolio>>,
     book_store: Arc<OrderBookStore>,
@@ -174,6 +181,16 @@ impl LiveEngine {
             None
         };
 
+        // ── Load persisted nonce (with safety gap) ────────────────────────
+        let starting_nonce = load_persisted_nonce(config.polymarket_order_nonce);
+
+        // ── Restore pending orders from WAL ───────────────────────────────
+        let restored_pending = load_pending_orders_wal();
+        let restored_count = restored_pending.len();
+        if restored_count > 0 {
+            info!(count = restored_count, "Restored pending orders from WAL — will reconcile on first pass");
+        }
+
         Self {
             portfolio: Arc::new(Mutex::new(PaperPortfolio::new())),
             book_store,
@@ -185,8 +202,8 @@ impl LiveEngine {
             mev_router: mev,
             accounted_closed_trades: Mutex::new(0),
             signing_policy,
-            nonce_counter: AtomicU64::new(config.polymarket_order_nonce),
-            pending_orders: Mutex::new(HashMap::new()),
+            nonce_counter: AtomicU64::new(starting_nonce),
+            pending_orders: Mutex::new(restored_pending),
             reconcile_interval: Duration::from_secs(reconcile_interval_secs),
             failsafe_metrics: std::sync::Mutex::new(FailsafeMetrics::default()),
             canary_policy,
@@ -355,7 +372,9 @@ impl LiveEngine {
         } else {
             let vault = self.vault.as_ref().unwrap();
             let mut policy = self.signing_policy;
-            policy.nonce = self.nonce_counter.fetch_add(1, Ordering::Relaxed);
+            let new_nonce = self.nonce_counter.fetch_add(1, Ordering::Relaxed);
+            policy.nonce = new_nonce;
+            persist_nonce(new_nonce + 1); // persist the NEXT expected nonce
             match sign_order_with_vault_policy(vault.as_ref(), &params, policy) {
                 Ok(signed) => {
                     match self.executor.submit_order(&signed, TimeInForce::Gtc).await {
@@ -421,16 +440,20 @@ impl LiveEngine {
         // For dry-run orders (no exchange_order_id): record the fill
         // immediately because there is no exchange to confirm against.
         if let Some(order_id) = exchange_order_id {
-            self.pending_orders.lock().await.insert(
-                order_id.clone(),
-                PendingOrder::new(
-                    order_id,
-                    signal.token_id.clone(),
-                    signal.side,
-                    size_usdc,
-                    entry_price,
-                ),
-            );
+            {
+                let mut map = self.pending_orders.lock().await;
+                map.insert(
+                    order_id.clone(),
+                    PendingOrder::new(
+                        order_id.clone(),
+                        signal.token_id.clone(),
+                        signal.side,
+                        size_usdc,
+                        entry_price,
+                    ),
+                );
+                persist_pending_orders_wal(&map);
+            }
             info!(
                 token_id      = %signal.token_id,
                 expected_usdc = size_usdc,
@@ -708,7 +731,10 @@ impl LiveEngine {
         }
 
         if resolved > 0 {
-            let pending = self.pending_orders.lock().await.len();
+            let pending_map = self.pending_orders.lock().await;
+            let pending = pending_map.len();
+            persist_pending_orders_wal(&pending_map);
+            drop(pending_map);
             info!(resolved, fills_recorded, pending, "Reconciliation pass completed");
         }
     }
@@ -813,6 +839,155 @@ impl LiveEngine {
             "🚨 EMERGENCY STOP complete — trading halted. See logs/EMERGENCY_STOP.flag"
         );
     }
+
+    /// Graceful shutdown: run final reconciliation, cancel remaining orders,
+    /// persist all state, then return cleanly.
+    pub async fn graceful_shutdown(&self) {
+        info!("🛑 Live engine graceful shutdown initiated");
+
+        // 1. Run final reconciliation passes (up to 3 attempts, 30s total max).
+        for attempt in 1..=3 {
+            self.run_reconciliation_pass().await;
+            let remaining = self.pending_orders.lock().await.len();
+            if remaining == 0 {
+                info!(attempt, "All pending orders reconciled");
+                break;
+            }
+            if attempt < 3 {
+                info!(remaining, attempt, "Pending orders remain — retrying reconciliation");
+                sleep(Duration::from_secs(5)).await;
+            } else {
+                warn!(remaining, "Pending orders still unresolved after 3 reconciliation attempts");
+            }
+        }
+
+        // 2. Cancel any remaining open orders on the exchange.
+        let remaining = self.pending_orders.lock().await.len();
+        if remaining > 0 {
+            warn!(remaining, "Cancelling remaining open orders on exchange");
+            match self.executor.cancel_all_orders().await {
+                Ok(())  => info!("Shutdown: cancel_all_orders succeeded"),
+                Err(e)  => error!("Shutdown: cancel_all_orders failed: {e}"),
+            }
+        }
+
+        // 3. Persist final state.
+        let map = self.pending_orders.lock().await;
+        persist_pending_orders_wal(&map);
+        drop(map);
+        let nonce = self.nonce_counter.load(Ordering::Relaxed);
+        persist_nonce(nonce);
+
+        info!(final_nonce = nonce, "🛑 Live engine shutdown complete — state persisted");
+    }
+}
+
+// ─── Nonce Persistence ────────────────────────────────────────────────────────
+
+fn load_persisted_nonce(config_default: u64) -> u64 {
+    let _ = std::fs::create_dir_all("data");
+    match std::fs::read_to_string(NONCE_FILE) {
+        Ok(contents) => {
+            match serde_json::from_str::<serde_json::Value>(&contents) {
+                Ok(val) => {
+                    let persisted = val["nonce"].as_u64().unwrap_or(config_default);
+                    let safe_nonce = persisted + NONCE_RESTART_GAP;
+                    info!(
+                        persisted_nonce = persisted,
+                        safe_nonce,
+                        gap = NONCE_RESTART_GAP,
+                        "Loaded nonce from {NONCE_FILE} — adding safety gap"
+                    );
+                    safe_nonce
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to parse {NONCE_FILE} — using config default {config_default}");
+                    config_default
+                }
+            }
+        }
+        Err(_) => {
+            info!(default = config_default, "No persisted nonce found — using config default");
+            config_default
+        }
+    }
+}
+
+fn persist_nonce(nonce: u64) {
+    let json = format!("{{\"nonce\":{},\"updated\":\"{}\"}}", nonce, chrono::Utc::now().to_rfc3339());
+    if let Err(e) = atomic_write(NONCE_FILE, json.as_bytes()) {
+        warn!(error = %e, nonce, "Failed to persist nonce");
+    }
+}
+
+// ─── Pending Orders WAL ───────────────────────────────────────────────────────
+
+fn load_pending_orders_wal() -> HashMap<String, PendingOrder> {
+    let _ = std::fs::create_dir_all("data");
+    match std::fs::read_to_string(PENDING_ORDERS_FILE) {
+        Ok(contents) if !contents.trim().is_empty() => {
+            match serde_json::from_str::<Vec<PendingOrderRecord>>(&contents) {
+                Ok(records) => {
+                    let mut map = HashMap::new();
+                    for rec in records {
+                        let side = match rec.side.to_uppercase().as_str() {
+                            "BUY" => OrderSide::Buy,
+                            _ => OrderSide::Sell,
+                        };
+                        map.insert(
+                            rec.order_id.clone(),
+                            PendingOrder::new(
+                                rec.order_id, rec.token_id, side, rec.size_usdc, rec.price,
+                            ),
+                        );
+                    }
+                    map
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to parse {PENDING_ORDERS_FILE} — starting with empty pending orders");
+                    HashMap::new()
+                }
+            }
+        }
+        _ => HashMap::new(),
+    }
+}
+
+fn persist_pending_orders_wal(orders: &HashMap<String, PendingOrder>) {
+    let records: Vec<PendingOrderRecord> = orders.values().map(|p| PendingOrderRecord {
+        order_id: p.exchange_order_id.clone(),
+        token_id: p.token_id.clone(),
+        side: format!("{}", p.side),
+        size_usdc: p.expected_size_usdc,
+        price: p.submitted_price,
+        submitted_at: chrono::Utc::now().to_rfc3339(), // approximate — Instant is not serializable
+    }).collect();
+    match serde_json::to_string_pretty(&records) {
+        Ok(json) => {
+            if let Err(e) = atomic_write(PENDING_ORDERS_FILE, json.as_bytes()) {
+                warn!(error = %e, "Failed to persist pending orders WAL");
+            }
+        }
+        Err(e) => warn!(error = %e, "Failed to serialize pending orders"),
+    }
+}
+
+/// Atomic file write: write to .tmp then rename (prevents corruption on crash).
+fn atomic_write(path: &str, data: &[u8]) -> std::io::Result<()> {
+    let tmp = format!("{path}.tmp");
+    std::fs::write(&tmp, data)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PendingOrderRecord {
+    order_id:     String,
+    token_id:     String,
+    side:         String,
+    size_usdc:    f64,
+    price:        f64,
+    submitted_at: String,
 }
 
 fn classify_intent_from_counts(same_side: usize, opposite_side: usize) -> SignalIntent {

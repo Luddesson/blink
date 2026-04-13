@@ -25,18 +25,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::order_executor::OrderExecutor;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-/// Default heartbeat interval.  Polymarket recommends ≤ 30 s.
-const DEFAULT_INTERVAL_SECS: u64 = 15;
+/// Default heartbeat interval — 8 s gives safe margin below 29 s expiry.
+const DEFAULT_INTERVAL_SECS: u64 = 8;
 /// Minimum allowed interval — prevents accidental hammering.
 const MIN_INTERVAL_SECS:     u64 = 5;
 /// Maximum allowed interval — beyond this the session risks expiry.
 const MAX_INTERVAL_SECS:     u64 = 29;
+/// Consecutive failures before tripping the circuit breaker.
+const CONSECUTIVE_FAIL_THRESHOLD: u64 = 3;
 
 // ─── SLO counters ─────────────────────────────────────────────────────────────
 
@@ -48,6 +50,8 @@ pub struct HeartbeatMetrics {
     pub ok_count:      AtomicU64,
     /// Total heartbeats that received a non-2xx or network error response.
     pub fail_count:    AtomicU64,
+    /// Consecutive failures since the last success (resets on OK).
+    pub consecutive_fails: AtomicU64,
     /// Unix-ms timestamp of the last successful heartbeat (0 = never).
     pub last_ok_ms:    AtomicU64,
 }
@@ -55,9 +59,10 @@ pub struct HeartbeatMetrics {
 impl HeartbeatMetrics {
     pub fn snapshot(&self) -> HeartbeatSnapshot {
         HeartbeatSnapshot {
-            ok_count:   self.ok_count.load(Ordering::Relaxed),
-            fail_count: self.fail_count.load(Ordering::Relaxed),
-            last_ok_ms: self.last_ok_ms.load(Ordering::Relaxed),
+            ok_count:          self.ok_count.load(Ordering::Relaxed),
+            fail_count:        self.fail_count.load(Ordering::Relaxed),
+            consecutive_fails: self.consecutive_fails.load(Ordering::Relaxed),
+            last_ok_ms:        self.last_ok_ms.load(Ordering::Relaxed),
         }
     }
 }
@@ -65,8 +70,9 @@ impl HeartbeatMetrics {
 /// Point-in-time snapshot of heartbeat health for dashboards / alerts.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HeartbeatSnapshot {
-    pub ok_count:   u64,
-    pub fail_count: u64,
+    pub ok_count:          u64,
+    pub fail_count:        u64,
+    pub consecutive_fails: u64,
     /// Last successful heartbeat timestamp in Unix milliseconds.
     pub last_ok_ms: u64,
 }
@@ -95,11 +101,14 @@ impl HeartbeatSnapshot {
 /// * `executor` — An `OrderExecutor` configured with live credentials.
 /// * `metrics`  — Optional shared metrics handle; if `None` a new one is
 ///   allocated internally (useful when callers don't need to read counters).
+/// * `risk` — Optional shared risk manager for tripping circuit breaker on
+///   consecutive heartbeat failures.
 ///
 /// Returns the `Arc<HeartbeatMetrics>` handle so callers can read SLO state.
 pub fn spawn_heartbeat_worker(
     executor: OrderExecutor,
     metrics:  Option<Arc<HeartbeatMetrics>>,
+    risk:     Option<Arc<std::sync::Mutex<crate::risk_manager::RiskManager>>>,
 ) -> Arc<HeartbeatMetrics> {
     let metrics = metrics.unwrap_or_default();
     let m       = Arc::clone(&metrics);
@@ -125,13 +134,27 @@ pub fn spawn_heartbeat_worker(
                         .map(|d| d.as_millis() as u64)
                         .unwrap_or(0);
                     m.ok_count.fetch_add(1, Ordering::Relaxed);
+                    m.consecutive_fails.store(0, Ordering::Relaxed);
                     m.last_ok_ms.store(now_ms, Ordering::Relaxed);
                     info!("💓 Heartbeat OK");
                 }
                 Err(e) => {
                     m.fail_count.fetch_add(1, Ordering::Relaxed);
-                    let fails = m.fail_count.load(Ordering::Relaxed);
-                    warn!(error = %e, consecutive_fails = fails, "💔 Heartbeat failed — session may degrade");
+                    let consec = m.consecutive_fails.fetch_add(1, Ordering::Relaxed) + 1;
+                    warn!(error = %e, consecutive_fails = consec, "💔 Heartbeat failed — session may degrade");
+
+                    if consec >= CONSECUTIVE_FAIL_THRESHOLD {
+                        if let Some(ref risk) = risk {
+                            error!(
+                                consecutive_fails = consec,
+                                threshold = CONSECUTIVE_FAIL_THRESHOLD,
+                                "🚨 Heartbeat dead — tripping circuit breaker to protect open orders"
+                            );
+                            risk.lock().unwrap().trip_circuit_breaker(
+                                &format!("heartbeat_dead_{}consecutive_failures", consec),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -148,7 +171,7 @@ mod tests {
 
     #[test]
     fn snapshot_stale_when_never_sent() {
-        let snap = HeartbeatSnapshot { ok_count: 0, fail_count: 0, last_ok_ms: 0 };
+        let snap = HeartbeatSnapshot { ok_count: 0, fail_count: 0, last_ok_ms: 0, consecutive_fails: 0 };
         assert!(snap.is_stale(30_000));
     }
 
@@ -158,7 +181,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let snap = HeartbeatSnapshot { ok_count: 1, fail_count: 0, last_ok_ms: now_ms };
+        let snap = HeartbeatSnapshot { ok_count: 1, fail_count: 0, last_ok_ms: now_ms, consecutive_fails: 0 };
         assert!(!snap.is_stale(30_000));
     }
 
@@ -170,7 +193,7 @@ mod tests {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0)
             .saturating_sub(60_001);
-        let snap = HeartbeatSnapshot { ok_count: 5, fail_count: 0, last_ok_ms: old_ms };
+        let snap = HeartbeatSnapshot { ok_count: 5, fail_count: 0, last_ok_ms: old_ms, consecutive_fails: 0 };
         assert!(snap.is_stale(60_000));
     }
 }

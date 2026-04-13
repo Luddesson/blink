@@ -17,6 +17,8 @@
 //! - No type containing key material implements [`Debug`].
 //! - `clippy::mem_forget` is denied crate-wide to prevent accidental key leaks.
 
+pub mod keystore;
+
 use anyhow::{Context, Result};
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{RecoveryId, Signature, SigningKey, VerifyingKey};

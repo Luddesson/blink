@@ -69,6 +69,18 @@ async fn main() -> Result<()> {
     }
 
     let args: Vec<String> = std::env::args().collect();
+
+    // ── Wallet/keystore CLI commands (no .env needed) ─────────────────────
+    if args.iter().any(|a| a == "--generate-wallet") {
+        return run_generate_wallet(&args);
+    }
+    if args.iter().any(|a| a == "--encrypt-key") {
+        return run_encrypt_key(&args);
+    }
+    if args.iter().any(|a| a == "--decrypt-key") {
+        return run_decrypt_key(&args);
+    }
+
     if let Some(pos) = args.iter().position(|a| a == "--backtest") {
         let csv_path = args
             .get(pos + 1)
@@ -1653,4 +1665,163 @@ fn write_postrun_review(session_log_path: &str) -> Result<String> {
 
     std::fs::write("logs\\LATEST_POSTRUN_REVIEW.txt", format!("{out_path}\n"))?;
     Ok(out_path)
+}
+
+// ─── Wallet / Keystore CLI ──────────────────────────────────────────────────
+
+/// Generate a fresh secp256k1 keypair for Polymarket order signing.
+fn run_generate_wallet(args: &[String]) -> Result<()> {
+    use tee_vault::keystore;
+
+    let (private_key, address) = keystore::generate_keypair()?;
+
+    println!("╔══════════════════════════════════════════════════════════╗");
+    println!("║           🔑 BLINK WALLET GENERATED                    ║");
+    println!("╠══════════════════════════════════════════════════════════╣");
+    println!("║ Address (signer):  {address}  ║");
+    println!("╠══════════════════════════════════════════════════════════╣");
+    println!("║ Private Key:                                           ║");
+    println!("║ {} ║", &*private_key);
+    println!("╠══════════════════════════════════════════════════════════╣");
+    println!("║ ⚠️  SAVE THIS KEY NOW — it will NOT be shown again!    ║");
+    println!("╚══════════════════════════════════════════════════════════╝");
+
+    // Optionally encrypt to keystore
+    if let Some(pos) = args.iter().position(|a| a == "--save") {
+        let path = args
+            .get(pos + 1)
+            .map(|s| s.as_str())
+            .unwrap_or("data/keystore.json");
+
+        let passphrase = std::env::var("KEYSTORE_PASSPHRASE").unwrap_or_else(|_| {
+            eprint!("Enter keystore passphrase: ");
+            let mut buf = String::new();
+            std::io::stdin().read_line(&mut buf).expect("read passphrase");
+            buf.trim().to_string()
+        });
+
+        if passphrase.len() < 8 {
+            anyhow::bail!("passphrase must be at least 8 characters");
+        }
+
+        let secrets = keystore::KeystoreSecrets {
+            signer_private_key: private_key.to_string(),
+            funder_address: String::new(), // filled after Polymarket registration
+            api_key: String::new(),
+            api_secret: String::new(),
+            api_passphrase: String::new(),
+        };
+
+        let p = std::path::Path::new(path);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        keystore::encrypt_keystore(&secrets, &passphrase, p)?;
+        println!("\n✅ Encrypted keystore saved to: {path}");
+        println!("   Run --encrypt-key later to add API credentials after Polymarket registration.");
+    }
+
+    println!("\n📋 NEXT STEPS:");
+    println!("   1. Register on Polymarket with this address");
+    println!("   2. Deposit USDC on Polygon to your Polymarket proxy wallet");
+    println!("   3. Get CLOB API credentials (api_key, api_secret, api_passphrase)");
+    println!("   4. Run: cargo run -p engine -- --encrypt-key data/keystore.json");
+    println!("   5. Run: cargo run -p engine -- --preflight-live");
+
+    Ok(())
+}
+
+/// Encrypt credentials into a keystore file (or update existing).
+fn run_encrypt_key(args: &[String]) -> Result<()> {
+    use tee_vault::keystore;
+
+    let path = args
+        .iter()
+        .position(|a| a == "--encrypt-key")
+        .and_then(|pos| args.get(pos + 1))
+        .map(|s| s.as_str())
+        .unwrap_or("data/keystore.json");
+
+    println!("🔐 Encrypting credentials to: {path}");
+    println!("   (Set env vars to avoid prompts: SIGNER_PRIVATE_KEY, POLYMARKET_FUNDER_ADDRESS, etc.)\n");
+
+    let read_env_or_prompt = |var: &str, prompt: &str| -> String {
+        std::env::var(var).unwrap_or_else(|_| {
+            eprint!("{prompt}: ");
+            let mut buf = String::new();
+            std::io::stdin().read_line(&mut buf).expect("read input");
+            buf.trim().to_string()
+        })
+    };
+
+    let signer_key = read_env_or_prompt("SIGNER_PRIVATE_KEY", "Signer private key (hex, 64 chars)");
+    let funder = read_env_or_prompt("POLYMARKET_FUNDER_ADDRESS", "Funder address (0x...)");
+    let api_key = read_env_or_prompt("POLYMARKET_API_KEY", "API key");
+    let api_secret = read_env_or_prompt("POLYMARKET_API_SECRET", "API secret (base64)");
+    let api_passphrase = read_env_or_prompt("POLYMARKET_API_PASSPHRASE", "API passphrase");
+    let passphrase = read_env_or_prompt("KEYSTORE_PASSPHRASE", "Keystore encryption passphrase (min 8 chars)");
+
+    if passphrase.len() < 8 {
+        anyhow::bail!("passphrase must be at least 8 characters");
+    }
+    if signer_key.len() != 64 && signer_key.len() != 66 {
+        anyhow::bail!("signer private key must be 64 hex chars (or 66 with 0x prefix)");
+    }
+
+    let clean_key = signer_key.strip_prefix("0x").unwrap_or(&signer_key).to_string();
+
+    let secrets = keystore::KeystoreSecrets {
+        signer_private_key: clean_key,
+        funder_address: funder,
+        api_key,
+        api_secret,
+        api_passphrase,
+    };
+
+    let p = std::path::Path::new(path);
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    keystore::encrypt_keystore(&secrets, &passphrase, p)?;
+
+    println!("\n✅ Keystore encrypted and saved to: {path}");
+    println!("   You can now set KEYSTORE_PATH={path} and KEYSTORE_PASSPHRASE in .env");
+    println!("   and remove the plaintext SIGNER_PRIVATE_KEY from .env.");
+
+    Ok(())
+}
+
+/// Decrypt and display keystore contents (redacted).
+fn run_decrypt_key(args: &[String]) -> Result<()> {
+    use tee_vault::keystore;
+
+    let path = args
+        .iter()
+        .position(|a| a == "--decrypt-key")
+        .and_then(|pos| args.get(pos + 1))
+        .map(|s| s.as_str())
+        .unwrap_or("data/keystore.json");
+
+    let passphrase = std::env::var("KEYSTORE_PASSPHRASE").unwrap_or_else(|_| {
+        eprint!("Enter keystore passphrase: ");
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf).expect("read input");
+        buf.trim().to_string()
+    });
+
+    let secrets = keystore::decrypt_keystore(std::path::Path::new(path), &passphrase)?;
+
+    let mask = |s: &str| -> String {
+        if s.len() <= 8 { "****".into() }
+        else { format!("{}…{}", &s[..4], &s[s.len()-4..]) }
+    };
+
+    println!("✅ Keystore decrypted successfully: {path}");
+    println!("   Signer key:      {}", mask(&secrets.signer_private_key));
+    println!("   Funder address:   {}", if secrets.funder_address.is_empty() { "(not set)".into() } else { secrets.funder_address.clone() });
+    println!("   API key:          {}", mask(&secrets.api_key));
+    println!("   API secret:       {}", mask(&secrets.api_secret));
+    println!("   API passphrase:   {}", mask(&secrets.api_passphrase));
+
+    Ok(())
 }

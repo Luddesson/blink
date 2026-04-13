@@ -453,6 +453,17 @@ impl PaperEngine {
             }
         }
 
+        // ── Entry delay: wait for order book to stabilize after RN1's order ──
+        let entry_delay_secs: u64 = std::env::var("ENTRY_DELAY_SECS")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        if entry_delay_secs > 0 {
+            let age = signal.detected_at.elapsed();
+            if age < std::time::Duration::from_secs(entry_delay_secs) {
+                let wait = std::time::Duration::from_secs(entry_delay_secs) - age;
+                tokio::time::sleep(wait).await;
+            }
+        }
+
         // ── Per-token dedup: skip if we already hold a position on this token ──
         {
             let mut p = self.portfolio.lock().await;
@@ -960,13 +971,16 @@ impl PaperEngine {
         size_usdc *= drawdown_sizing_mult;
 
         // 3. Price-confidence: reduce size for mid-range prices (peak uncertainty at 0.50)
+        //    Uses quadratic curve: prices at 0.50 get max discount, prices at edges get none.
         {
             let discount = std::env::var("PAPER_CONFIDENCE_DISCOUNT")
                 .ok()
                 .and_then(|v| v.parse::<f64>().ok())
-                .unwrap_or(0.35)
-                .clamp(0.0, 0.75);
-            let uncertainty = 1.0 - (2.0 * (entry_price - 0.5).abs()).clamp(0.0, 1.0);
+                .unwrap_or(0.50)
+                .clamp(0.0, 0.90);
+            // Quadratic: uncertainty peaks at 0.50, zero at 0.0/1.0
+            let dist = (entry_price - 0.5).abs(); // 0.0 at center, 0.5 at edges
+            let uncertainty = (1.0 - 2.0 * dist).max(0.0).powi(2); // quadratic falloff
             size_usdc *= 1.0 - discount * uncertainty;
         }
 

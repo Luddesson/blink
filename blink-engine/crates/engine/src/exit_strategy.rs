@@ -118,6 +118,8 @@ pub struct ExitConfig {
     pub momentum_exit_fraction: f64,
     /// How often (secs) the momentum reference price is refreshed by autoclaim.
     pub momentum_check_interval_secs: u64,
+    /// Grace period (secs): suppress adverse momentum exits for newly opened positions.
+    pub momentum_grace_secs: u64,
 }
 
 impl ExitConfig {
@@ -125,7 +127,7 @@ impl ExitConfig {
     pub fn from_env() -> Self {
         Self {
             autoclaim_tiers: parse_autoclaim_tiers_from_env(),
-            stop_loss_pct: env_f64("STOP_LOSS_PCT", 25.0).clamp(1.0, 99.0),
+            stop_loss_pct: env_f64("STOP_LOSS_PCT", 40.0).clamp(1.0, 99.0),
             stop_loss_small_pct: env_f64("STOP_LOSS_SMALL_PCT", 20.0).clamp(1.0, 99.0),
             stop_loss_small_notional_usdc: env_f64("STOP_LOSS_SMALL_NOTIONAL_USDC", 6.0),
             trailing_stop_activate_pct: env_f64("TRAILING_STOP_ACTIVATE_PCT", 15.0),
@@ -140,6 +142,7 @@ impl ExitConfig {
             momentum_exit_threshold_bps: env_u64("MOMENTUM_EXIT_THRESHOLD_BPS", 150),
             momentum_exit_fraction: env_f64("MOMENTUM_EXIT_FRACTION", 0.5).clamp(0.1, 1.0),
             momentum_check_interval_secs: env_u64("MOMENTUM_CHECK_INTERVAL_SECS", 60),
+            momentum_grace_secs: env_u64("MOMENTUM_GRACE_SECS", 60),
         }
     }
 }
@@ -147,8 +150,8 @@ impl ExitConfig {
 impl Default for ExitConfig {
     fn default() -> Self {
         Self {
-            autoclaim_tiers: vec![(40.0, 0.30), (70.0, 0.30), (100.0, 1.0)],
-            stop_loss_pct: 25.0,
+            autoclaim_tiers: vec![(60.0, 0.30), (100.0, 0.30), (150.0, 1.0)],
+            stop_loss_pct: 40.0,
             stop_loss_small_pct: 20.0,
             stop_loss_small_notional_usdc: 6.0,
             trailing_stop_activate_pct: 15.0,
@@ -163,6 +166,7 @@ impl Default for ExitConfig {
             momentum_exit_threshold_bps: 150,
             momentum_exit_fraction: 0.5,
             momentum_check_interval_secs: 60,
+            momentum_grace_secs: 60,
         }
     }
 }
@@ -257,7 +261,10 @@ where
         }
 
         // 2.7. Adverse momentum exit (4A): exit profitable position if price moved adversely.
-        if config.momentum_exit_threshold_bps > 0 && pnl_pct > 0.0 {
+        //      Grace period: skip if position is younger than momentum_grace_secs.
+        if config.momentum_exit_threshold_bps > 0 && pnl_pct > 0.0
+            && held_secs >= config.momentum_grace_secs
+        {
             let now_ts = chrono::Utc::now().timestamp();
             if now_ts - pos.momentum_ref_ts >= config.momentum_check_interval_secs as i64 {
                 let price_change_bps = ((pos.current_price - pos.momentum_ref_price)
@@ -407,7 +414,7 @@ fn env_u64(key: &str, default: u64) -> u64 {
 
 fn parse_autoclaim_tiers_from_env() -> Vec<(f64, f64)> {
     let raw = std::env::var("AUTOCLAIM_TIERS")
-        .unwrap_or_else(|_| "40:0.30,70:0.30,100:1.0".to_string());
+        .unwrap_or_else(|_| "60:0.30,100:0.30,150:1.0".to_string());
     let mut out: Vec<(f64, f64)> = raw
         .split(',')
         .filter_map(|item| {

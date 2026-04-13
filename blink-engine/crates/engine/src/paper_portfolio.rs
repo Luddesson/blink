@@ -120,8 +120,8 @@ fn exit_slippage_bps() -> f64 {
     std::env::var("PAPER_EXIT_SLIPPAGE_BPS")
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(10.0)
-        .clamp(0.0, 200.0)
+        .unwrap_or(100.0)
+        .clamp(0.0, 500.0)
 }
 
 /// Apply exit slippage to a price: worsen the price by `exit_slippage_bps` bps.
@@ -509,13 +509,13 @@ impl PaperPortfolio {
         let min_floor_usdc = std::env::var("PAPER_MIN_ORDER_FLOOR_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(5.0)
+            .unwrap_or(2.0)
             .max(min_trade_usdc);
 
         let max_order_usdc = std::env::var("PAPER_MAX_ORDER_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(8.0)
+            .unwrap_or(4.0)
             .clamp(min_floor_usdc, 100.0);
 
         let raw        = rn1_notional_usdc * size_multiplier;
@@ -810,10 +810,10 @@ impl PaperPortfolio {
         if close_shares <= 0.0 {
             return false;
         }
-        // Dust guard: skip partial exits worth less than $0.10 to avoid
+        // Dust guard: skip partial exits worth less than $0.25 to avoid
         // flooding trade history with sub-penny closed trades.
         let close_usdc_spent = pos.usdc_spent * fraction;
-        if fraction < 0.999 && close_usdc_spent < 0.10 {
+        if fraction < 0.999 && close_usdc_spent < 0.25 {
             // Remaining position is dust — upgrade to full close.
             return self.close_position_fraction(idx, 1.0, reason);
         }
@@ -1105,10 +1105,10 @@ mod tests {
     #[test]
     fn size_capped_at_max_order() {
         let p = PaperPortfolio::new(); // NAV = 100
-        // RN1 trades $20,000 → 5% = $1,000, capped at max_order_usdc ($8 default)
+        // RN1 trades $20,000 → 5% = $1,000, capped at max_order_usdc ($4 default)
         let size = p.calculate_size_usdc(20_000.0).unwrap();
-        // Default PAPER_MAX_ORDER_USDC is $8 (tighter than NAV cap)
-        assert!((size - 8.0).abs() < 1e-9, "size={size} expected cap=8");
+        // Default PAPER_MAX_ORDER_USDC is $4 (tighter than NAV cap)
+        assert!((size - 4.0).abs() < 1e-9, "size={size} expected cap=4");
     }
 
     #[test]

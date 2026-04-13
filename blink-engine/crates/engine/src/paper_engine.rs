@@ -1005,6 +1005,8 @@ impl PaperEngine {
         {
             let imbalance_gate = std::env::var("IMBALANCE_GATE")
                 .ok().map(|v| v != "false" && v != "0").unwrap_or(true);
+            let imbalance_threshold = std::env::var("IMBALANCE_THRESHOLD")
+                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.50).clamp(0.05, 0.95);
             if imbalance_gate {
                 if let Some(book) = self.book_store.get_book_snapshot(&signal.token_id) {
                     let bid_depth: f64 = book.bids.values().map(|&s| s as f64).sum::<f64>() / 1_000.0;
@@ -1013,8 +1015,8 @@ impl PaperEngine {
                     if total > 0.0 {
                         let imbalance = (bid_depth - ask_depth) / total; // −1 (sell-heavy) to +1 (buy-heavy)
                         let blocked = match signal.side {
-                            OrderSide::Buy  => imbalance < -0.15,
-                            OrderSide::Sell => imbalance > 0.15,
+                            OrderSide::Buy  => imbalance < -imbalance_threshold,
+                            OrderSide::Sell => imbalance > imbalance_threshold,
                         };
                         if blocked {
                             warn!(

@@ -343,12 +343,12 @@ impl RiskManager {
                 "VaR breached: rolling ${:.2} > {:.1}% of NAV ${:.2}",
                 pending_exposure,
                 self.config.var_threshold_pct * 100.0,
-                starting_nav
+                effective_nav
             );
             return Err(RiskViolation::VarBreached {
                 exposure_usdc: pending_exposure,
                 threshold_usdc,
-                nav: starting_nav,
+                nav: effective_nav,
             });
         }
 

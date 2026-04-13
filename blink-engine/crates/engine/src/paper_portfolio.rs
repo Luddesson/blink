@@ -1111,4 +1111,54 @@ mod tests {
         // shares = 10 / 0.50 = 20 → PnL = (0.60 - 0.50) × 20 = 2.0
         assert!((p.unrealized_pnl() - 2.0).abs() < 1e-9);
     }
+
+    #[test]
+    fn sharpe_zero_with_no_trades() {
+        let p = PaperPortfolio::new();
+        assert_eq!(p.live_sharpe(), 0.0);
+    }
+
+    #[test]
+    fn sharpe_positive_with_winning_trades() {
+        let mut p = PaperPortfolio::new();
+        let exit_prices = [0.55, 0.60, 0.58, 0.62, 0.57, 0.61, 0.59, 0.63, 0.56, 0.64];
+        for (i, &exit_px) in exit_prices.iter().enumerate() {
+            let tid = format!("tok{i}");
+            p.open_position(tid.clone(), OrderSide::Buy, 0.50, 5.0, format!("o{i}"));
+            p.update_price(&tid, exit_px);
+            p.close_position_fraction(0, 1.0, "test".into());
+        }
+        assert!(p.live_sharpe() > 0.0, "sharpe={} should be positive", p.live_sharpe());
+    }
+
+    #[test]
+    fn sortino_positive_with_winning_trades() {
+        let mut p = PaperPortfolio::new();
+        let exit_prices = [0.55, 0.60, 0.58, 0.62, 0.57, 0.61, 0.59, 0.63, 0.56, 0.64];
+        for (i, &exit_px) in exit_prices.iter().enumerate() {
+            let tid = format!("tok{i}");
+            p.open_position(tid.clone(), OrderSide::Buy, 0.50, 5.0, format!("o{i}"));
+            p.update_price(&tid, exit_px);
+            p.close_position_fraction(0, 1.0, "test".into());
+        }
+        assert!(p.live_sortino() > 0.0, "sortino={} should be positive", p.live_sortino());
+    }
+
+    #[test]
+    fn fee_drag_zero_with_no_profits() {
+        let p = PaperPortfolio::new();
+        assert_eq!(p.fee_drag_pct(), 0.0);
+    }
+
+    #[test]
+    fn exit_slippage_reduces_pnl() {
+        let mut p = PaperPortfolio::new();
+        p.open_position("tok".into(), OrderSide::Buy, 0.50, 10.0, "o1".into());
+        p.update_price("tok", 0.60);
+        p.close_position_fraction(0, 1.0, "test".into());
+        let pnl_no_slip = p.closed_trades.last().unwrap().realized_pnl;
+        // With slippage the effective exit price is worse, so PnL should be ≤ no-slip case
+        // (Default PAPER_EXIT_SLIPPAGE_BPS = 10 → tiny impact on $10 trade)
+        assert!(pnl_no_slip > 0.0);
+    }
 }

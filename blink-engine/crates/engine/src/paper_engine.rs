@@ -945,76 +945,29 @@ impl PaperEngine {
             size_usdc *= sizing_decay;
         }
 
-        // Twin-based throttle (shared health signal).
-        {
-            let th = self.twin_health.lock().await;
-            let throttle = if th.abort_rate > 0.70 && th.close_rate < 0.05 {
-                0.4
-            } else if th.abort_rate > 0.50 {
-                0.7
-            } else {
-                1.0
-            };
-            drop(th);
-            size_usdc *= throttle;
-        }
-
-        // 2A: Adaptive sizing by volatility regime — shrink orders when signal environment is noisy.
+        // ── Simplified sizing pipeline (3 multipliers) ─────────────────────
+        // 1. Volatility discount — shrink in noisy environments
         {
             let adaptive = std::env::var("ADAPTIVE_SIZING")
                 .ok().map(|v| v != "false" && v != "0").unwrap_or(true);
             if adaptive && vol_bps > 0.0 {
                 let vol_discount = 1.0 - (vol_bps.clamp(0.0, 2000.0) / 4000.0);
                 size_usdc *= vol_discount;
-                if vol_discount < 0.99 {
-                    info!(
-                        vol_bps, vol_discount = %format!("{:.2}", vol_discount),
-                        "📉 Adaptive sizing: vol discount applied"
-                    );
-                }
             }
         }
 
-        // 3B: Drawdown-adaptive sizing — graduated reduction based on session drawdown.
+        // 2. Drawdown-adaptive sizing — graduated reduction
         size_usdc *= drawdown_sizing_mult;
 
-        // Price-confidence sizing: reduce position size for mid-range prices where
-        // outcome uncertainty is highest. Prices near 0.1 or 0.9 get full size;
-        // prices near 0.5 are capped at CONF_DISCOUNT of full size.
-        // Configurable via PAPER_CONFIDENCE_DISCOUNT (0.0 = no reduction, 0.5 = max 50% reduction at 0.5).
+        // 3. Price-confidence: reduce size for mid-range prices (peak uncertainty at 0.50)
         {
             let discount = std::env::var("PAPER_CONFIDENCE_DISCOUNT")
                 .ok()
                 .and_then(|v| v.parse::<f64>().ok())
                 .unwrap_or(0.35)
                 .clamp(0.0, 0.75);
-            // uncertainty peaks at 0.5 (= 1.0) and is 0.0 at 0.0 or 1.0
             let uncertainty = 1.0 - (2.0 * (entry_price - 0.5).abs()).clamp(0.0, 1.0);
-            let conf_mult = 1.0 - discount * uncertainty;
-            size_usdc *= conf_mult;
-        }
-
-        // 2D: Aggression ramp near event start — boost size when start is imminent.
-        if let Some(event_start) = signal.event_start_time {
-            let secs_until_start = event_start - chrono::Utc::now().timestamp();
-            let ramp_window: i64 = std::env::var("AGGRESSION_RAMP_SECS")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(300);
-            if secs_until_start > 0 && secs_until_start <= ramp_window {
-                let ramp_mult: f64 = std::env::var("AGGRESSION_RAMP_MULT")
-                    .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.3).clamp(1.0, 3.0);
-                size_usdc *= ramp_mult;
-                info!(
-                    token_id = %signal.token_id,
-                    secs_until_start,
-                    ramp_mult,
-                    "🚀 Aggression ramp — event start imminent, boosting size"
-                );
-            }
-        }
-
-        // 1A: Secondary wallet weight — scale size by the wallet's configured weight.
-        if signal.wallet_weight != 1.0 {
-            size_usdc *= signal.wallet_weight.clamp(0.0, 2.0);
+            size_usdc *= 1.0 - discount * uncertainty;
         }
 
         let min_trade_usdc = std::env::var("PAPER_MIN_TRADE_USDC")
@@ -1154,6 +1107,65 @@ impl PaperEngine {
             }
             self.record_rejection("risk_blocked").await;
             return;
+        }
+
+        // ── Fee-edge precheck: skip if estimated fee eats too much of expected edge ──
+        {
+            let fee_edge_max_pct = std::env::var("FEE_EDGE_MAX_PCT")
+                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(40.0).clamp(10.0, 90.0);
+            let our_shares = if entry_price > 0.0 { size_usdc / entry_price } else { 0.0 };
+            // Round-trip fee estimate (entry + exit at same price — conservative)
+            let estimated_fee = crate::paper_portfolio::polymarket_taker_fee(our_shares, entry_price) * 2.0;
+            // Expected edge: distance from 0.50 — strong signals have prices far from 0.50
+            let edge_pct = (2.0 * (entry_price - 0.5).abs()).clamp(0.01, 1.0);
+            let expected_edge = size_usdc * edge_pct;
+            let fee_ratio = if expected_edge > 0.0 { estimated_fee / expected_edge * 100.0 } else { 100.0 };
+            if fee_ratio > fee_edge_max_pct {
+                warn!(
+                    token_id  = %signal.token_id,
+                    fee_ratio = %format!("{:.1}%", fee_ratio),
+                    est_fee   = %format!("${:.4}", estimated_fee),
+                    exp_edge  = %format!("${:.4}", expected_edge),
+                    "⏭️  Fee-edge precheck — fee too high relative to expected edge"
+                );
+                let mut p = self.portfolio.lock().await;
+                p.skipped_orders += 1;
+                drop(p);
+                self.record_rejection("fee_edge_reject").await;
+                return;
+            }
+        }
+
+        // ── Depth gate: ensure book has enough liquidity for our order ──────
+        {
+            let depth_gate_enabled = std::env::var("DEPTH_GATE")
+                .ok().map(|v| v != "false" && v != "0").unwrap_or(true);
+            if depth_gate_enabled {
+                let depth_mult = std::env::var("DEPTH_GATE_MULT")
+                    .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(2.0).clamp(1.0, 10.0);
+                if let Some(book) = self.book_store.get_book_snapshot(&signal.token_id) {
+                    let relevant_depth = match signal.side {
+                        OrderSide::Buy  => book.asks.values().map(|&s| s as f64).sum::<f64>() / 1_000.0,
+                        OrderSide::Sell => book.bids.values().map(|&s| s as f64).sum::<f64>() / 1_000.0,
+                    };
+                    // Depth is in shares; compare size_usdc / entry_price to get our share demand
+                    let our_shares = if entry_price > 0.0 { size_usdc / entry_price } else { size_usdc };
+                    if relevant_depth < our_shares * depth_mult {
+                        warn!(
+                            token_id       = %signal.token_id,
+                            our_shares     = %format!("{:.1}", our_shares),
+                            book_depth     = %format!("{:.1}", relevant_depth),
+                            min_required   = %format!("{:.1}", our_shares * depth_mult),
+                            "⏭️  Depth gate — insufficient book depth"
+                        );
+                        let mut p = self.portfolio.lock().await;
+                        p.skipped_orders += 1;
+                        drop(p);
+                        self.record_rejection("depth_gate").await;
+                        return;
+                    }
+                }
+            }
         }
 
         // ── Fill window (adaptive, no lock held during sleep) ──────────────

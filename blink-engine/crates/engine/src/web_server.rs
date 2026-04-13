@@ -1090,12 +1090,31 @@ async fn get_metrics(State(state): State<AppState>) -> Json<serde_json::Value> {
         reason_counts.insert(reason.clone(), json!(recent));
     }
     drop(analytics);
+    // Live risk-adjusted metrics from portfolio
+    let (sharpe, sortino, fee_drag, fee_alert) = {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            paper.portfolio.lock(),
+        ).await {
+            Ok(p) => {
+                let s = p.live_sharpe();
+                let so = p.live_sortino();
+                let fd = p.fee_drag_pct();
+                (s, so, fd, fd > 50.0)
+            }
+            Err(_) => (0.0, 0.0, 0.0, false),
+        }
+    };
     let uptime_secs = state.started_at.elapsed().as_secs();
     Json(json!({
         "available": true,
         "signals_rejected_last_60s": total_recent,
         "rejection_by_reason": reason_counts,
         "uptime_secs": uptime_secs,
+        "sharpe_ratio": sharpe,
+        "sortino_ratio": sortino,
+        "fee_drag_pct": fee_drag,
+        "fee_drag_alert": fee_alert,
     }))
 }
 

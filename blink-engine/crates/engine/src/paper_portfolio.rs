@@ -424,6 +424,47 @@ impl PaperPortfolio {
         self.closed_trades.iter().map(|t| t.realized_pnl).sum()
     }
 
+    /// Annualised Sharpe ratio from per-trade returns (risk-free = 0).
+    pub fn live_sharpe(&self) -> f64 {
+        let returns: Vec<f64> = self.closed_trades.iter()
+            .filter(|t| t.shares * t.entry_price > 0.001)
+            .map(|t| t.realized_pnl / (t.shares * t.entry_price))
+            .collect();
+        if returns.len() < 2 { return 0.0; }
+        let n = returns.len() as f64;
+        let mean = returns.iter().sum::<f64>() / n;
+        let var = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0);
+        let std = var.sqrt();
+        if std == 0.0 { return 0.0; }
+        (mean / std) * (n.min(252.0)).sqrt() // scale by sqrt(trades), capped at annualized
+    }
+
+    /// Annualised Sortino ratio (only downside deviation).
+    pub fn live_sortino(&self) -> f64 {
+        let returns: Vec<f64> = self.closed_trades.iter()
+            .filter(|t| t.shares * t.entry_price > 0.001)
+            .map(|t| t.realized_pnl / (t.shares * t.entry_price))
+            .collect();
+        if returns.len() < 2 { return 0.0; }
+        let n = returns.len() as f64;
+        let mean = returns.iter().sum::<f64>() / n;
+        let down_sq: f64 = returns.iter().filter(|&&r| r < 0.0).map(|r| r.powi(2)).sum();
+        let down_dev = (down_sq / n).sqrt();
+        if down_dev == 0.0 { return if mean > 0.0 { f64::INFINITY } else { 0.0 }; }
+        (mean / down_dev) * (n.min(252.0)).sqrt()
+    }
+
+    /// Fee drag: total fees as % of gross realized P&L.
+    /// Returns 0.0 when no realized profits exist.
+    pub fn fee_drag_pct(&self) -> f64 {
+        let gross: f64 = self.closed_trades.iter()
+            .filter(|t| t.realized_pnl > 0.0)
+            .map(|t| t.realized_pnl)
+            .sum();
+        if gross <= 0.0 { return 0.0; }
+        (self.total_fees_paid_usdc / gross * 100.0).clamp(0.0, 999.0)
+    }
+
     // ── Order sizing ──────────────────────────────────────────────────────
 
     /// Calculate how many USDC we should commit for a given signal.

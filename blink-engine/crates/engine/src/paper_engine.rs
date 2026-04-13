@@ -548,23 +548,24 @@ impl PaperEngine {
         self.enrich_signal_metadata(&mut signal).await;
         let queue_delay_ms = prio_signal.queued_at.elapsed().as_millis() as u64;
 
-        // ── 6-hour event horizon rule ─────────────────────────────────────
-        // Skip signals where the event starts more than 6 hours from now.
+        // ── Event horizon rule ──────────────────────────────────────────
+        // Skip signals where the event starts more than N hours from now.
         // We only skip when we actually know the start time — unknown timing passes through.
-        const MAX_EVENT_HORIZON_SECS: i64 = 6 * 3600;
+        let max_event_horizon_secs: i64 = std::env::var("EVENT_HORIZON_HOURS")
+            .ok().and_then(|v| v.parse::<i64>().ok()).unwrap_or(6) * 3600;
         if let Some(start_ts) = signal.event_start_time {
             let now_secs = chrono::Utc::now().timestamp();
-            if start_ts > now_secs + MAX_EVENT_HORIZON_SECS {
+            if start_ts > now_secs + max_event_horizon_secs {
                 let hours_away = (start_ts - now_secs + 1799) / 3600; // round up
                 warn!(
                     token_id   = %signal.token_id,
                     hours_away = hours_away,
                     "⏭️  Event too far away — skipping (>{} h horizon)",
-                    MAX_EVENT_HORIZON_SECS / 3600,
+                    max_event_horizon_secs / 3600,
                 );
                 if let Some(ref log) = self.activity {
                     log_push(log, EntryKind::Skip, format!(
-                        "Skipped — event {}h away (max 6h horizon)", hours_away
+                        "Skipped — event {}h away (max {}h horizon)", hours_away, max_event_horizon_secs / 3600
                     ));
                 }
                 let mut p = self.portfolio.lock().await;

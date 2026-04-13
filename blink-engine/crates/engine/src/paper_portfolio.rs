@@ -114,6 +114,27 @@ fn exit_haircut_bps() -> f64 {
         .clamp(0.0, 500.0)
 }
 
+/// Adverse slippage applied when closing a position (exit side).
+/// Models the bid-ask spread cost that paper trading otherwise ignores.
+fn exit_slippage_bps() -> f64 {
+    std::env::var("PAPER_EXIT_SLIPPAGE_BPS")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(10.0)
+        .clamp(0.0, 200.0)
+}
+
+/// Apply exit slippage to a price: worsen the price by `exit_slippage_bps` bps.
+fn apply_exit_slippage(price: f64, side: &OrderSide) -> f64 {
+    let slip = exit_slippage_bps() / 10_000.0;
+    match side {
+        // Selling shares (BUY positions close by selling) → price worsens downward
+        OrderSide::Buy  => (price * (1.0 - slip)).max(0.001),
+        // Buying back (SELL positions close by buying) → price worsens upward
+        OrderSide::Sell => (price * (1.0 + slip)).min(0.999),
+    }
+}
+
 // ─── PaperPosition ────────────────────────────────────────────────────────────
 
 /// An open virtual position.
@@ -445,13 +466,19 @@ impl PaperPortfolio {
             .unwrap_or(5.0)
             .max(min_trade_usdc);
 
+        let max_order_usdc = std::env::var("PAPER_MAX_ORDER_USDC")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(8.0)
+            .clamp(min_floor_usdc, 100.0);
+
         let raw        = rn1_notional_usdc * size_multiplier;
         let cap_nav    = self.nav() * max_position_pct;
         // No cash reserve — always deploy all available cash to maximise exposure
         let cash_reserve_pct: f64 = std::env::var("CASH_RESERVE_PCT")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
         let available_cash = (self.cash_usdc - self.nav() * cash_reserve_pct).max(0.0);
-        let size       = raw.max(min_floor_usdc).min(cap_nav).min(available_cash);
+        let size       = raw.max(min_floor_usdc).min(max_order_usdc).min(cap_nav).min(available_cash);
         if size < min_trade_usdc { None } else { Some(size) }
     }
 
@@ -551,11 +578,12 @@ impl PaperPortfolio {
             }
 
             let pos = self.positions.remove(i);
+            let exit_price = apply_exit_slippage(pos.current_price, &pos.side);
             let pnl = match pos.side {
-                OrderSide::Buy => (pos.current_price - pos.entry_price) * pos.shares,
-                OrderSide::Sell => (pos.entry_price - pos.current_price) * pos.shares,
+                OrderSide::Buy => (exit_price - pos.entry_price) * pos.shares,
+                OrderSide::Sell => (pos.entry_price - exit_price) * pos.shares,
             };
-            let exit_fee = polymarket_taker_fee_with_rate(pos.shares, pos.current_price, pos.fee_rate);
+            let exit_fee = polymarket_taker_fee_with_rate(pos.shares, exit_price, pos.fee_rate);
             let entry_fee_portion = pos.entry_fee_paid_usdc;
             self.total_fees_paid_usdc += exit_fee;
             self.cash_usdc += pos.usdc_spent + pnl - exit_fee;
@@ -564,7 +592,7 @@ impl PaperPortfolio {
                 market_title: pos.market_title.clone(),
                 side: pos.side,
                 entry_price: pos.entry_price,
-                exit_price: pos.current_price,
+                exit_price,
                 shares: pos.shares,
                 realized_pnl: pnl,
                 fees_paid_usdc: entry_fee_portion + exit_fee,
@@ -678,11 +706,12 @@ impl PaperPortfolio {
 
         if fraction >= 0.999_999 {
             let pos = self.positions.remove(idx);
+            let exit_price = apply_exit_slippage(pos.current_price, &pos.side);
             let pnl = match pos.side {
-                OrderSide::Buy => (pos.current_price - pos.entry_price) * pos.shares,
-                OrderSide::Sell => (pos.entry_price - pos.current_price) * pos.shares,
+                OrderSide::Buy => (exit_price - pos.entry_price) * pos.shares,
+                OrderSide::Sell => (pos.entry_price - exit_price) * pos.shares,
             };
-            let exit_fee = polymarket_taker_fee_with_rate(pos.shares, pos.current_price, pos.fee_rate);
+            let exit_fee = polymarket_taker_fee_with_rate(pos.shares, exit_price, pos.fee_rate);
             let entry_fee_portion = pos.entry_fee_paid_usdc;
             // Record exit fee in global counter and settle cash.
             self.total_fees_paid_usdc += exit_fee;
@@ -692,7 +721,7 @@ impl PaperPortfolio {
                 market_title: pos.market_title.clone(),
                 side: pos.side,
                 entry_price: pos.entry_price,
-                exit_price: pos.current_price,
+                exit_price,
                 shares: pos.shares,
                 realized_pnl: pnl,
                 fees_paid_usdc: entry_fee_portion + exit_fee,
@@ -720,11 +749,12 @@ impl PaperPortfolio {
             return false;
         }
         let close_usdc_spent = pos.usdc_spent * fraction;
+        let exit_price = apply_exit_slippage(pos.current_price, &pos.side);
         let pnl = match pos.side {
-            OrderSide::Buy => (pos.current_price - pos.entry_price) * close_shares,
-            OrderSide::Sell => (pos.entry_price - pos.current_price) * close_shares,
+            OrderSide::Buy => (exit_price - pos.entry_price) * close_shares,
+            OrderSide::Sell => (pos.entry_price - exit_price) * close_shares,
         };
-        let exit_fee = polymarket_taker_fee_with_rate(close_shares, pos.current_price, pos.fee_rate);
+        let exit_fee = polymarket_taker_fee_with_rate(close_shares, exit_price, pos.fee_rate);
         let entry_fee_portion = pos.entry_fee_paid_usdc * fraction;
         // Record exit fee and attribute entry fee portion to this closed slice.
         self.total_fees_paid_usdc += exit_fee;
@@ -734,7 +764,7 @@ impl PaperPortfolio {
             market_title: pos.market_title.clone(),
             side: pos.side,
             entry_price: pos.entry_price,
-            exit_price: pos.current_price,
+            exit_price,
             shares: close_shares,
             realized_pnl: pnl,
             fees_paid_usdc: entry_fee_portion + exit_fee,
@@ -1003,12 +1033,12 @@ mod tests {
     }
 
     #[test]
-    fn size_capped_at_10_pct_nav() {
-        let p = PaperPortfolio::new(); // NAV = 100, cap = 12% = 12
-        // RN1 trades $20,000 → 5% = $1,000, capped at $12
+    fn size_capped_at_max_order() {
+        let p = PaperPortfolio::new(); // NAV = 100
+        // RN1 trades $20,000 → 5% = $1,000, capped at max_order_usdc ($8 default)
         let size = p.calculate_size_usdc(20_000.0).unwrap();
-        let max_position = p.nav() * MAX_POSITION_PCT;
-        assert!((size - max_position).abs() < 1e-9, "size={size} expected cap={max_position}");
+        // Default PAPER_MAX_ORDER_USDC is $8 (tighter than NAV cap)
+        assert!((size - 8.0).abs() < 1e-9, "size={size} expected cap=8");
     }
 
     #[test]

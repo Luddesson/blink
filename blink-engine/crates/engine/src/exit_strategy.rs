@@ -129,11 +129,11 @@ impl ExitConfig {
             stagnant_exit_secs: env_u64("STAGNANT_EXIT_SECS", 1800),
             stagnant_threshold_pct: env_f64("STAGNANT_THRESHOLD_PCT", 5.0),
             max_hold_secs: env_u64("MAX_HOLD_SECS", 432_000), // 5 days
-            stale_close_secs: env_u64("STALE_CLOSE_SECS", 300),
+            stale_close_secs: env_u64("STALE_CLOSE_SECS", 60),
             event_aware_exit_secs: env_u64("EVENT_AWARE_EXIT_SECS", 3600),
             event_aware_exit_loss_pct: env_f64("EVENT_AWARE_EXIT_LOSS_PCT", 5.0),
             pre_event_close_secs: env_u64("PRE_EVENT_CLOSE_SECS", 60),
-            momentum_exit_threshold_bps: env_u64("MOMENTUM_EXIT_THRESHOLD_BPS", 300),
+            momentum_exit_threshold_bps: env_u64("MOMENTUM_EXIT_THRESHOLD_BPS", 150),
             momentum_check_interval_secs: env_u64("MOMENTUM_CHECK_INTERVAL_SECS", 60),
         }
     }
@@ -151,11 +151,11 @@ impl Default for ExitConfig {
             stagnant_exit_secs: 1800,
             stagnant_threshold_pct: 5.0,
             max_hold_secs: 432_000,
-            stale_close_secs: 300,
+            stale_close_secs: 60,
             event_aware_exit_secs: 3600,
             event_aware_exit_loss_pct: 5.0,
             pre_event_close_secs: 60,
-            momentum_exit_threshold_bps: 300,
+            momentum_exit_threshold_bps: 150,
             momentum_check_interval_secs: 60,
         }
     }

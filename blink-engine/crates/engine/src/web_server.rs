@@ -100,6 +100,7 @@ struct PositionJson {
     fee_rate: f64,
     event_start_time: Option<i64>,
     event_end_time: Option<i64>,
+    secs_to_event: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -225,7 +226,9 @@ fn build_portfolio_json(p: &PaperPortfolio, uptime_secs: u64, max_equity_points:
 
     let positions: Vec<serde_json::Value> = p.positions.iter().map(|pos| {
         let now_ts = chrono::Utc::now().timestamp();
-        let secs_to_event = pos.event_end_time.map(|e| e - now_ts);
+        let secs_to_event = pos.event_start_time
+            .or(pos.event_end_time)
+            .map(|ts| ts - now_ts);
         json!({
         "id": pos.id,
         "token_id": pos.token_id,
@@ -389,6 +392,12 @@ async fn get_portfolio(State(state): State<AppState>) -> Json<serde_json::Value>
         return Json(json!({"error": "Portfolio busy — engine processing signal", "retry": true}));
     };
     let positions: Vec<PositionJson> = p.positions.iter().map(|pos| {
+        let now_ts = chrono::Utc::now().timestamp();
+        // Prefer event_start_time (game kickoff) for sports bets;
+        // fall back to event_end_time (market resolution deadline).
+        let secs_to_event = pos.event_start_time
+            .or(pos.event_end_time)
+            .map(|ts| ts - now_ts);
         PositionJson {
             id: pos.id,
             token_id: pos.token_id.clone(),
@@ -407,6 +416,7 @@ async fn get_portfolio(State(state): State<AppState>) -> Json<serde_json::Value>
             fee_rate: pos.fee_rate,
             event_start_time: pos.event_start_time,
             event_end_time: pos.event_end_time,
+            secs_to_event,
         }
     }).collect();
     let fees_paid = p.total_fees_paid_usdc;
@@ -1230,15 +1240,32 @@ async fn get_market_url(
             match resp.json::<serde_json::Value>().await {
                 Ok(data) => {
                     // Gamma returns an array of markets.
-                    let slug = data.as_array()
+                    // Prefer the event-level slug (works on polymarket.com),
+                    // not the market-level slug which 404s.
+                    let market = data.as_array().and_then(|arr| arr.first());
+
+                    let event_slug = market
+                        .and_then(|m| m.get("events"))
+                        .and_then(|e| e.as_array())
                         .and_then(|arr| arr.first())
-                        .and_then(|m| {
+                        .and_then(|ev| {
+                            ev.get("slug")
+                                .or_else(|| ev.get("event_slug"))
+                                .or_else(|| ev.get("eventSlug"))
+                        })
+                        .and_then(|s| s.as_str())
+                        .map(|s| s.to_string());
+
+                    // Fallback: market-level slug (less reliable)
+                    let slug = event_slug.or_else(|| {
+                        market.and_then(|m| {
                             m.get("market_slug")
                                 .or_else(|| m.get("slug"))
                                 .or_else(|| m.get("marketSlug"))
                         })
                         .and_then(|s| s.as_str())
-                        .map(|s| s.to_string());
+                        .map(|s| s.to_string())
+                    });
 
                     if let Some(slug) = slug {
                         let url = format!("https://polymarket.com/event/{slug}");

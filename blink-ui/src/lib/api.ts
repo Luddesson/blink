@@ -35,7 +35,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 }
 
 export function getPolymarketUrl(tokenId: string): string {
-  return `https://polymarket.com/clob/${tokenId}`
+  return `https://polymarket.com/trade/${tokenId}`
 }
 
 export async function resolveMarketUrl(tokenId: string): Promise<string | null> {

@@ -182,6 +182,9 @@ pub struct PaperPosition {
     pub momentum_ref_price: f64,
     /// Unix timestamp of last momentum reference price reset.
     pub momentum_ref_ts: i64,
+    /// Highest take-profit tier (%) already claimed. Prevents repeated partial
+    /// exits at the same tier from creating infinite dust trades.
+    pub last_claimed_tier_pct: f64,
 }
 
 impl PaperPosition {
@@ -316,6 +319,8 @@ struct PersistedPaperPosition {
     momentum_ref_price: f64,
     #[serde(default)]
     momentum_ref_ts: i64,
+    #[serde(default)]
+    last_claimed_tier_pct: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -603,6 +608,7 @@ impl PaperPortfolio {
             event_end_time,
             momentum_ref_price: effective_entry,
             momentum_ref_ts: chrono::Utc::now().timestamp(),
+            last_claimed_tier_pct: 0.0,
         });
         self.filled_orders += 1;
         id
@@ -804,7 +810,13 @@ impl PaperPortfolio {
         if close_shares <= 0.0 {
             return false;
         }
+        // Dust guard: skip partial exits worth less than $0.10 to avoid
+        // flooding trade history with sub-penny closed trades.
         let close_usdc_spent = pos.usdc_spent * fraction;
+        if fraction < 0.999 && close_usdc_spent < 0.10 {
+            // Remaining position is dust — upgrade to full close.
+            return self.close_position_fraction(idx, 1.0, reason);
+        }
         let exit_price = apply_exit_slippage(pos.current_price, &pos.side);
         let pnl = match pos.side {
             OrderSide::Buy => (exit_price - pos.entry_price) * close_shares,
@@ -953,6 +965,7 @@ impl From<&PaperPortfolio> for PersistedPaperPortfolio {
                 event_end_time: p.event_end_time,
                 momentum_ref_price: p.momentum_ref_price,
                 momentum_ref_ts: p.momentum_ref_ts,
+                last_claimed_tier_pct: p.last_claimed_tier_pct,
             }).collect(),
             closed_trades: value.closed_trades.iter().map(|t| PersistedClosedTrade {
                 token_id: t.token_id.clone(),
@@ -1022,6 +1035,7 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
                 event_end_time: p.event_end_time,
                 momentum_ref_price: if p.momentum_ref_price == 0.0 { p.entry_price } else { p.momentum_ref_price },
                 momentum_ref_ts: p.momentum_ref_ts,
+                last_claimed_tier_pct: p.last_claimed_tier_pct,
             }
         }).collect();
 

@@ -298,10 +298,10 @@ where
             }
         }
 
-        // 4. Take-profit (tiered — picks highest matching tier)
+        // 4. Take-profit (tiered — picks highest matching tier NOT already claimed)
         let mut best_tier: Option<(f64, f64)> = None;
         for &(threshold, fraction) in &config.autoclaim_tiers {
-            if pnl_pct >= threshold {
+            if pnl_pct >= threshold && threshold > pos.last_claimed_tier_pct {
                 best_tier = Some((threshold, fraction));
             }
         }
@@ -511,6 +511,7 @@ mod tests {
             event_end_time: None,
             momentum_ref_price: entry,
             momentum_ref_ts: 0,
+            last_claimed_tier_pct: 0.0,
         }
     }
 }

@@ -2279,6 +2279,21 @@ impl PaperEngine {
             let before = p.closed_trades.len();
             let _removed = p.close_position_fraction(idx, fraction, reason);
 
+            // Mark the take-profit tier as claimed so it won't re-trigger.
+            if let ExitAction::TakeProfit { threshold_pct, .. } = &decision.action {
+                if !_removed && idx < p.positions.len() {
+                    p.positions[idx].last_claimed_tier_pct = *threshold_pct;
+                }
+            }
+            // Reset momentum ref after a momentum exit so it needs another
+            // full threshold move before re-triggering (prevents 50% → 25% → dust chain).
+            if let ExitAction::AdverseMomentum { .. } = &decision.action {
+                if !_removed && idx < p.positions.len() {
+                    p.positions[idx].momentum_ref_price = p.positions[idx].current_price;
+                    p.positions[idx].momentum_ref_ts = chrono::Utc::now().timestamp();
+                }
+            }
+
             // Collect newly closed trades for ClickHouse emission after lock drop.
             for ct in &p.closed_trades[before..] {
                 new_closed_trades.push(ct.clone());

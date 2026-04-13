@@ -32,7 +32,8 @@ pub enum ExitAction {
     /// Force-close ALL positions within N seconds of event resolution (3C).
     PreEventClose { secs_left: i64 },
     /// Exit a profitable position due to adverse price momentum (4A).
-    AdverseMomentum { price_change_bps: i64 },
+    /// Closes `fraction` of the position (default 0.5 = scale out, not dump).
+    AdverseMomentum { price_change_bps: i64, fraction: f64 },
 }
 
 impl ExitAction {
@@ -57,8 +58,8 @@ impl ExitAction {
                 format!("pre_resolution_stop@{}s_left", remaining_secs),
             Self::PreEventClose { secs_left } =>
                 format!("pre_event_close@{}s_left", secs_left),
-            Self::AdverseMomentum { price_change_bps } =>
-                format!("adverse_momentum@{}bps", price_change_bps),
+            Self::AdverseMomentum { price_change_bps, fraction } =>
+                format!("adverse_momentum@{}bps[{:.0}%]", price_change_bps, fraction * 100.0),
         }
     }
 
@@ -66,6 +67,7 @@ impl ExitAction {
     pub fn fraction(&self) -> f64 {
         match self {
             Self::TakeProfit { fraction, .. } => *fraction,
+            Self::AdverseMomentum { fraction, .. } => *fraction,
             _ => 1.0,
         }
     }
@@ -112,6 +114,8 @@ pub struct ExitConfig {
 
     // Adverse momentum exit (4A): exit profitable position if price moved this many bps against us.
     pub momentum_exit_threshold_bps: u64,
+    /// Fraction of position to close on adverse momentum (default 0.5 = scale out).
+    pub momentum_exit_fraction: f64,
     /// How often (secs) the momentum reference price is refreshed by autoclaim.
     pub momentum_check_interval_secs: u64,
 }
@@ -134,6 +138,7 @@ impl ExitConfig {
             event_aware_exit_loss_pct: env_f64("EVENT_AWARE_EXIT_LOSS_PCT", 5.0),
             pre_event_close_secs: env_u64("PRE_EVENT_CLOSE_SECS", 60),
             momentum_exit_threshold_bps: env_u64("MOMENTUM_EXIT_THRESHOLD_BPS", 150),
+            momentum_exit_fraction: env_f64("MOMENTUM_EXIT_FRACTION", 0.5).clamp(0.1, 1.0),
             momentum_check_interval_secs: env_u64("MOMENTUM_CHECK_INTERVAL_SECS", 60),
         }
     }
@@ -156,6 +161,7 @@ impl Default for ExitConfig {
             event_aware_exit_loss_pct: 5.0,
             pre_event_close_secs: 60,
             momentum_exit_threshold_bps: 150,
+            momentum_exit_fraction: 0.5,
             momentum_check_interval_secs: 60,
         }
     }
@@ -264,7 +270,10 @@ where
                 if adverse {
                     decisions.push(ExitDecision {
                         position_idx: idx,
-                        action: ExitAction::AdverseMomentum { price_change_bps: price_change_bps.abs() },
+                        action: ExitAction::AdverseMomentum {
+                            price_change_bps: price_change_bps.abs(),
+                            fraction: config.momentum_exit_fraction,
+                        },
                     });
                     continue;
                 }

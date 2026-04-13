@@ -689,14 +689,14 @@ impl PaperEngine {
         }
 
         // 3A: Per-market exposure limit — cap total invested in one market.
-        // 3B: Intraday drawdown gating — throttle or pause on session loss.
-        let drawdown_halving: bool;
+        // 3B: Intraday drawdown gating — graduated throttle or full pause on session loss.
+        let drawdown_sizing_mult: f64;
         {
             let max_market_pct = std::env::var("MAX_EXPOSURE_PER_MARKET_PCT")
                 .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(15.0) / 100.0;
             let max_intraday_dd: f64 = std::env::var("MAX_INTRADAY_DRAWDOWN_PCT")
-                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(5.0);
-            let pause_dd = max_intraday_dd + 3.0;
+                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(3.0);
+            let pause_dd = max_intraday_dd * 2.0; // full halt at 2x warning threshold
 
             let mut p = self.portfolio.lock().await;
             let nav = p.nav();
@@ -752,11 +752,20 @@ impl PaperEngine {
                 self.record_rejection("intraday_drawdown_pause").await;
                 return;
             }
-            drawdown_halving = drawdown_pct >= max_intraday_dd;
-            if drawdown_halving {
+            drawdown_sizing_mult = if drawdown_pct <= 0.0 {
+                1.0 // no drawdown — full size
+            } else if drawdown_pct < max_intraday_dd {
+                // Graduated: linearly reduce from 100% to 50% as DD approaches threshold
+                1.0 - 0.5 * (drawdown_pct / max_intraday_dd)
+            } else {
+                // Beyond threshold but not paused: 25% size
+                0.25
+            };
+            if drawdown_sizing_mult < 1.0 {
                 info!(
                     drawdown_pct = %format!("{:.1}%", drawdown_pct),
-                    "⚠️  Intraday drawdown warning — will halve position size"
+                    sizing_mult = %format!("{:.0}%", drawdown_sizing_mult * 100.0),
+                    "⚠️  Drawdown-adaptive sizing — reducing position size"
                 );
             }
         } // portfolio lock released
@@ -965,10 +974,8 @@ impl PaperEngine {
             }
         }
 
-        // 3B: Intraday drawdown warning — halve size when session loss exceeds warning threshold.
-        if drawdown_halving {
-            size_usdc *= 0.5;
-        }
+        // 3B: Drawdown-adaptive sizing — graduated reduction based on session drawdown.
+        size_usdc *= drawdown_sizing_mult;
 
         // Price-confidence sizing: reduce position size for mid-range prices where
         // outcome uncertainty is highest. Prices near 0.1 or 0.9 get full size;

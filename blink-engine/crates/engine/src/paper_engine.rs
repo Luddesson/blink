@@ -594,7 +594,7 @@ impl PaperEngine {
         let realism_mode = std::env::var("PAPER_REALISM_MODE")
             .ok()
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(false);
+            .unwrap_or(true); // Phase 6: realism ON by default
         let adverse_fill_bps = std::env::var("PAPER_ADVERSE_FILL_BPS")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
@@ -626,7 +626,8 @@ impl PaperEngine {
         }
 
         // ── Extreme price filter: skip very low or very high odds ──────────
-        if entry_price < 0.10 || entry_price > 0.95 {
+        // Phase 6: tighter price band — most edge lives in 0.15-0.85 range
+        if entry_price < 0.15 || entry_price > 0.85 {
             let mut p = self.portfolio.lock().await;
             p.skipped_orders += 1;
             drop(p);
@@ -987,7 +988,7 @@ impl PaperEngine {
         let min_trade_usdc = std::env::var("PAPER_MIN_TRADE_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(2.0)
+            .unwrap_or(5.0) // Phase 6: $5 min (filter dust)
             .max(1.0);
         if size_usdc < min_trade_usdc {
             let mut p = self.portfolio.lock().await;
@@ -1469,7 +1470,7 @@ impl PaperEngine {
         let realism_mode = std::env::var("PAPER_REALISM_MODE")
             .ok()
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(false);
+            .unwrap_or(true); // Phase 6: realism ON by default
         let base_countdown_ms = std::env::var("PAPER_FILL_WINDOW_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -1592,11 +1593,11 @@ impl PaperEngine {
         let realism_mode = std::env::var("PAPER_REALISM_MODE")
             .ok()
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(false);
+            .unwrap_or(true); // Phase 6: realism ON by default
         let min_trade_usdc = std::env::var("PAPER_MIN_TRADE_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(2.0)
+            .unwrap_or(5.0)
             .max(1.0);
         let depth_capture_ratio = std::env::var("PAPER_DEPTH_CAPTURE_RATIO")
             .ok()
@@ -2383,7 +2384,7 @@ fn env_flag(key: &str) -> bool {
 }
 
 pub(crate) fn parse_autoclaim_tiers() -> Vec<(f64, f64)> {
-    let raw = std::env::var("AUTOCLAIM_TIERS").unwrap_or_else(|_| "40:0.30,70:0.30,100:1.0".to_string());
+    let raw = std::env::var("AUTOCLAIM_TIERS").unwrap_or_else(|_| "100:0.25,200:0.50,300:1.0".to_string());
     let mut out: Vec<(f64, f64)> = raw
         .split(',')
         .filter_map(|item| {

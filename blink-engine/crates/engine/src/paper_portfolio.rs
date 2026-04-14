@@ -16,13 +16,13 @@ use crate::types::OrderSide;
 pub const STARTING_BALANCE_USDC: f64 = 100.0; // $100 starter bankroll
 
 /// We mirror `SIZE_MULTIPLIER × RN1's notional` as our trade size.
-pub const SIZE_MULTIPLIER: f64 = 0.05; // 5% of RN1 notional
+pub const SIZE_MULTIPLIER: f64 = 0.10; // 10% of RN1 notional (Phase 6: up from 5%)
 
 /// Maximum fraction of current NAV per single trade.
-pub const MAX_POSITION_PCT: f64 = 0.25; // 25% max per trade → up to 4 concurrent positions
+pub const MAX_POSITION_PCT: f64 = 0.30; // 30% max per trade (Phase 6: up from 25%)
 
 /// Minimum trade size; signals below this are skipped.
-pub const MIN_TRADE_USDC: f64 = 2.0; // $2 minimum
+pub const MIN_TRADE_USDC: f64 = 5.0; // $5 minimum (Phase 6: up from $2 — filter dust)
 
 /// If price drifts more than this fraction from entry during the fill
 /// window, the order is aborted (simulates an in-play failsafe).
@@ -31,15 +31,11 @@ pub const DRIFT_THRESHOLD: f64 = 0.015; // 1.5 %
 /// Maximum number of NAV snapshots kept for the equity curve (10s sampling → ~28h).
 const EQUITY_CURVE_MAX: usize = 10_080;
 
-fn env_flag(name: &str) -> bool {
-    std::env::var(name)
+fn realism_mode() -> bool {
+    std::env::var("PAPER_REALISM_MODE")
         .ok()
         .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-        .unwrap_or(false)
-}
-
-fn realism_mode() -> bool {
-    env_flag("PAPER_REALISM_MODE")
+        .unwrap_or(true) // Phase 6: default ON — paper must reflect real execution
 }
 
 /// Detect Polymarket fee category from market title.
@@ -120,7 +116,7 @@ fn exit_slippage_bps() -> f64 {
     std::env::var("PAPER_EXIT_SLIPPAGE_BPS")
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(100.0)
+        .unwrap_or(50.0) // Phase 6: 50 bps (down from 100 — was over-penalizing)
         .clamp(0.0, 500.0)
 }
 
@@ -515,8 +511,8 @@ impl PaperPortfolio {
         let max_order_usdc = std::env::var("PAPER_MAX_ORDER_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(4.0)
-            .clamp(min_floor_usdc, 100.0);
+            .unwrap_or(25.0) // Phase 6: $25 (up from $4 — let positions realize edge)
+            .clamp(min_floor_usdc, 500.0);
 
         let raw        = rn1_notional_usdc * size_multiplier;
         let cap_nav    = self.nav() * max_position_pct;
@@ -1105,10 +1101,10 @@ mod tests {
     #[test]
     fn size_capped_at_max_order() {
         let p = PaperPortfolio::new(); // NAV = 100
-        // RN1 trades $20,000 → 5% = $1,000, capped at max_order_usdc ($4 default)
+        // RN1 trades $20,000 → 10% = $2,000, capped at max_order_usdc ($25 default)
         let size = p.calculate_size_usdc(20_000.0).unwrap();
-        // Default PAPER_MAX_ORDER_USDC is $4 (tighter than NAV cap)
-        assert!((size - 4.0).abs() < 1e-9, "size={size} expected cap=4");
+        // Phase 6: PAPER_MAX_ORDER_USDC default is $25
+        assert!((size - 25.0).abs() < 1e-9, "size={size} expected cap=25");
     }
 
     #[test]

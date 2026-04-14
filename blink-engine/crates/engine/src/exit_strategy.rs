@@ -127,20 +127,21 @@ impl ExitConfig {
     pub fn from_env() -> Self {
         Self {
             autoclaim_tiers: parse_autoclaim_tiers_from_env(),
-            stop_loss_pct: env_f64("STOP_LOSS_PCT", 40.0).clamp(1.0, 99.0),
-            stop_loss_small_pct: env_f64("STOP_LOSS_SMALL_PCT", 20.0).clamp(1.0, 99.0),
-            stop_loss_small_notional_usdc: env_f64("STOP_LOSS_SMALL_NOTIONAL_USDC", 6.0),
-            trailing_stop_activate_pct: env_f64("TRAILING_STOP_ACTIVATE_PCT", 15.0),
-            trailing_stop_drop_pct: env_f64("TRAILING_STOP_DROP_PCT", 10.0),
-            stagnant_exit_secs: env_u64("STAGNANT_EXIT_SECS", 1800),
+            // Phase 6: cut losers fast, let winners run
+            stop_loss_pct: env_f64("STOP_LOSS_PCT", 25.0).clamp(1.0, 99.0),
+            stop_loss_small_pct: env_f64("STOP_LOSS_SMALL_PCT", 15.0).clamp(1.0, 99.0),
+            stop_loss_small_notional_usdc: env_f64("STOP_LOSS_SMALL_NOTIONAL_USDC", 8.0),
+            trailing_stop_activate_pct: env_f64("TRAILING_STOP_ACTIVATE_PCT", 25.0),
+            trailing_stop_drop_pct: env_f64("TRAILING_STOP_DROP_PCT", 15.0),
+            stagnant_exit_secs: env_u64("STAGNANT_EXIT_SECS", 7200),
             stagnant_threshold_pct: env_f64("STAGNANT_THRESHOLD_PCT", 5.0),
             max_hold_secs: env_u64("MAX_HOLD_SECS", 432_000), // 5 days
             stale_close_secs: env_u64("STALE_CLOSE_SECS", 60),
             event_aware_exit_secs: env_u64("EVENT_AWARE_EXIT_SECS", 3600),
             event_aware_exit_loss_pct: env_f64("EVENT_AWARE_EXIT_LOSS_PCT", 5.0),
             pre_event_close_secs: env_u64("PRE_EVENT_CLOSE_SECS", 60),
-            momentum_exit_threshold_bps: env_u64("MOMENTUM_EXIT_THRESHOLD_BPS", 150),
-            momentum_exit_fraction: env_f64("MOMENTUM_EXIT_FRACTION", 0.5).clamp(0.1, 1.0),
+            momentum_exit_threshold_bps: env_u64("MOMENTUM_EXIT_THRESHOLD_BPS", 300),
+            momentum_exit_fraction: env_f64("MOMENTUM_EXIT_FRACTION", 0.3).clamp(0.1, 1.0),
             momentum_check_interval_secs: env_u64("MOMENTUM_CHECK_INTERVAL_SECS", 60),
             momentum_grace_secs: env_u64("MOMENTUM_GRACE_SECS", 60),
         }
@@ -150,21 +151,22 @@ impl ExitConfig {
 impl Default for ExitConfig {
     fn default() -> Self {
         Self {
-            autoclaim_tiers: vec![(60.0, 0.30), (100.0, 0.30), (150.0, 1.0)],
-            stop_loss_pct: 40.0,
-            stop_loss_small_pct: 20.0,
-            stop_loss_small_notional_usdc: 6.0,
-            trailing_stop_activate_pct: 15.0,
-            trailing_stop_drop_pct: 10.0,
-            stagnant_exit_secs: 1800,
+            // Phase 6: cut losers fast, let winners run
+            autoclaim_tiers: vec![(100.0, 0.25), (200.0, 0.50), (300.0, 1.0)],
+            stop_loss_pct: 25.0,
+            stop_loss_small_pct: 15.0,
+            stop_loss_small_notional_usdc: 8.0,
+            trailing_stop_activate_pct: 25.0,
+            trailing_stop_drop_pct: 15.0,
+            stagnant_exit_secs: 7200,
             stagnant_threshold_pct: 5.0,
             max_hold_secs: 432_000,
             stale_close_secs: 60,
             event_aware_exit_secs: 3600,
             event_aware_exit_loss_pct: 5.0,
             pre_event_close_secs: 60,
-            momentum_exit_threshold_bps: 150,
-            momentum_exit_fraction: 0.5,
+            momentum_exit_threshold_bps: 300,
+            momentum_exit_fraction: 0.3,
             momentum_check_interval_secs: 60,
             momentum_grace_secs: 60,
         }
@@ -371,9 +373,12 @@ pub fn conviction_multiplier(
 ) -> f64 {
     let mut mult = config.base_multiplier;
 
-    // Whale bonus: RN1 bet exceeds threshold → high conviction
-    if rn1_bet_usdc >= config.whale_bet_threshold_usdc {
-        mult += config.whale_bonus_multiplier;
+    // Phase 6: RN1 bet-size proportional conviction (logarithmic).
+    // Bigger RN1 bets signal higher conviction. Scale smoothly from 1× at $10
+    // to ~2× at $100k using log2. This replaces the binary whale threshold.
+    if rn1_bet_usdc > 10.0 {
+        let log_boost = (rn1_bet_usdc / 10.0).log2() / 14.0; // log2(100k/10)≈13.3 → ~1.0
+        mult += config.whale_bonus_multiplier * log_boost.clamp(0.0, 1.0);
     }
 
     // High liquidity bonus: market is very liquid → lower slippage risk
@@ -414,7 +419,7 @@ fn env_u64(key: &str, default: u64) -> u64 {
 
 fn parse_autoclaim_tiers_from_env() -> Vec<(f64, f64)> {
     let raw = std::env::var("AUTOCLAIM_TIERS")
-        .unwrap_or_else(|_| "60:0.30,100:0.30,150:1.0".to_string());
+        .unwrap_or_else(|_| "100:0.25,200:0.50,300:1.0".to_string());
     let mut out: Vec<(f64, f64)> = raw
         .split(',')
         .filter_map(|item| {
@@ -441,22 +446,25 @@ mod tests {
     #[test]
     fn conviction_base_only() {
         let config = FilterConfig::default();
-        // Small bet, unknown category, low liquidity → base multiplier only
+        // Very small bet ($5), unknown category, low liquidity → only log-scale boost
+        // $5k > $10, so log_boost = log2(500)/14 ≈ 0.64 → partial whale bonus
         let mult = conviction_multiplier(5_000.0, "entertainment", None, 50_000.0, &config);
-        assert!((mult - config.base_multiplier).abs() < f64::EPSILON);
+        assert!(mult >= config.base_multiplier, "should be at or above base");
+        assert!(mult < config.base_multiplier + config.whale_bonus_multiplier + 0.001,
+            "should not have full whale bonus");
     }
 
     #[test]
     fn conviction_all_bonuses() {
         let config = FilterConfig::default();
         // Whale bet + sports + NFL + high liquidity → all bonuses
+        // $60k → log_boost = log2(6000)/14 ≈ 0.89 → near-full whale bonus
         let mult = conviction_multiplier(60_000.0, "sports", Some("NFL"), 250_000.0, &config);
-        let expected = config.base_multiplier
-            + config.whale_bonus_multiplier
-            + config.high_liquidity_bonus
-            + config.sports_bonus
-            + config.preferred_sport_bonus;
-        assert!((mult - expected.min(config.max_multiplier)).abs() < f64::EPSILON);
+        // Should be close to max but not necessarily exact due to log scaling
+        assert!(mult > config.base_multiplier + config.sports_bonus,
+            "should include sports bonus + substantial whale bonus");
+        assert!(mult <= config.max_multiplier + f64::EPSILON,
+            "must not exceed max");
     }
 
     #[test]

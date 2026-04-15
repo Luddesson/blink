@@ -188,7 +188,7 @@ async def analyse_market(
         confidence=confidence,
         reasoning=reasoning,
         recommended_action=action,
-        analysis_id=str(uuid.uuid4())[:8],
+        analysis_id=str(uuid.uuid4()),
         clob=clob,
         price_change_1h=price_change_1h,
     )

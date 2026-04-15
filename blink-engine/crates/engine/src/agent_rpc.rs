@@ -154,6 +154,7 @@ async fn handle_rpc(req: RpcRequest, state: &AgentRpcState) -> std::result::Resu
         "bullpen_smart_money" => bullpen_smart_money_rpc(req.params, state).await,
         "submit_alpha_signal" => submit_alpha_signal(req.params, state).await,
         "report_alpha_cycle" => report_alpha_cycle(req.params, state).await,
+        "report_alpha_calibration" => report_alpha_calibration(req.params, state).await,
         "alpha_status" => alpha_status(state).await,
         _ => Err(RpcError { code: -32601, message: "Method not found".to_string() }),
     }
@@ -488,4 +489,17 @@ async fn alpha_status(state: &AgentRpcState) -> std::result::Result<Value, RpcEr
         "positions_opened": a.positions_opened,
         "positions_closed": a.positions_closed,
     }))
+}
+
+async fn report_alpha_calibration(params: Value, state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    let analytics = state.alpha_analytics.as_ref().ok_or(RpcError {
+        code: -32000,
+        message: "Alpha analytics not available".into(),
+    })?;
+
+    // Store the calibration data as-is (JSON blob from Python sidecar)
+    analytics.lock().unwrap().calibration = Some(params);
+    tracing::info!("Alpha calibration report received");
+
+    Ok(json!({ "ok": true }))
 }

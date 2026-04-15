@@ -296,6 +296,8 @@ pub struct AlphaAnalytics {
     pub best_trade_pnl: f64,
     pub worst_trade_pnl: f64,
     pub total_fees_paid: f64,
+    // Calibration data (updated by sidecar via report_alpha_calibration RPC)
+    pub calibration: Option<serde_json::Value>,
 }
 
 const MAX_SIGNAL_HISTORY: usize = 50;

@@ -21,6 +21,7 @@ import logging
 import signal
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,6 +35,9 @@ from .config import AlphaConfig
 from .connectors.clob import OrderbookSnapshot, get_orderbook, get_price_change_1h
 from .connectors.gamma import GammaMarket, fetch_active_markets
 from .connectors.scanner import score_markets
+from .memory.calibration import CalibrationTracker
+from .memory.outcome_tracker import run_outcome_tracker
+from .memory.prediction_store import PredictionRecord, PredictionStore
 from .submission import submit_signal
 
 def _compute_size_for_report(llm: LLMSignal, cfg: AlphaConfig) -> float | None:
@@ -105,7 +109,28 @@ async def _report_cycle_to_engine(cfg: AlphaConfig, report: dict) -> None:
             logger.debug("Failed to report cycle to engine: %s", e)
 
 
-async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI) -> None:
+async def _report_calibration_to_engine(cfg: AlphaConfig, report: object) -> None:
+    """Report calibration metrics to the Blink engine via JSON-RPC."""
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "calibration-report",
+        "method": "report_alpha_calibration",
+        "params": report.to_dict() if hasattr(report, "to_dict") else {},
+    }
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            resp = await client.post(
+                cfg.blink_rpc_url + "/rpc",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            logger.debug("Calibration report sent to engine")
+        except Exception as e:
+            logger.debug("Failed to report calibration to engine: %s", e)
+
+
+async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_store: PredictionStore | None = None) -> None:
     """One full discovery → enrich → analyse → submit cycle."""
     logger.info("=== Alpha cycle start ===")
     cycle_start = time.monotonic()
@@ -192,6 +217,26 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI) -> None:
             top_markets.append(_build_market_entry(
                 market, None, clob, price_change_1h, None, "PASS",
             ))
+            # Record PASS prediction in memory
+            if prediction_store:
+                await prediction_store.record_prediction(PredictionRecord(
+                    analysis_id=str(uuid.uuid4()),
+                    condition_id=market.condition_id,
+                    token_id=market.token_id,
+                    question=market.question[:200],
+                    market_price=market.yes_price,
+                    model_action="PASS",
+                    filter_status="pass",
+                    category=market.extra.get("category"),
+                    end_date=market.end_date_iso,
+                    model_used=cfg.openai_model,
+                    clob_best_bid=clob.best_bid if clob else None,
+                    clob_best_ask=clob.best_ask if clob else None,
+                    clob_spread_pct=clob.spread_pct if clob else None,
+                    clob_bid_depth=clob.bid_depth_usdc if clob else None,
+                    clob_ask_depth=clob.ask_depth_usdc if clob else None,
+                    price_change_1h=price_change_1h,
+                ))
             continue
 
         # Step 5: Calibrate confidence based on spread
@@ -208,18 +253,72 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI) -> None:
             top_markets.append(_build_market_entry(
                 market, llm_signal, clob, price_change_1h, edge_bps, "LOW_EDGE",
             ))
+            # Record LOW_EDGE prediction in memory
+            if prediction_store:
+                await prediction_store.record_prediction(PredictionRecord(
+                    analysis_id=llm_signal.analysis_id,
+                    condition_id=market.condition_id,
+                    token_id=market.token_id,
+                    question=market.question[:200],
+                    market_price=market.yes_price,
+                    model_action=llm_signal.recommended_action,
+                    filter_status="low_edge",
+                    category=market.extra.get("category"),
+                    end_date=market.end_date_iso,
+                    predicted_prob=llm_signal.yes_probability,
+                    confidence=llm_signal.confidence,
+                    edge_bps=edge_bps,
+                    reasoning=llm_signal.reasoning[:500],
+                    model_used=cfg.openai_model,
+                    side=llm_signal.recommended_action,
+                    clob_best_bid=clob.best_bid if clob else None,
+                    clob_best_ask=clob.best_ask if clob else None,
+                    clob_spread_pct=clob.spread_pct if clob else None,
+                    clob_bid_depth=clob.bid_depth_usdc if clob else None,
+                    clob_ask_depth=clob.ask_depth_usdc if clob else None,
+                    price_change_1h=price_change_1h,
+                ))
             continue
 
         # Step 7: Submit with Kelly sizing
         result = await submit_signal(llm_signal, cfg)
         action = "SUBMITTED" if result.success else "REJECTED"
+        filter_status = "submitted" if result.success else "engine_rejected"
         if result.success:
             submitted += 1
 
+        size_usdc = _compute_size_for_report(llm_signal, cfg)
         top_markets.append(_build_market_entry(
             market, llm_signal, clob, price_change_1h, edge_bps, action,
-            size_usdc=_compute_size_for_report(llm_signal, cfg),
+            size_usdc=size_usdc,
         ))
+
+        # Record SUBMITTED / REJECTED prediction in memory
+        if prediction_store:
+            await prediction_store.record_prediction(PredictionRecord(
+                analysis_id=llm_signal.analysis_id,
+                condition_id=market.condition_id,
+                token_id=market.token_id,
+                question=market.question[:200],
+                market_price=market.yes_price,
+                model_action=llm_signal.recommended_action,
+                filter_status=filter_status,
+                category=market.extra.get("category"),
+                end_date=market.end_date_iso,
+                predicted_prob=llm_signal.yes_probability,
+                confidence=llm_signal.confidence,
+                edge_bps=edge_bps,
+                reasoning=llm_signal.reasoning[:500],
+                model_used=cfg.openai_model,
+                recommended_size_usdc=size_usdc,
+                side=llm_signal.recommended_action,
+                clob_best_bid=clob.best_bid if clob else None,
+                clob_best_ask=clob.best_ask if clob else None,
+                clob_spread_pct=clob.spread_pct if clob else None,
+                clob_bid_depth=clob.bid_depth_usdc if clob else None,
+                clob_ask_depth=clob.ask_depth_usdc if clob else None,
+                price_change_1h=price_change_1h,
+            ))
 
         await asyncio.sleep(0.5)
 
@@ -232,7 +331,14 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI) -> None:
         clob_enriched, n_to_analyze, cycle_duration,
     )
 
-    # Report cycle stats to engine
+    # Report cycle stats to engine (include prediction memory stats)
+    memory_stats: dict = {}
+    if prediction_store:
+        try:
+            memory_stats = await prediction_store.get_stats()
+        except Exception:
+            pass
+
     await _report_cycle_to_engine(cfg, {
         "markets_scanned": len(raw_markets),
         "markets_analyzed": n_to_analyze,
@@ -240,6 +346,11 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI) -> None:
         "signals_submitted": submitted,
         "cycle_duration_secs": round(cycle_duration, 2),
         "top_markets": top_markets,
+        "memory": {
+            "total_predictions": memory_stats.get("total", 0),
+            "resolved": memory_stats.get("resolved", 0),
+            "avg_brier": memory_stats.get("avg_brier"),
+        } if memory_stats else None,
     })
 
 
@@ -258,9 +369,35 @@ async def main_loop(cfg: AlphaConfig) -> None:
         sys.exit(1)
 
     openai_client = AsyncOpenAI(api_key=cfg.llm_api_key, base_url=cfg.llm_base_url)
+
+    # Phase 1: Initialize prediction memory
+    db_path = Path(__file__).resolve().parents[2] / "data" / "alpha_predictions.db"
+    prediction_store = PredictionStore(db_path)
+    try:
+        await prediction_store.open()
+    except Exception as e:
+        logger.warning("Prediction store failed to open — running without memory: %s", e)
+        prediction_store = None
+
+    # Start outcome tracker as background task
+    shutdown_event = asyncio.Event()
+    outcome_task: asyncio.Task | None = None
+    if prediction_store:
+        outcome_task = asyncio.create_task(
+            run_outcome_tracker(
+                prediction_store,
+                gamma_url=cfg.gamma_api_url,
+                engine_url=cfg.blink_rpc_url,
+                shutdown_event=shutdown_event,
+            )
+        )
+
+    # Report calibration data to engine periodically
+    calibration_tracker = CalibrationTracker(prediction_store) if prediction_store else None
+
     logger.info(
         "Alpha sidecar starting | model=%s | clob=%s | interval=%ds "
-        "| min_edge=%dbps | conf_floor=%.2f | vol=$%.0f–$%.0f | rpc=%s",
+        "| min_edge=%dbps | conf_floor=%.2f | vol=$%.0f–$%.0f | rpc=%s | memory=%s",
         cfg.openai_model,
         cfg.clob_api_url,
         cfg.discovery_interval_secs,
@@ -269,11 +406,23 @@ async def main_loop(cfg: AlphaConfig) -> None:
         cfg.scanner_min_volume_usdc,
         cfg.scanner_max_volume_usdc,
         cfg.blink_rpc_url,
+        "ON" if prediction_store else "OFF",
     )
 
+    cycle_count = 0
     while not _shutdown:
         try:
-            await run_cycle(cfg, openai_client)
+            await run_cycle(cfg, openai_client, prediction_store)
+            cycle_count += 1
+
+            # Report calibration every 5 cycles
+            if calibration_tracker and cycle_count % 5 == 0:
+                try:
+                    report = await calibration_tracker.compute_report()
+                    await _report_calibration_to_engine(cfg, report)
+                except Exception as e:
+                    logger.debug("Calibration report failed: %s", e)
+
         except Exception:
             logger.exception("Unhandled error in cycle — continuing after backoff")
             await asyncio.sleep(30)
@@ -284,6 +433,20 @@ async def main_loop(cfg: AlphaConfig) -> None:
             if _shutdown:
                 break
             await asyncio.sleep(1)
+
+    # Graceful shutdown
+    shutdown_event.set()
+    if outcome_task:
+        outcome_task.cancel()
+        try:
+            await outcome_task
+        except asyncio.CancelledError:
+            pass
+
+    if prediction_store:
+        total = await prediction_store.count()
+        logger.info("Prediction store closing — %d total predictions recorded", total)
+        await prediction_store.close()
 
     logger.info("Alpha sidecar stopped.")
 

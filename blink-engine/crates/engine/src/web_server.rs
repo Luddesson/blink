@@ -175,6 +175,7 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/backtest/walk-forward", post(post_backtest_walk_forward))
         .route("/api/analytics/equity", get(get_analytics_equity))
         .route("/api/alpha", get(get_alpha_status))
+        .route("/api/alpha/calibration", get(get_alpha_calibration))
         .route("/ws", get(ws_handler))
         .with_state(state)
         .layer(cors);
@@ -1788,5 +1789,35 @@ async fn get_alpha_status(State(state): State<AppState>) -> impl IntoResponse {
             "worst_trade_pnl": a.worst_trade_pnl,
             "total_fees_paid": a.total_fees_paid,
         },
+        // Calibration data from prediction memory
+        "calibration": a.calibration,
     })).into_response()
+}
+
+/// GET /api/alpha/calibration
+///
+/// Returns calibration data from the Alpha AI prediction memory system.
+/// Updated periodically by the Python sidecar via `report_alpha_calibration` RPC.
+async fn get_alpha_calibration(State(state): State<AppState>) -> impl IntoResponse {
+    let Some(ref analytics) = state.alpha_analytics else {
+        return Json(json!({
+            "enabled": false,
+            "reason": "Alpha pipeline not enabled"
+        })).into_response();
+    };
+
+    let a = analytics.lock().unwrap();
+    match &a.calibration {
+        Some(data) => Json(json!({
+            "enabled": true,
+            "has_data": true,
+            "calibration": data,
+        })).into_response(),
+        None => Json(json!({
+            "enabled": true,
+            "has_data": false,
+            "calibration": null,
+            "reason": "No calibration data yet — waiting for predictions to resolve"
+        })).into_response(),
+    }
 }

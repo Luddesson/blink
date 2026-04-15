@@ -165,7 +165,10 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_sto
         filtered: list[GammaMarket] = []
         for m in markets:
             try:
-                end_dt = datetime.fromisoformat(m.end_date_iso.replace("Z", "+00:00"))
+                raw_end = m.end_date_iso.replace("Z", "+00:00")
+                end_dt = datetime.fromisoformat(raw_end)
+                if end_dt.tzinfo is None:
+                    end_dt = end_dt.replace(tzinfo=timezone.utc)
                 if end_dt <= cutoff:
                     filtered.append(m)
                 else:

@@ -34,6 +34,7 @@ class AlphaConfig:
     # Risk (sidecar-side pre-filter, engine has final say)
     confidence_floor: float = 0.50
     max_recommended_size_usdc: float = 25.0
+    max_expiry_hours: float = 6.0  # Only bet on markets expiring within this window
 
     # Reasoning chain (Phase 2)
     reasoning_chain_enabled: bool = True
@@ -65,6 +66,7 @@ class AlphaConfig:
             chroma_persist_dir=os.getenv("ALPHA_CHROMA_DIR", cls.chroma_persist_dir),
             confidence_floor=float(os.getenv("ALPHA_CONFIDENCE_FLOOR", str(cls.confidence_floor))),
             max_recommended_size_usdc=float(os.getenv("ALPHA_MAX_SINGLE_ORDER_USDC", str(cls.max_recommended_size_usdc))),
+            max_expiry_hours=float(os.getenv("ALPHA_MAX_EXPIRY_HOURS", str(cls.max_expiry_hours))),
             reasoning_chain_enabled=os.getenv("ALPHA_REASONING_CHAIN", "true").lower() in ("true", "1", "yes"),
             newsapi_key=os.getenv("NEWSAPI_KEY", ""),
             tavily_key=os.getenv("TAVILY_API_KEY", ""),

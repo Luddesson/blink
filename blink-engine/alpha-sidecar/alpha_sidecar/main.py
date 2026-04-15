@@ -23,7 +23,7 @@ import signal
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -157,6 +157,33 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_sto
     if not markets:
         logger.warning("Scanner filtered all markets — check volume thresholds")
         return
+
+    # Step 2b: Filter out markets that don't expire within the configured window
+    if cfg.max_expiry_hours > 0:
+        cutoff = datetime.now(timezone.utc) + timedelta(hours=cfg.max_expiry_hours)
+        before_count = len(markets)
+        filtered: list[GammaMarket] = []
+        for m in markets:
+            try:
+                end_dt = datetime.fromisoformat(m.end_date_iso.replace("Z", "+00:00"))
+                if end_dt <= cutoff:
+                    filtered.append(m)
+                else:
+                    logger.debug(
+                        "Skipping %s — expires %s (>%.0fh away)",
+                        m.question[:60], m.end_date_iso, cfg.max_expiry_hours,
+                    )
+            except (ValueError, AttributeError):
+                logger.debug("Skipping %s — unparseable end_date: %s", m.question[:60], m.end_date_iso)
+        markets = filtered
+        if before_count != len(markets):
+            logger.info(
+                "Expiry filter: %d → %d markets (max %.0fh)",
+                before_count, len(markets), cfg.max_expiry_hours,
+            )
+        if not markets:
+            logger.warning("All markets filtered by expiry window (%.0fh)", cfg.max_expiry_hours)
+            return
 
     n_to_analyze = min(len(markets), cfg.max_llm_calls_per_cycle)
     logger.info(

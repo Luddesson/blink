@@ -526,7 +526,7 @@ impl LiveEngine {
             if state.reject_streak >= self.canary_policy.max_reject_streak {
                 state.halted = true;
                 let _ = std::fs::write(
-                    "logs\\CANARY_HALTED.flag",
+                    "logs/CANARY_HALTED.flag",
                     format!(
                         "halted=true reject_streak={} threshold={}\n",
                         state.reject_streak, self.canary_policy.max_reject_streak
@@ -834,7 +834,7 @@ impl LiveEngine {
             "reason={reason}\ntimestamp={}\npending_orders_after_cancel={pending}\n",
             chrono::Utc::now()
         );
-        let _ = std::fs::write("logs\\EMERGENCY_STOP.flag", &flag_content);
+        let _ = std::fs::write("logs/EMERGENCY_STOP.flag", &flag_content);
 
         if let Some(ref log) = self.activity {
             log_push(

@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import signal
 import sys
 import time
@@ -437,7 +438,9 @@ async def main_loop(cfg: AlphaConfig) -> None:
     openai_client = AsyncOpenAI(api_key=cfg.llm_api_key, base_url=cfg.llm_base_url)
 
     # Phase 1: Initialize prediction memory
-    db_path = Path(__file__).resolve().parents[2] / "data" / "alpha_predictions.db"
+    db_path = Path(os.environ.get("ALPHA_DB_PATH", "")) if os.environ.get("ALPHA_DB_PATH") else (
+        Path(__file__).resolve().parents[2] / "data" / "alpha_predictions.db"
+    )
     prediction_store = PredictionStore(db_path)
     try:
         await prediction_store.open()

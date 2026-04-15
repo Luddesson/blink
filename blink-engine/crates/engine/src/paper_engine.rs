@@ -430,7 +430,7 @@ impl PaperEngine {
         // 5B: Live tick recording — write every RN1 signal to CSV for backtesting.
         {
             let tick_path = std::env::var("TICK_RECORD_PATH")
-                .unwrap_or_else(|_| "logs\\ticks.csv".to_string());
+                .unwrap_or_else(|_| "logs/ticks.csv".to_string());
             if tick_path != "off" && tick_path != "false" {
                 use std::io::Write;
                 if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -1332,7 +1332,7 @@ impl PaperEngine {
         // Immediate save on position open — don't wait for the 10s timer.
         {
             let state_path = std::env::var("PAPER_STATE_PATH")
-                .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());
+                .unwrap_or_else(|_| "logs/paper_portfolio_state.json".to_string());
             let _ = self.save_portfolio(&state_path).await;
         }
     }
@@ -2370,7 +2370,7 @@ impl PaperEngine {
         // Immediate save after any position close (lock is free now).
         if !action_counts.is_empty() {
             let state_path = std::env::var("PAPER_STATE_PATH")
-                .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());
+                .unwrap_or_else(|_| "logs/paper_portfolio_state.json".to_string());
             let _ = self.save_portfolio(&state_path).await;
         }
     }

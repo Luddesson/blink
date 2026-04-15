@@ -100,6 +100,7 @@ Set-Location '$root\blink-engine'
 `$env:VAR_THRESHOLD_PCT = '0.50'
 `$env:MIN_SIGNAL_NOTIONAL_USD = '5.0'
 `$env:TUI = 'false'
+`$env:ALPHA_ENABLED = 'true'
 & '.\target\$buildProfile\engine.exe' > '$engineLog' 2>&1
 "@ | Set-Content $engineLauncher
 

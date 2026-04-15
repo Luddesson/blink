@@ -877,6 +877,8 @@ impl PaperEngine {
                     },
                     event_start_time: pos.event_start_time,
                     event_end_time: pos.event_end_time,
+                    signal_source: pos.signal_source.clone(),
+                    analysis_id: pos.analysis_id.clone(),
                 });
                 self.risk.lock().unwrap().record_close(pnl);
                 if let Some(ref log) = self.activity {
@@ -1259,6 +1261,8 @@ impl PaperEngine {
                 variant,
                 signal.event_start_time,
                 signal.event_end_time,
+                &signal.signal_source,
+                signal.analysis_id.clone(),
             )
         };
         // Record fill in risk manager for VaR tracking (does not affect daily P&L).

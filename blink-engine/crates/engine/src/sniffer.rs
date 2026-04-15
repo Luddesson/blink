@@ -74,6 +74,8 @@ impl Sniffer {
             event_end_time: None,
             source_wallet: self.rn1_wallet.clone(),
             wallet_weight: 1.0,
+            signal_source: "rn1".to_string(),
+            analysis_id: None,
         }
     }
 

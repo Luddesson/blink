@@ -949,7 +949,7 @@ async fn post_seed_position(
         return Json(json!({"error": "Paper engine not available"}));
     };
     let mut p = paper.portfolio.lock().await;
-    let id = p.open_position_with_meta(token_id.clone(), market_title.clone(), None, side, entry_price, usdc_size, "debug".to_string(), 0.0, 0, "debug", None, None);
+    let id = p.open_position_with_meta(token_id.clone(), market_title.clone(), None, side, entry_price, usdc_size, "debug".to_string(), 0.0, 0, "debug", None, None, "debug", None);
     let pos_json = p.positions.iter().find(|x| x.id == id).map(|pos| json!({
         "id": pos.id,
         "token_id": pos.token_id,
@@ -1676,9 +1676,78 @@ async fn get_alpha_status(State(state): State<AppState>) -> impl IntoResponse {
         })).into_response();
     };
 
+    // Gather AI positions from the paper portfolio
+    let ai_positions: Vec<serde_json::Value> = if let Some(ref paper) = state.paper {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), paper.portfolio.lock()).await {
+            Ok(p) => {
+                p.positions.iter()
+                    .filter(|pos| pos.signal_source == "alpha")
+                    .map(|pos| json!({
+                        "id": pos.id,
+                        "token_id": pos.token_id,
+                        "market_title": pos.market_title,
+                        "side": pos.side.to_string(),
+                        "entry_price": pos.entry_price,
+                        "current_price": pos.current_price,
+                        "shares": pos.shares,
+                        "usdc_spent": pos.usdc_spent,
+                        "unrealized_pnl": pos.unrealized_pnl(),
+                        "unrealized_pnl_pct": pos.unrealized_pnl_pct(),
+                        "analysis_id": pos.analysis_id,
+                        "duration_secs": pos.opened_at.elapsed().as_secs(),
+                        "opened_at": pos.opened_at_wall.to_rfc3339(),
+                    }))
+                    .collect()
+            }
+            Err(_) => vec![],
+        }
+    } else {
+        vec![]
+    };
+
+    // Gather AI closed trades
+    let ai_closed_trades: Vec<serde_json::Value> = if let Some(ref paper) = state.paper {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), paper.portfolio.lock()).await {
+            Ok(p) => {
+                p.closed_trades.iter()
+                    .filter(|t| t.signal_source == "alpha")
+                    .rev()
+                    .take(20)
+                    .map(|t| json!({
+                        "token_id": t.token_id,
+                        "market_title": t.market_title,
+                        "side": t.side.to_string(),
+                        "entry_price": t.entry_price,
+                        "exit_price": t.exit_price,
+                        "realized_pnl": t.realized_pnl,
+                        "fees_paid_usdc": t.fees_paid_usdc,
+                        "reason": t.reason,
+                        "duration_secs": t.duration_secs,
+                        "analysis_id": t.analysis_id,
+                        "closed_at": t.closed_at_wall.to_rfc3339(),
+                    }))
+                    .collect()
+            }
+            Err(_) => vec![],
+        }
+    } else {
+        vec![]
+    };
+
     let a = analytics.lock().unwrap();
+
+    // Update unrealized P&L for open AI positions in signal records
+    // (done inline to avoid extra lock acquisitions)
+    let mut unrealized_total = 0.0;
+    for pos_json in &ai_positions {
+        if let Some(upnl) = pos_json.get("unrealized_pnl").and_then(|v| v.as_f64()) {
+            unrealized_total += upnl;
+        }
+    }
+
     Json(json!({
         "enabled": true,
+        // Core counters
         "signals_received": a.signals_received,
         "signals_accepted": a.signals_accepted,
         "signals_rejected": a.signals_rejected,
@@ -1686,10 +1755,13 @@ async fn get_alpha_status(State(state): State<AppState>) -> impl IntoResponse {
             (a.signals_accepted as f64 / a.signals_received as f64) * 100.0
         } else { 0.0 },
         "reject_reasons": a.reject_reasons,
+        // P&L
         "realized_pnl_usdc": a.realized_pnl_usdc,
-        "unrealized_pnl_usdc": a.unrealized_pnl_usdc,
+        "unrealized_pnl_usdc": unrealized_total,
+        // Position counts
         "positions_opened": a.positions_opened,
         "positions_closed": a.positions_closed,
+        // Cycle info
         "cycles_completed": a.cycles_completed,
         "last_cycle_at": a.last_cycle_at,
         "last_cycle_markets_scanned": a.last_cycle_markets_scanned,
@@ -1698,5 +1770,23 @@ async fn get_alpha_status(State(state): State<AppState>) -> impl IntoResponse {
         "last_cycle_signals_submitted": a.last_cycle_signals_submitted,
         "last_cycle_duration_secs": a.last_cycle_duration_secs,
         "last_cycle_top_markets": a.last_cycle_top_markets,
+        // NEW: Signal history (last 50)
+        "signal_history": a.signal_history,
+        // NEW: Cycle history (last 30)
+        "cycle_history": a.cycle_history,
+        // NEW: Live AI positions
+        "ai_positions": ai_positions,
+        // NEW: AI closed trades
+        "ai_closed_trades": ai_closed_trades,
+        // NEW: Performance metrics
+        "performance": {
+            "win_count": a.win_count,
+            "loss_count": a.loss_count,
+            "win_rate_pct": a.win_rate_pct(),
+            "avg_pnl_per_trade": a.avg_pnl_per_trade(),
+            "best_trade_pnl": a.best_trade_pnl,
+            "worst_trade_pnl": a.worst_trade_pnl,
+            "total_fees_paid": a.total_fees_paid,
+        },
     })).into_response()
 }

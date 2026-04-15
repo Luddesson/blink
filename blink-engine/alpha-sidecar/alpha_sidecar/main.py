@@ -29,12 +29,20 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from .analysis.calibration import calibrate_confidence
-from .analysis.llm import analyse_market, compute_edge
+from .analysis.llm import LLMSignal, analyse_market, compute_edge
 from .config import AlphaConfig
-from .connectors.clob import get_orderbook, get_price_change_1h
-from .connectors.gamma import fetch_active_markets
+from .connectors.clob import OrderbookSnapshot, get_orderbook, get_price_change_1h
+from .connectors.gamma import GammaMarket, fetch_active_markets
 from .connectors.scanner import score_markets
 from .submission import submit_signal
+
+def _compute_size_for_report(llm: LLMSignal, cfg: AlphaConfig) -> float | None:
+    """Compute approximate order size for reporting (same as submission.py logic)."""
+    try:
+        from .submission import _compute_size
+        return _compute_size(llm, cfg)
+    except Exception:
+        return None
 
 # Load .env — search current dir, then blink-engine/, then repo root
 def _load_env() -> None:
@@ -136,6 +144,35 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI) -> None:
     clob_enriched = 0
     top_markets: list[dict] = []
 
+    def _build_market_entry(
+        market: GammaMarket,
+        llm_signal: LLMSignal | None,
+        clob: OrderbookSnapshot | None,
+        price_change_1h: float | None,
+        edge_bps: float | None,
+        action: str,
+        *,
+        size_usdc: float | None = None,
+    ) -> dict:
+        """Build enriched market entry for cycle report."""
+        entry: dict = {
+            "question": market.question[:100],
+            "yes_price": round(market.yes_price, 4),
+            "llm_probability": round(llm_signal.yes_probability, 4) if llm_signal else None,
+            "confidence": round(llm_signal.confidence, 3) if llm_signal else None,
+            "edge_bps": round(edge_bps, 1) if edge_bps is not None else None,
+            "action": action,
+            "reasoning": (llm_signal.reasoning[:300] if llm_signal else None),
+            "spread_pct": round(clob.spread_pct, 4) if clob else None,
+            "bid_depth_usdc": round(clob.bid_depth_usdc, 2) if clob else None,
+            "ask_depth_usdc": round(clob.ask_depth_usdc, 2) if clob else None,
+            "price_change_1h": round(price_change_1h, 4) if price_change_1h is not None else None,
+            "side": llm_signal.recommended_action if llm_signal else None,
+            "token_id": market.token_id,
+            "recommended_size_usdc": round(size_usdc, 2) if size_usdc is not None else None,
+        }
+        return entry
+
     for market in markets[:n_to_analyze]:
         if _shutdown:
             break
@@ -152,14 +189,9 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI) -> None:
 
         if llm_signal is None:
             skipped_llm += 1
-            top_markets.append({
-                "question": market.question[:80],
-                "yes_price": round(market.yes_price, 4),
-                "llm_probability": None,
-                "confidence": None,
-                "edge_bps": None,
-                "action": "PASS",
-            })
+            top_markets.append(_build_market_entry(
+                market, None, clob, price_change_1h, None, "PASS",
+            ))
             continue
 
         # Step 5: Calibrate confidence based on spread
@@ -173,14 +205,9 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI) -> None:
 
         if edge_bps < cfg.min_edge_bps:
             skipped_edge += 1
-            top_markets.append({
-                "question": market.question[:80],
-                "yes_price": round(market.yes_price, 4),
-                "llm_probability": round(llm_signal.yes_probability, 4),
-                "confidence": round(llm_signal.confidence, 3),
-                "edge_bps": round(edge_bps, 1),
-                "action": "LOW_EDGE",
-            })
+            top_markets.append(_build_market_entry(
+                market, llm_signal, clob, price_change_1h, edge_bps, "LOW_EDGE",
+            ))
             continue
 
         # Step 7: Submit with Kelly sizing
@@ -189,14 +216,10 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI) -> None:
         if result.success:
             submitted += 1
 
-        top_markets.append({
-            "question": market.question[:80],
-            "yes_price": round(market.yes_price, 4),
-            "llm_probability": round(llm_signal.yes_probability, 4),
-            "confidence": round(llm_signal.confidence, 3),
-            "edge_bps": round(edge_bps, 1),
-            "action": action,
-        })
+        top_markets.append(_build_market_entry(
+            market, llm_signal, clob, price_change_1h, edge_bps, action,
+            size_usdc=_compute_size_for_report(llm_signal, cfg),
+        ))
 
         await asyncio.sleep(0.5)
 

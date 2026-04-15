@@ -527,6 +527,8 @@ mod tests {
             momentum_ref_price: entry,
             momentum_ref_ts: 0,
             last_claimed_tier_pct: 0.0,
+            signal_source: "rn1".to_string(),
+            analysis_id: None,
         }
     }
 }

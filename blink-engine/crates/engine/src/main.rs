@@ -993,7 +993,14 @@ async fn main() -> Result<()> {
         tokio::task::spawn_blocking(move || {
             while let Some(signal) = alpha_handle.block_on(alpha_rx.recv()) {
                 let source_label = format!("AI/{}", signal.analysis_id);
+                let analysis_id_clone = signal.analysis_id.clone();
                 if let Some(ref paper) = alpha_paper {
+                    // Snapshot filled_orders BEFORE handle_signal to detect actual opens
+                    let filled_before = alpha_handle.block_on(async {
+                        let p = paper.portfolio.lock().await;
+                        p.filled_orders
+                    });
+
                     let rn1_compat = RN1Signal {
                         token_id: signal.token_id.clone(),
                         market_title: Some(format!("[ALPHA] {}", signal.analysis_id)),
@@ -1007,13 +1014,32 @@ async fn main() -> Result<()> {
                         event_end_time: None,
                         source_wallet: "alpha-sidecar".to_string(),
                         wallet_weight: 1.0,
+                        signal_source: "alpha".to_string(),
+                        analysis_id: Some(signal.analysis_id.clone()),
                     };
 
                     alpha_handle.block_on(paper.handle_signal(rn1_compat));
 
+                    // Check if a position was actually opened
                     if let Some(ref analytics) = alpha_analytics_ref {
-                        if let Ok(mut a) = analytics.lock() {
-                            a.positions_opened += 1;
+                        let (filled_after, pos_info) = alpha_handle.block_on(async {
+                            let p = paper.portfolio.lock().await;
+                            let info = p.positions.iter()
+                                .find(|pos| pos.analysis_id.as_deref() == Some(&analysis_id_clone))
+                                .map(|pos| (pos.id, pos.entry_price));
+                            (p.filled_orders, info)
+                        });
+
+                        if filled_after > filled_before {
+                            if let Ok(mut a) = analytics.lock() {
+                                if let Some((pos_id, entry_price)) = pos_info {
+                                    a.mark_signal_opened(&analysis_id_clone, pos_id, entry_price);
+                                }
+                            }
+                        } else {
+                            if let Ok(mut a) = analytics.lock() {
+                                a.mark_signal_engine_rejected(&analysis_id_clone);
+                            }
                         }
                     }
                 }

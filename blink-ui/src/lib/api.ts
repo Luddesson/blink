@@ -81,6 +81,81 @@ export type AlphaCycleMarket = {
   confidence: number | null
   edge_bps: number | null
   action: string
+  reasoning: string | null
+  spread_pct: number | null
+  bid_depth_usdc: number | null
+  ask_depth_usdc: number | null
+  price_change_1h: number | null
+  side: string | null
+  token_id: string | null
+  recommended_size_usdc: number | null
+}
+
+export type AlphaSignalRecord = {
+  timestamp: string
+  analysis_id: string
+  token_id: string
+  market_question: string
+  side: string
+  confidence: number
+  reasoning: string
+  recommended_price: number
+  recommended_size_usdc: number
+  status: string
+  position_id: number | null
+  realized_pnl: number | null
+  unrealized_pnl: number | null
+  entry_price: number | null
+  current_price: number | null
+}
+
+export type AlphaCycleSnapshot = {
+  timestamp: string
+  markets_scanned: number
+  markets_analyzed: number
+  signals_submitted: number
+  signals_accepted: number
+  cycle_duration_secs: number
+}
+
+export type AlphaPosition = {
+  id: number
+  token_id: string
+  market_title: string | null
+  side: string
+  entry_price: number
+  current_price: number
+  shares: number
+  usdc_spent: number
+  unrealized_pnl: number
+  unrealized_pnl_pct: number
+  analysis_id: string | null
+  duration_secs: number
+  opened_at: string
+}
+
+export type AlphaClosedTrade = {
+  token_id: string
+  market_title: string | null
+  side: string
+  entry_price: number
+  exit_price: number
+  realized_pnl: number
+  fees_paid_usdc: number
+  reason: string
+  duration_secs: number
+  analysis_id: string | null
+  closed_at: string
+}
+
+export type AlphaPerformance = {
+  win_count: number
+  loss_count: number
+  win_rate_pct: number
+  avg_pnl_per_trade: number
+  best_trade_pnl: number
+  worst_trade_pnl: number
+  total_fees_paid: number
 }
 
 export type AlphaStatus = {
@@ -104,4 +179,10 @@ export type AlphaStatus = {
   last_cycle_signals_submitted: number
   last_cycle_duration_secs: number
   last_cycle_top_markets: AlphaCycleMarket[]
+  // New rich data
+  signal_history: AlphaSignalRecord[]
+  cycle_history: AlphaCycleSnapshot[]
+  ai_positions: AlphaPosition[]
+  ai_closed_trades: AlphaClosedTrade[]
+  performance: AlphaPerformance
 }

@@ -355,6 +355,8 @@ impl BacktestEngine {
                 scorecard: crate::paper_portfolio::ExecutionScorecard::default(),
                 event_start_time: pos.event_start_time,
                 event_end_time: pos.event_end_time,
+                signal_source: pos.signal_source.clone(),
+                analysis_id: pos.analysis_id.clone(),
             });
             if let Some(open_ts) = trade_open_times.remove(&pos.id) {
                 trade_durations_ms.push(final_ts - open_ts);

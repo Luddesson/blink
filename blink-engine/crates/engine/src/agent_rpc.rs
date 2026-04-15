@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::alpha_signal::{AlphaAnalytics, AlphaCycleReport, AlphaRiskConfig, AlphaSignal};
+use crate::alpha_signal::{AlphaAnalytics, AlphaCycleReport, AlphaRiskConfig, AlphaSignal, AlphaSignalRecord};
 use crate::paper_engine::PaperEngine;
 
 #[derive(Clone)]
@@ -375,14 +375,41 @@ async fn submit_alpha_signal(params: Value, state: &AgentRpcState) -> std::resul
     })?;
     signal.received_at = Some(std::time::Instant::now());
 
+    // Build the signal record for history tracking
+    let record = AlphaSignalRecord {
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        analysis_id: signal.analysis_id.clone(),
+        token_id: signal.token_id.clone(),
+        market_question: String::new(), // filled later from cycle report data
+        side: format!("{:?}", signal.side),
+        confidence: signal.confidence,
+        reasoning: signal.reasoning.clone(),
+        recommended_price: signal.recommended_price,
+        recommended_size_usdc: signal.recommended_size_usdc,
+        status: String::new(), // set below
+        position_id: None,
+        realized_pnl: None,
+        unrealized_pnl: None,
+        entry_price: None,
+        current_price: None,
+    };
+
     // ── Pre-submission validation ──
     if !risk_cfg.enabled {
-        analytics.lock().unwrap().record_reject("alpha_disabled");
+        let mut rec = record;
+        rec.status = "rejected:alpha_disabled".to_string();
+        let mut a = analytics.lock().unwrap();
+        a.record_reject("alpha_disabled");
+        a.record_signal(rec);
         return Ok(json!({ "accepted": false, "reason": "Alpha trading disabled" }));
     }
 
     if signal.confidence < risk_cfg.confidence_floor {
-        analytics.lock().unwrap().record_reject("low_confidence");
+        let mut rec = record;
+        rec.status = format!("rejected:low_confidence({:.2})", signal.confidence);
+        let mut a = analytics.lock().unwrap();
+        a.record_reject("low_confidence");
+        a.record_signal(rec);
         return Ok(json!({
             "accepted": false,
             "reason": format!("Confidence {:.2} below floor {:.2}", signal.confidence, risk_cfg.confidence_floor)
@@ -399,16 +426,28 @@ async fn submit_alpha_signal(params: Value, state: &AgentRpcState) -> std::resul
     // Enqueue the signal for the engine to process.
     match tx.try_send(signal) {
         Ok(()) => {
-            analytics.lock().unwrap().record_accept();
+            let mut rec = record;
+            rec.status = "accepted".to_string();
+            let mut a = analytics.lock().unwrap();
+            a.record_accept();
+            a.record_signal(rec);
             tracing::info!(analysis_id = %analysis_id, "Alpha signal accepted");
             Ok(json!({ "accepted": true, "analysis_id": analysis_id }))
         }
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-            analytics.lock().unwrap().record_reject("queue_full");
+            let mut rec = record;
+            rec.status = "rejected:queue_full".to_string();
+            let mut a = analytics.lock().unwrap();
+            a.record_reject("queue_full");
+            a.record_signal(rec);
             Ok(json!({ "accepted": false, "reason": "Signal queue full" }))
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            analytics.lock().unwrap().record_reject("engine_shutdown");
+            let mut rec = record;
+            rec.status = "rejected:engine_shutdown".to_string();
+            let mut a = analytics.lock().unwrap();
+            a.record_reject("engine_shutdown");
+            a.record_signal(rec);
             Err(RpcError { code: -32000, message: "Engine shutting down".into() })
         }
     }

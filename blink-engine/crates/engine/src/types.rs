@@ -233,6 +233,10 @@ pub struct RN1Signal {
     pub source_wallet: String,
     /// Sizing weight for this wallet (1.0 = primary, <1.0 = secondary).
     pub wallet_weight: f64,
+    /// Signal source: "rn1" or "alpha".
+    pub signal_source: String,
+    /// Analysis ID from the alpha sidecar (for position→signal correlation).
+    pub analysis_id: Option<String>,
 }
 
 /// Simplified signal used for position tracking and hedge detection

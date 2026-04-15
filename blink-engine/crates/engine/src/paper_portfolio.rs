@@ -181,6 +181,10 @@ pub struct PaperPosition {
     /// Highest take-profit tier (%) already claimed. Prevents repeated partial
     /// exits at the same tier from creating infinite dust trades.
     pub last_claimed_tier_pct: f64,
+    /// Signal source: "rn1" or "alpha". Used for AI vs RN1 attribution.
+    pub signal_source: String,
+    /// Analysis ID from the alpha sidecar (for position→signal correlation).
+    pub analysis_id: Option<String>,
 }
 
 impl PaperPosition {
@@ -238,6 +242,10 @@ pub struct ClosedTrade {
     pub event_start_time: Option<i64>,
     /// Unix timestamp — market resolution deadline (from Gamma API).
     pub event_end_time: Option<i64>,
+    /// Signal source: "rn1" or "alpha".
+    pub signal_source: String,
+    /// Analysis ID from the alpha sidecar.
+    pub analysis_id: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExecutionScorecard {
@@ -317,6 +325,10 @@ struct PersistedPaperPosition {
     momentum_ref_ts: i64,
     #[serde(default)]
     last_claimed_tier_pct: f64,
+    #[serde(default)]
+    signal_source: String,
+    #[serde(default)]
+    analysis_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -341,6 +353,10 @@ struct PersistedClosedTrade {
     event_start_time: Option<i64>,
     #[serde(default)]
     event_end_time: Option<i64>,
+    #[serde(default)]
+    signal_source: String,
+    #[serde(default)]
+    analysis_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -537,7 +553,7 @@ impl PaperPortfolio {
         usdc_size:    f64,
         rn1_order_id: String,
     ) -> usize {
-        self.open_position_with_meta(token_id, None, None, side, entry_price, usdc_size, rn1_order_id, 0.0, 0, "A", None, None)
+        self.open_position_with_meta(token_id, None, None, side, entry_price, usdc_size, rn1_order_id, 0.0, 0, "A", None, None, "rn1", None)
     }
 
     pub fn open_position_with_meta(
@@ -554,6 +570,8 @@ impl PaperPortfolio {
         experiment_variant: &str,
         event_start_time: Option<i64>,
         event_end_time: Option<i64>,
+        signal_source: &str,
+        analysis_id: Option<String>,
     ) -> usize {
         // Apply entry spread cost when realism mode is on.
         // For BUY: we pay slightly more; for SELL: we receive slightly less.
@@ -605,6 +623,8 @@ impl PaperPortfolio {
             momentum_ref_price: effective_entry,
             momentum_ref_ts: chrono::Utc::now().timestamp(),
             last_claimed_tier_pct: 0.0,
+            signal_source: signal_source.to_string(),
+            analysis_id,
         });
         self.filled_orders += 1;
         id
@@ -668,6 +688,8 @@ impl PaperPortfolio {
                 },
                 event_start_time: pos.event_start_time,
                 event_end_time: pos.event_end_time,
+                signal_source: pos.signal_source.clone(),
+                analysis_id: pos.analysis_id.clone(),
             });
             closed += 1;
         }
@@ -797,6 +819,8 @@ impl PaperPortfolio {
                 },
                 event_start_time: pos.event_start_time,
                 event_end_time: pos.event_end_time,
+                signal_source: pos.signal_source.clone(),
+                analysis_id: pos.analysis_id.clone(),
             });
             return true;
         }
@@ -846,6 +870,8 @@ impl PaperPortfolio {
             },
             event_start_time: pos.event_start_time,
             event_end_time: pos.event_end_time,
+            signal_source: pos.signal_source.clone(),
+            analysis_id: pos.analysis_id.clone(),
         });
 
         pos.shares -= close_shares;
@@ -962,6 +988,8 @@ impl From<&PaperPortfolio> for PersistedPaperPortfolio {
                 momentum_ref_price: p.momentum_ref_price,
                 momentum_ref_ts: p.momentum_ref_ts,
                 last_claimed_tier_pct: p.last_claimed_tier_pct,
+                signal_source: p.signal_source.clone(),
+                analysis_id: p.analysis_id.clone(),
             }).collect(),
             closed_trades: value.closed_trades.iter().map(|t| PersistedClosedTrade {
                 token_id: t.token_id.clone(),
@@ -979,6 +1007,8 @@ impl From<&PaperPortfolio> for PersistedPaperPortfolio {
                 scorecard: t.scorecard.clone(),
                 event_start_time: t.event_start_time,
                 event_end_time: t.event_end_time,
+                signal_source: t.signal_source.clone(),
+                analysis_id: t.analysis_id.clone(),
             }).collect(),
             total_signals: value.total_signals,
             filled_orders: value.filled_orders,
@@ -1032,6 +1062,8 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
                 momentum_ref_price: if p.momentum_ref_price == 0.0 { p.entry_price } else { p.momentum_ref_price },
                 momentum_ref_ts: p.momentum_ref_ts,
                 last_claimed_tier_pct: p.last_claimed_tier_pct,
+                signal_source: if p.signal_source.is_empty() { "rn1".to_string() } else { p.signal_source },
+                analysis_id: p.analysis_id,
             }
         }).collect();
 
@@ -1060,6 +1092,8 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
                 scorecard: t.scorecard,
                 event_start_time: t.event_start_time,
                 event_end_time: t.event_end_time,
+                signal_source: if t.signal_source.is_empty() { "rn1".to_string() } else { t.signal_source },
+                analysis_id: t.analysis_id,
             }
         }).collect();
 

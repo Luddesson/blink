@@ -228,6 +228,8 @@ impl BlinkTwin {
                 &format!("TWIN_G{}", current_cfg.generation),
                 None,
                 None,
+                &signal.signal_source,
+                signal.analysis_id.clone(),
             );
             p.push_equity_snapshot();
         }
@@ -321,6 +323,8 @@ impl BlinkTwin {
                 },
                 event_start_time: pos.event_start_time,
                 event_end_time: pos.event_end_time,
+                signal_source: pos.signal_source.clone(),
+                analysis_id: pos.analysis_id.clone(),
             });
         }
 

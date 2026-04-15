@@ -4,6 +4,7 @@
 //! and submitted via the agent RPC server. It flows through the same risk
 //! management and execution pipeline as [`crate::types::RN1Signal`].
 
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -171,8 +172,32 @@ pub struct AlphaCycleMarket {
     pub confidence: Option<f64>,
     #[serde(default)]
     pub edge_bps: Option<f64>,
-    /// "BUY", "SELL", "PASS", "LOW_EDGE", "SUBMITTED"
+    /// "BUY", "SELL", "PASS", "LOW_EDGE", "SUBMITTED", "REJECTED"
     pub action: String,
+    /// LLM reasoning text (1-3 sentences explaining the decision).
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    /// CLOB spread in percent (e.g. 0.02 = 2%).
+    #[serde(default)]
+    pub spread_pct: Option<f64>,
+    /// Bid-side depth in USDC (top 5 levels).
+    #[serde(default)]
+    pub bid_depth_usdc: Option<f64>,
+    /// Ask-side depth in USDC (top 5 levels).
+    #[serde(default)]
+    pub ask_depth_usdc: Option<f64>,
+    /// 1-hour price change (e.g. +0.03 = +3%).
+    #[serde(default)]
+    pub price_change_1h: Option<f64>,
+    /// "BUY" or "SELL" direction for submitted signals.
+    #[serde(default)]
+    pub side: Option<String>,
+    /// Token ID for position correlation.
+    #[serde(default)]
+    pub token_id: Option<String>,
+    /// Recommended size in USDC (Kelly output).
+    #[serde(default)]
+    pub recommended_size_usdc: Option<f64>,
 }
 
 /// Cycle-level report sent by the Python sidecar after each analysis run.
@@ -185,6 +210,58 @@ pub struct AlphaCycleReport {
     pub cycle_duration_secs: f64,
     #[serde(default)]
     pub top_markets: Vec<AlphaCycleMarket>,
+}
+
+// ─── Signal History ─────────────────────────────────────────────────────────
+
+/// Record of a single alpha signal through its full lifecycle.
+///
+/// Created when the sidecar submits a signal. Updated when the engine
+/// accepts/rejects, opens a position, or closes it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlphaSignalRecord {
+    /// ISO 8601 timestamp when the signal was received.
+    pub timestamp: String,
+    /// Unique analysis ID from the LLM pipeline.
+    pub analysis_id: String,
+    /// Polymarket token ID.
+    pub token_id: String,
+    /// Market question text.
+    pub market_question: String,
+    /// "BUY" or "SELL".
+    pub side: String,
+    /// LLM confidence (0.0-1.0).
+    pub confidence: f64,
+    /// LLM reasoning text.
+    pub reasoning: String,
+    /// Suggested limit price.
+    pub recommended_price: f64,
+    /// Suggested size in USDC.
+    pub recommended_size_usdc: f64,
+    /// Lifecycle status: "accepted", "rejected:reason", "opened", "closed"
+    pub status: String,
+    /// Position ID if a position was opened.
+    pub position_id: Option<usize>,
+    /// Accumulated realized P&L (handles partial closes).
+    pub realized_pnl: Option<f64>,
+    /// Current unrealized P&L (updated on API calls).
+    pub unrealized_pnl: Option<f64>,
+    /// Entry price if position was opened.
+    pub entry_price: Option<f64>,
+    /// Current price if position is open.
+    pub current_price: Option<f64>,
+}
+
+/// Snapshot of a single cycle for trend tracking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlphaCycleSnapshot {
+    /// ISO 8601 timestamp.
+    pub timestamp: String,
+    pub markets_scanned: u32,
+    pub markets_analyzed: u32,
+    pub signals_submitted: u32,
+    pub signals_accepted: u32,
+    pub cycle_duration_secs: f64,
 }
 
 // ─── Alpha Analytics ────────────────────────────────────────────────────────
@@ -209,7 +286,20 @@ pub struct AlphaAnalytics {
     pub last_cycle_signals_submitted: u32,
     pub last_cycle_duration_secs: f64,
     pub last_cycle_top_markets: Vec<AlphaCycleMarket>,
+    // Signal history (ring buffer — last N signals with full detail)
+    pub signal_history: VecDeque<AlphaSignalRecord>,
+    // Cycle history (ring buffer — last N cycles for trend charts)
+    pub cycle_history: VecDeque<AlphaCycleSnapshot>,
+    // Performance metrics
+    pub win_count: u64,
+    pub loss_count: u64,
+    pub best_trade_pnl: f64,
+    pub worst_trade_pnl: f64,
+    pub total_fees_paid: f64,
 }
+
+const MAX_SIGNAL_HISTORY: usize = 50;
+const MAX_CYCLE_HISTORY: usize = 30;
 
 impl AlphaAnalytics {
     pub fn record_accept(&mut self) {
@@ -223,14 +313,105 @@ impl AlphaAnalytics {
         *self.reject_reasons.entry(reason.to_string()).or_default() += 1;
     }
 
+    /// Record a signal into the history ring buffer (called from agent_rpc on submit).
+    pub fn record_signal(&mut self, record: AlphaSignalRecord) {
+        if self.signal_history.len() >= MAX_SIGNAL_HISTORY {
+            self.signal_history.pop_front();
+        }
+        self.signal_history.push_back(record);
+    }
+
+    /// Mark a signal as having opened a position (called from alpha consumer).
+    pub fn mark_signal_opened(&mut self, analysis_id: &str, position_id: usize, entry_price: f64) {
+        if let Some(rec) = self.signal_history.iter_mut().rev()
+            .find(|r| r.analysis_id == analysis_id)
+        {
+            rec.status = "opened".to_string();
+            rec.position_id = Some(position_id);
+            rec.entry_price = Some(entry_price);
+        }
+        self.positions_opened += 1;
+    }
+
+    /// Mark a signal as rejected by the engine pipeline (called from alpha consumer).
+    pub fn mark_signal_engine_rejected(&mut self, analysis_id: &str) {
+        if let Some(rec) = self.signal_history.iter_mut().rev()
+            .find(|r| r.analysis_id == analysis_id)
+        {
+            if rec.status == "accepted" {
+                rec.status = "engine_rejected".to_string();
+            }
+        }
+    }
+
+    /// Record realized P&L when an AI position is closed (supports partial closes).
+    pub fn record_close(&mut self, analysis_id: &str, pnl: f64) {
+        self.realized_pnl_usdc += pnl;
+        self.positions_closed += 1;
+
+        if pnl > 0.0 {
+            self.win_count += 1;
+        } else if pnl < 0.0 {
+            self.loss_count += 1;
+        }
+        if pnl > self.best_trade_pnl { self.best_trade_pnl = pnl; }
+        if pnl < self.worst_trade_pnl { self.worst_trade_pnl = pnl; }
+
+        // Update signal record
+        if let Some(rec) = self.signal_history.iter_mut().rev()
+            .find(|r| r.analysis_id == analysis_id)
+        {
+            rec.realized_pnl = Some(rec.realized_pnl.unwrap_or(0.0) + pnl);
+            rec.status = "closed".to_string();
+        }
+    }
+
+    /// Update unrealized P&L for open AI positions (called periodically).
+    pub fn update_unrealized(&mut self, analysis_id: &str, unrealized: f64, current_price: f64) {
+        if let Some(rec) = self.signal_history.iter_mut().rev()
+            .find(|r| r.analysis_id == analysis_id)
+        {
+            rec.unrealized_pnl = Some(unrealized);
+            rec.current_price = Some(current_price);
+        }
+    }
+
     pub fn record_cycle(&mut self, report: AlphaCycleReport) {
         self.cycles_completed += 1;
-        self.last_cycle_at = Some(chrono::Utc::now().to_rfc3339());
+        let now = chrono::Utc::now().to_rfc3339();
+        self.last_cycle_at = Some(now.clone());
         self.last_cycle_markets_scanned = report.markets_scanned;
         self.last_cycle_markets_analyzed = report.markets_analyzed;
         self.last_cycle_signals_generated = report.signals_generated;
         self.last_cycle_signals_submitted = report.signals_submitted;
         self.last_cycle_duration_secs = report.cycle_duration_secs;
         self.last_cycle_top_markets = report.top_markets;
+
+        // Record cycle snapshot for trend tracking
+        if self.cycle_history.len() >= MAX_CYCLE_HISTORY {
+            self.cycle_history.pop_front();
+        }
+        self.cycle_history.push_back(AlphaCycleSnapshot {
+            timestamp: now,
+            markets_scanned: self.last_cycle_markets_scanned,
+            markets_analyzed: self.last_cycle_markets_analyzed,
+            signals_submitted: self.last_cycle_signals_submitted,
+            signals_accepted: 0, // updated separately
+            cycle_duration_secs: self.last_cycle_duration_secs,
+        });
+    }
+
+    /// Win rate as a percentage (0-100).
+    pub fn win_rate_pct(&self) -> f64 {
+        let total = self.win_count + self.loss_count;
+        if total == 0 { return 0.0; }
+        (self.win_count as f64 / total as f64) * 100.0
+    }
+
+    /// Average P&L per closed trade.
+    pub fn avg_pnl_per_trade(&self) -> f64 {
+        let total = self.win_count + self.loss_count;
+        if total == 0 { return 0.0; }
+        self.realized_pnl_usdc / total as f64
     }
 }

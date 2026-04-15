@@ -256,6 +256,8 @@ pub async fn run_rn1_poller(
                         event_end_time: None,
                         source_wallet: wallet.clone(),
                         wallet_weight,
+                        signal_source: "rn1".to_string(),
+                        analysis_id: None,
                     };
 
                     total_signals += 1;

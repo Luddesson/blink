@@ -26,6 +26,7 @@ import IntelligencePage from './pages/IntelligencePage'
 import PerformancePage from './pages/PerformancePage'
 import ConfigPage from './pages/ConfigPage'
 import BacktestPage from './pages/BacktestPage'
+import AlphaPage from './pages/AlphaPage'
 
 import type { RiskSummary } from './types'
 
@@ -175,6 +176,7 @@ export default function App() {
       {activeTab === 'performance' && <PerformancePage portfolio={portfolio} positions={positions} />}
       {activeTab === 'backtest' && <BacktestPage />}
       {activeTab === 'config' && <ConfigPage risk={risk} />}
+      {activeTab === 'alpha' && <AlphaPage />}
 
       <StatusBar />
     </div>

@@ -71,4 +71,19 @@ export const api = {
   orderbooks: () => get<OrderBooksResponse>('/api/orderbooks'),
   twin: () => get<TwinSnapshot>('/api/twin'),
   updateConfig: (config: Record<string, number | boolean>) => post<{ ok: boolean; updated: string[] }>('/api/config', config),
+  alpha: () => get<AlphaStatus>('/api/alpha'),
+}
+
+export type AlphaStatus = {
+  enabled: boolean
+  signals_received: number
+  signals_accepted: number
+  signals_rejected: number
+  accept_rate_pct: number
+  reject_reasons: Record<string, number>
+  realized_pnl_usdc: number
+  unrealized_pnl_usdc: number
+  positions_opened: number
+  positions_closed: number
+  reason?: string
 }

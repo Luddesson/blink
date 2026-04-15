@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react'
 
-const TABS = ['dashboard', 'markets', 'history', 'intelligence', 'performance', 'backtest', 'config'] as const
+const TABS = ['dashboard', 'markets', 'history', 'intelligence', 'performance', 'backtest', 'config', 'alpha'] as const
 export type TabId = (typeof TABS)[number]
 
 export function useTab() {

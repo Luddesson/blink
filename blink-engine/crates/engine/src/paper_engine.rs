@@ -707,13 +707,15 @@ impl PaperEngine {
 
         // 3A: Per-market exposure limit — cap total invested in one market.
         // 3B: Intraday drawdown gating — graduated throttle or full pause on session loss.
+        // NOTE: defaults set very high so paper trading is never halted by drawdown.
+        // Override with lower values in .env for live trading.
         let drawdown_sizing_mult: f64;
         {
             let max_market_pct = std::env::var("MAX_EXPOSURE_PER_MARKET_PCT")
-                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(15.0) / 100.0;
+                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(50.0) / 100.0;
             let max_intraday_dd: f64 = std::env::var("MAX_INTRADAY_DRAWDOWN_PCT")
-                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(3.0);
-            let pause_dd = max_intraday_dd * 2.0; // full halt at 2x warning threshold
+                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(100.0);
+            let pause_dd = max_intraday_dd * 2.0;// full halt at 2x warning threshold
 
             let mut p = self.portfolio.lock().await;
             let nav = p.nav();

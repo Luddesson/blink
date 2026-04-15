@@ -16,7 +16,7 @@ import PositionsTable from './components/PositionsTable'
 import ActivityFeed from './components/ActivityFeed'
 import LatencyPanel from './components/LatencyPanel'
 import FailsafePanel from './components/FailsafePanel'
-import CircuitBreakerAlarm from './components/CircuitBreakerAlarm'
+// CircuitBreakerAlarm removed — no drawdown limits in paper mode
 import PortfolioStats from './components/PortfolioStats'
 import ErrorBoundary from './components/ErrorBoundary'
 
@@ -46,7 +46,6 @@ export default function App() {
   const { activeTab, switchTab, switchByIndex } = useTab()
 
   const [tradingPaused, setTradingPaused] = useState(false)
-  const [cbDismissed, setCbDismissed] = useState(false)
 
   const { data: livePortfolio } = usePoll(api.livePortfolio, 5_000, isLive)
 
@@ -70,7 +69,6 @@ export default function App() {
   const equityCurve = portfolio?.equity_curve ?? []
   const equityTimestamps = portfolio?.equity_timestamps ?? []
 
-  const showCbAlarm = (risk.circuit_breaker_tripped || (risk as unknown as { circuit_breaker?: boolean }).circuit_breaker) && !cbDismissed
   const wsDownSecs = lastMessageAt ? Math.floor((Date.now() - lastMessageAt) / 1000) : 0
   const showWsBanner = !connected && wsDownSecs > 15
 
@@ -105,9 +103,7 @@ export default function App() {
         </div>
       )}
 
-      {showCbAlarm && (
-        <CircuitBreakerAlarm risk={risk} onDismiss={() => setCbDismissed(true)} />
-      )}
+      {/* Circuit breaker alarm removed — no drawdown limits in paper mode */}
 
       {/* ── Tab Content ─────────────────────────────────────────── */}
 

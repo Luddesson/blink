@@ -33,10 +33,10 @@ pub struct RiskConfig {
 impl Default for RiskConfig {
     fn default() -> Self {
         Self {
-            max_daily_loss_pct: 0.10,
-            max_concurrent_positions: 5,
-            max_single_order_usdc: 20.0,
-            max_orders_per_second: 3,
+            max_daily_loss_pct: 1.0,
+            max_concurrent_positions: 20,
+            max_single_order_usdc: 25.0,
+            max_orders_per_second: 10,
             trading_enabled: false,
             var_window: Duration::from_secs(60),
             var_threshold_pct: 0.05,
@@ -50,31 +50,31 @@ impl RiskConfig {
     ///
     /// | Variable                  | Default |
     /// |---------------------------|---------|
-    /// | `MAX_DAILY_LOSS_PCT`      | 0.10    |
-    /// | `MAX_CONCURRENT_POSITIONS`| 5       |
-    /// | `MAX_SINGLE_ORDER_USDC`   | 20.0    |
-    /// | `MAX_ORDERS_PER_SECOND`   | 3       |
+    /// | `MAX_DAILY_LOSS_PCT`      | 1.0 (100% — no limit in paper mode) |
+    /// | `MAX_CONCURRENT_POSITIONS`| 20      |
+    /// | `MAX_SINGLE_ORDER_USDC`   | 25.0    |
+    /// | `MAX_ORDERS_PER_SECOND`   | 10      |
     /// | `TRADING_ENABLED`         | false   |
     pub fn from_env() -> Self {
         let max_daily_loss_pct = std::env::var("MAX_DAILY_LOSS_PCT")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(0.10);
+            .unwrap_or(1.0);
 
         let max_concurrent_positions = std::env::var("MAX_CONCURRENT_POSITIONS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(5);
+            .unwrap_or(20);
 
         let max_single_order_usdc = std::env::var("MAX_SINGLE_ORDER_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(20.0);
+            .unwrap_or(25.0);
 
         let max_orders_per_second = std::env::var("MAX_ORDERS_PER_SECOND")
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(3);
+            .unwrap_or(10);
 
         // Default to false — must be explicitly opted in.
         let trading_enabled = std::env::var("TRADING_ENABLED")
@@ -96,7 +96,7 @@ impl RiskConfig {
             var_threshold_pct: std::env::var("VAR_THRESHOLD_PCT")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(0.05),
+                .unwrap_or(1.0), // 100% — effectively disabled for paper mode
         }
     }
 }
@@ -515,7 +515,13 @@ mod tests {
 
     #[test]
     fn daily_loss_limit_blocks_and_trips_breaker() {
-        let mut rm = default_rm();
+        let mut rm = RiskManager::new(RiskConfig {
+            trading_enabled: true,
+            max_daily_loss_pct: 0.10, // 10% for this test
+            max_single_order_usdc: 20.0,
+            var_threshold_pct: 1.0,
+            ..RiskConfig::default()
+        });
         // Simulate $11 loss on a $100 NAV with 10% limit → limit = $10.
         rm.daily_pnl = -11.0;
         let err = rm.check_pre_order(1.0, 0, 89.0, 100.0).unwrap_err();
@@ -529,7 +535,13 @@ mod tests {
 
     #[test]
     fn too_many_positions_blocks() {
-        let mut rm = default_rm(); // max = 5
+        let mut rm = RiskManager::new(RiskConfig {
+            trading_enabled: true,
+            max_concurrent_positions: 5,
+            max_single_order_usdc: 20.0,
+            var_threshold_pct: 1.0,
+            ..RiskConfig::default()
+        });
         let err = rm.check_pre_order(5.0, 5, 100.0, 100.0).unwrap_err();
         assert!(matches!(err, RiskViolation::TooManyPositions { current: 5, max: 5 }));
     }

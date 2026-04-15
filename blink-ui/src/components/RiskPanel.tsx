@@ -58,15 +58,13 @@ export default function RiskPanel({ risk, volBps, equityCurve, currentNav }: Pro
           </div>
         )}
 
-        {/* Session drawdown gauge */}
+        {/* Session drawdown gauge — info only, no pause/size warnings */}
         {sessionDrawdownPct > 0 && (
           <div>
             <div className="flex justify-between text-xs mb-1">
               <span className="text-slate-500">Session DD</span>
-              <span className={`font-mono ${sessionDrawdownPct >= 8 ? 'text-red-400 font-bold' : sessionDrawdownPct >= 5 ? 'text-orange-400' : 'text-slate-300'}`}>
+              <span className="font-mono text-slate-300">
                 -{fmt(sessionDrawdownPct, 1)}%
-                {sessionDrawdownPct >= 8 && <span className="ml-1 text-red-400">PAUSED</span>}
-                {sessionDrawdownPct >= 5 && sessionDrawdownPct < 8 && <span className="ml-1 text-orange-400">½ SIZE</span>}
               </span>
             </div>
             <GradientBar

@@ -67,8 +67,11 @@ Instructions:
      "recommended_action": "BUY" | "SELL" | "PASS"
    }}
 
-If you lack sufficient information to form a confident view, set
-"recommended_action" to "PASS" and "confidence" below 0.5.
+IMPORTANT: Only output "PASS" if you genuinely cannot form ANY directional view.
+If you have even a slight lean toward the probability being different from the market
+price, output "BUY" (if you think YES is underpriced) or "SELL" (if overpriced)
+with an appropriate confidence level. Low confidence (0.4-0.6) is fine — the sizing
+algorithm will scale position size accordingly.
 """
 
 

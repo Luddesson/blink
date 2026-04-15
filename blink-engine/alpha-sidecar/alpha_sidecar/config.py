@@ -17,22 +17,22 @@ class AlphaConfig:
     openai_model: str = "grok-3"
 
     # Discovery
-    gamma_api_url: str = "https://gamma-api.polymarket.com"
+    gamma_api_url: str = "https://gamma-api.polymarket.com/markets"
     clob_api_url: str = "https://clob.polymarket.com"
     discovery_interval_secs: int = 300
-    min_edge_bps: int = 500  # 5% minimum edge to generate signal
+    min_edge_bps: int = 150  # 1.5% minimum edge to generate signal
     max_llm_calls_per_cycle: int = 20
 
     # Scanner: volume sweet-spot for alpha opportunities
     scanner_min_volume_usdc: float = 5_000.0
-    scanner_max_volume_usdc: float = 500_000.0
+    scanner_max_volume_usdc: float = 50_000_000.0
 
     # RAG
     chroma_persist_dir: str = "./data/chroma"
     embedding_model: str = "text-embedding-3-small"
 
     # Risk (sidecar-side pre-filter, engine has final say)
-    confidence_floor: float = 0.65
+    confidence_floor: float = 0.50
     max_recommended_size_usdc: float = 25.0
 
     # Optional connectors

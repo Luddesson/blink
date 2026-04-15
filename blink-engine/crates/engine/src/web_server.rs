@@ -1690,5 +1690,13 @@ async fn get_alpha_status(State(state): State<AppState>) -> impl IntoResponse {
         "unrealized_pnl_usdc": a.unrealized_pnl_usdc,
         "positions_opened": a.positions_opened,
         "positions_closed": a.positions_closed,
+        "cycles_completed": a.cycles_completed,
+        "last_cycle_at": a.last_cycle_at,
+        "last_cycle_markets_scanned": a.last_cycle_markets_scanned,
+        "last_cycle_markets_analyzed": a.last_cycle_markets_analyzed,
+        "last_cycle_signals_generated": a.last_cycle_signals_generated,
+        "last_cycle_signals_submitted": a.last_cycle_signals_submitted,
+        "last_cycle_duration_secs": a.last_cycle_duration_secs,
+        "last_cycle_top_markets": a.last_cycle_top_markets,
     })).into_response()
 }

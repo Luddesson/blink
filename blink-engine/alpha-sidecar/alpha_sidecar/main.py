@@ -20,9 +20,11 @@ import asyncio
 import logging
 import signal
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
@@ -74,9 +76,31 @@ async def _enrich_with_clob(market, cfg: AlphaConfig):
         return None, None
 
 
+async def _report_cycle_to_engine(cfg: AlphaConfig, report: dict) -> None:
+    """Report cycle stats to the Blink engine via JSON-RPC."""
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "cycle-report",
+        "method": "report_alpha_cycle",
+        "params": report,
+    }
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            resp = await client.post(
+                cfg.blink_rpc_url + "/rpc",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            logger.debug("Cycle report sent to engine")
+        except Exception as e:
+            logger.debug("Failed to report cycle to engine: %s", e)
+
+
 async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI) -> None:
     """One full discovery → enrich → analyse → submit cycle."""
     logger.info("=== Alpha cycle start ===")
+    cycle_start = time.monotonic()
 
     # Step 1: Discover markets from Gamma API (broad set)
     raw_markets = await fetch_active_markets(
@@ -100,19 +124,19 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI) -> None:
         logger.warning("Scanner filtered all markets — check volume thresholds")
         return
 
+    n_to_analyze = min(len(markets), cfg.max_llm_calls_per_cycle)
     logger.info(
         "Analysing up to %d markets (scanner output=%d, limit=%d)",
-        min(len(markets), cfg.max_llm_calls_per_cycle),
-        len(markets),
-        cfg.max_llm_calls_per_cycle,
+        n_to_analyze, len(markets), cfg.max_llm_calls_per_cycle,
     )
 
     submitted = 0
     skipped_edge = 0
     skipped_llm = 0
     clob_enriched = 0
+    top_markets: list[dict] = []
 
-    for market in markets[: cfg.max_llm_calls_per_cycle]:
+    for market in markets[:n_to_analyze]:
         if _shutdown:
             break
 
@@ -120,58 +144,80 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI) -> None:
         clob, price_change_1h = await _enrich_with_clob(market, cfg)
         if clob is not None:
             clob_enriched += 1
-            logger.debug(
-                "CLOB: %s spread=%.0fbps bid=$%.0f ask=$%.0f",
-                market.question[:40],
-                clob.spread_pct * 10_000,
-                clob.bid_depth_usdc,
-                clob.ask_depth_usdc,
-            )
 
         # Step 4: LLM analysis with full context
         llm_signal = await analyse_market(
             market, cfg, openai_client, clob=clob, price_change_1h=price_change_1h
         )
+
         if llm_signal is None:
             skipped_llm += 1
+            top_markets.append({
+                "question": market.question[:80],
+                "yes_price": round(market.yes_price, 4),
+                "llm_probability": None,
+                "confidence": None,
+                "edge_bps": None,
+                "action": "PASS",
+            })
             continue
 
         # Step 5: Calibrate confidence based on spread
         spread_pct = clob.spread_pct if clob else None
         calibrated_confidence = calibrate_confidence(llm_signal.confidence, spread_pct)
         if calibrated_confidence != llm_signal.confidence:
-            logger.debug(
-                "Confidence calibrated: %.2f → %.2f (spread=%.0fbps)",
-                llm_signal.confidence,
-                calibrated_confidence,
-                (spread_pct or 0) * 10_000,
-            )
             llm_signal.confidence = calibrated_confidence
 
         # Step 6: Edge check (after calibration)
         edge_bps = compute_edge(llm_signal)
+
         if edge_bps < cfg.min_edge_bps:
             skipped_edge += 1
-            logger.debug(
-                "Edge too small for %s: %.0fbps < %dbps",
-                market.question[:50], edge_bps, cfg.min_edge_bps,
-            )
+            top_markets.append({
+                "question": market.question[:80],
+                "yes_price": round(market.yes_price, 4),
+                "llm_probability": round(llm_signal.yes_probability, 4),
+                "confidence": round(llm_signal.confidence, 3),
+                "edge_bps": round(edge_bps, 1),
+                "action": "LOW_EDGE",
+            })
             continue
 
         # Step 7: Submit with Kelly sizing
         result = await submit_signal(llm_signal, cfg)
+        action = "SUBMITTED" if result.success else "REJECTED"
         if result.success:
             submitted += 1
 
-        # Small delay between LLM calls to avoid rate limiting
+        top_markets.append({
+            "question": market.question[:80],
+            "yes_price": round(market.yes_price, 4),
+            "llm_probability": round(llm_signal.yes_probability, 4),
+            "confidence": round(llm_signal.confidence, 3),
+            "edge_bps": round(edge_bps, 1),
+            "action": action,
+        })
+
         await asyncio.sleep(0.5)
+
+    cycle_duration = time.monotonic() - cycle_start
 
     logger.info(
         "=== Cycle done: %d submitted, %d skipped (low edge), "
-        "%d skipped (LLM PASS), %d/%d CLOB-enriched ===",
+        "%d skipped (LLM PASS), %d/%d CLOB-enriched (%.1fs) ===",
         submitted, skipped_edge, skipped_llm,
-        clob_enriched, min(len(markets), cfg.max_llm_calls_per_cycle),
+        clob_enriched, n_to_analyze, cycle_duration,
     )
+
+    # Report cycle stats to engine
+    await _report_cycle_to_engine(cfg, {
+        "markets_scanned": len(raw_markets),
+        "markets_analyzed": n_to_analyze,
+        "signals_generated": submitted + skipped_edge,
+        "signals_submitted": submitted,
+        "cycle_duration_secs": round(cycle_duration, 2),
+        "top_markets": top_markets,
+    })
 
 
 async def main_loop(cfg: AlphaConfig) -> None:
@@ -191,11 +237,12 @@ async def main_loop(cfg: AlphaConfig) -> None:
     openai_client = AsyncOpenAI(api_key=cfg.llm_api_key, base_url=cfg.llm_base_url)
     logger.info(
         "Alpha sidecar starting | model=%s | clob=%s | interval=%ds "
-        "| min_edge=%dbps | vol=$%.0f–$%.0f | rpc=%s",
+        "| min_edge=%dbps | conf_floor=%.2f | vol=$%.0f–$%.0f | rpc=%s",
         cfg.openai_model,
         cfg.clob_api_url,
         cfg.discovery_interval_secs,
         cfg.min_edge_bps,
+        cfg.confidence_floor,
         cfg.scanner_min_volume_usdc,
         cfg.scanner_max_volume_usdc,
         cfg.blink_rpc_url,
@@ -210,7 +257,6 @@ async def main_loop(cfg: AlphaConfig) -> None:
             continue
 
         logger.info("Next cycle in %ds", cfg.discovery_interval_secs)
-        # Sleep in 1-second chunks so shutdown is responsive
         for _ in range(cfg.discovery_interval_secs):
             if _shutdown:
                 break

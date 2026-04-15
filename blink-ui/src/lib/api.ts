@@ -74,6 +74,15 @@ export const api = {
   alpha: () => get<AlphaStatus>('/api/alpha'),
 }
 
+export type AlphaCycleMarket = {
+  question: string
+  yes_price: number
+  llm_probability: number | null
+  confidence: number | null
+  edge_bps: number | null
+  action: string
+}
+
 export type AlphaStatus = {
   enabled: boolean
   signals_received: number
@@ -86,4 +95,13 @@ export type AlphaStatus = {
   positions_opened: number
   positions_closed: number
   reason?: string
+  // Cycle reporting
+  cycles_completed: number
+  last_cycle_at: string | null
+  last_cycle_markets_scanned: number
+  last_cycle_markets_analyzed: number
+  last_cycle_signals_generated: number
+  last_cycle_signals_submitted: number
+  last_cycle_duration_secs: number
+  last_cycle_top_markets: AlphaCycleMarket[]
 }

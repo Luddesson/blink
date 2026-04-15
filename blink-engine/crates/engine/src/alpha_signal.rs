@@ -158,6 +158,35 @@ impl AlphaRiskConfig {
     }
 }
 
+// ─── Alpha Cycle Reporting ──────────────────────────────────────────────────
+
+/// A single market's analysis result within a cycle (reported by the sidecar).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AlphaCycleMarket {
+    pub question: String,
+    pub yes_price: f64,
+    #[serde(default)]
+    pub llm_probability: Option<f64>,
+    #[serde(default)]
+    pub confidence: Option<f64>,
+    #[serde(default)]
+    pub edge_bps: Option<f64>,
+    /// "BUY", "SELL", "PASS", "LOW_EDGE", "SUBMITTED"
+    pub action: String,
+}
+
+/// Cycle-level report sent by the Python sidecar after each analysis run.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AlphaCycleReport {
+    pub markets_scanned: u32,
+    pub markets_analyzed: u32,
+    pub signals_generated: u32,
+    pub signals_submitted: u32,
+    pub cycle_duration_secs: f64,
+    #[serde(default)]
+    pub top_markets: Vec<AlphaCycleMarket>,
+}
+
 // ─── Alpha Analytics ────────────────────────────────────────────────────────
 
 /// Tracks AI trading performance separately from RN1.
@@ -171,6 +200,15 @@ pub struct AlphaAnalytics {
     pub unrealized_pnl_usdc: f64,
     pub positions_opened: u64,
     pub positions_closed: u64,
+    // Cycle reporting (updated by sidecar via RPC)
+    pub cycles_completed: u64,
+    pub last_cycle_at: Option<String>,
+    pub last_cycle_markets_scanned: u32,
+    pub last_cycle_markets_analyzed: u32,
+    pub last_cycle_signals_generated: u32,
+    pub last_cycle_signals_submitted: u32,
+    pub last_cycle_duration_secs: f64,
+    pub last_cycle_top_markets: Vec<AlphaCycleMarket>,
 }
 
 impl AlphaAnalytics {
@@ -183,5 +221,16 @@ impl AlphaAnalytics {
         self.signals_received += 1;
         self.signals_rejected += 1;
         *self.reject_reasons.entry(reason.to_string()).or_default() += 1;
+    }
+
+    pub fn record_cycle(&mut self, report: AlphaCycleReport) {
+        self.cycles_completed += 1;
+        self.last_cycle_at = Some(chrono::Utc::now().to_rfc3339());
+        self.last_cycle_markets_scanned = report.markets_scanned;
+        self.last_cycle_markets_analyzed = report.markets_analyzed;
+        self.last_cycle_signals_generated = report.signals_generated;
+        self.last_cycle_signals_submitted = report.signals_submitted;
+        self.last_cycle_duration_secs = report.cycle_duration_secs;
+        self.last_cycle_top_markets = report.top_markets;
     }
 }

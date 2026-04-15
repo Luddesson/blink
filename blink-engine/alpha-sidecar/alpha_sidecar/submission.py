@@ -60,7 +60,7 @@ async def submit_signal(llm: LLMSignal, cfg: AlphaConfig) -> SubmitResult:
     The engine's `submit_alpha_signal` method validates the signal against
     AlphaRiskConfig before it ever reaches the order pipeline.
     """
-    side = "Buy" if llm.recommended_action == "BUY" else "Sell"
+    side = "BUY" if llm.recommended_action == "BUY" else "SELL"
     if llm.recommended_action == "BUY":
         price = llm.market.yes_price * 1.005  # cross the spread slightly
     else:

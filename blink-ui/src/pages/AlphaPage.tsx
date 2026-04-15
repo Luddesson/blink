@@ -197,12 +197,69 @@ function MarketRow({ m, expanded, onToggle }: { m: AlphaCycleMarket; expanded: b
         </td>
         <td className="py-2 pl-2 text-right">{actionBadge(m.action)}</td>
       </tr>
-      {expanded && m.reasoning && (
+      {expanded && (m.reasoning || m.reasoning_chain) && (
         <tr className="border-b border-slate-800/50">
           <td colSpan={7} className="py-2 px-3">
-            <div className="bg-slate-900/50 rounded p-2">
-              <div className="text-[10px] text-slate-600 uppercase tracking-widest mb-1">AI Reasoning</div>
-              <p className="text-xs text-slate-400 leading-relaxed">{m.reasoning}</p>
+            <div className="bg-slate-900/50 rounded p-2 space-y-2">
+              {/* Reasoning chain (Phase 2) */}
+              {m.reasoning_chain && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="text-[10px] text-cyan-500/80 uppercase tracking-widest font-bold">Reasoning Chain</div>
+                    {m.reasoning_chain.category && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-cyan-500/10 text-cyan-500 border border-cyan-500/20">
+                        {m.reasoning_chain.category}
+                      </span>
+                    )}
+                    {m.reasoning_chain.combination_method && (
+                      <span className="text-[10px] text-slate-600">{m.reasoning_chain.combination_method}</span>
+                    )}
+                  </div>
+
+                  {/* Probability comparison */}
+                  <div className="flex items-center gap-3 text-[10px] tabular-nums">
+                    <span className="text-slate-500">Call 1:</span>
+                    <span className="text-cyan-400 font-bold">
+                      {m.reasoning_chain.call1_probability != null ? (m.reasoning_chain.call1_probability * 100).toFixed(1) + '%' : '—'}
+                    </span>
+                    <span className="text-slate-700">→</span>
+                    <span className="text-slate-500">Devil's Advocate:</span>
+                    <span className="text-amber-400 font-bold">
+                      {m.reasoning_chain.call2_probability != null ? (m.reasoning_chain.call2_probability * 100).toFixed(1) + '%' : '—'}
+                    </span>
+                    <span className="text-slate-700">→</span>
+                    <span className="text-slate-500">Final:</span>
+                    <span className="text-emerald-400 font-bold">
+                      {m.reasoning_chain.final_probability != null ? (m.reasoning_chain.final_probability * 100).toFixed(1) + '%' : '—'}
+                    </span>
+                  </div>
+
+                  {/* Call 1 reasoning */}
+                  {m.reasoning_chain.call1_reasoning && (
+                    <div>
+                      <div className="text-[10px] text-slate-600 uppercase tracking-widest mb-0.5">Deep Analysis</div>
+                      <p className="text-xs text-slate-400 leading-relaxed">{m.reasoning_chain.call1_reasoning}</p>
+                    </div>
+                  )}
+
+                  {/* Devil's advocate critique */}
+                  {m.reasoning_chain.call2_critique && (
+                    <div>
+                      <div className="text-[10px] text-amber-500/70 uppercase tracking-widest mb-0.5">Devil's Advocate</div>
+                      <p className="text-xs text-amber-400/70 leading-relaxed">{m.reasoning_chain.call2_critique}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Fallback: plain reasoning (v1 or when chain not available) */}
+              {!m.reasoning_chain && m.reasoning && (
+                <>
+                  <div className="text-[10px] text-slate-600 uppercase tracking-widest mb-1">AI Reasoning</div>
+                  <p className="text-xs text-slate-400 leading-relaxed">{m.reasoning}</p>
+                </>
+              )}
+
               <div className="flex gap-4 mt-2 text-[10px] text-slate-600 tabular-nums">
                 {m.bid_depth_usdc != null && <span>Bid depth: ${m.bid_depth_usdc.toFixed(0)}</span>}
                 {m.ask_depth_usdc != null && <span>Ask depth: ${m.ask_depth_usdc.toFixed(0)}</span>}
@@ -466,11 +523,13 @@ export default function AlphaPage() {
         <ol className="list-decimal ml-4 space-y-1">
           <li>Scanner filters Polymarket markets by volume ($5k–$50M) and blocks esports/gaming categories</li>
           <li>CLOB client fetches live orderbook — best bid/ask, spread, depth, and 1h price drift</li>
-          <li>LLM analyzes each market with full CLOB context and produces a YES/NO probability estimate</li>
+          <li><span className="text-cyan-500">Deep Analysis call</span> — category-specific Bayesian reasoning with base rates and evidence weighing</li>
+          <li><span className="text-amber-500">Devil's Advocate call</span> — adversarial critique: missed evidence, cognitive biases, revised probability</li>
+          <li>Final estimate = 70% deep analysis + 30% devil's advocate (penalty if disagreement {">"}15pp)</li>
           <li>Confidence is spread-calibrated: tight spread ({"<"}50bps) → −20%, wide spread ({">"}200bps) → +10%</li>
           <li>Kelly criterion sizes the position: quarter-Kelly × $100 bankroll → typical $1–$6 per trade</li>
           <li>Engine applies a second independent risk layer (circuit breaker, position cap, daily loss) before execution</li>
-          <li>Signal feed shows every decision with full AI reasoning — click to expand</li>
+          <li>Every prediction is stored in memory — outcomes tracked, Brier scores computed, calibration updated</li>
         </ol>
       </div>
     </div>

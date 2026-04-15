@@ -1,12 +1,12 @@
 """LLM-based market analysis.
 
-Sends a Polymarket market to GPT/Grok and asks it to estimate the true
-probability that YES resolves. Returns an AlphaSignal if the LLM's estimate
-diverges from the market price by more than the edge threshold.
+Two analysis modes:
+  1. **Reasoning Chain** (default): 2-call pipeline — deep analysis + devil's advocate.
+     Category-specific prompts, structured Bayesian reasoning, adversarial critique.
+  2. **Single-shot** (fallback): Original single-call for speed or cost saving.
 
 When CLOB data is available (orderbook, spread, price history), it is included
-in the prompt to dramatically improve signal quality — the LLM can see whether
-the market is liquid/efficient or wide/inefficient.
+in the prompt to dramatically improve signal quality.
 """
 
 from __future__ import annotations
@@ -21,10 +21,11 @@ from openai import AsyncOpenAI
 from ..config import AlphaConfig
 from ..connectors.clob import OrderbookSnapshot
 from ..connectors.gamma import GammaMarket
+from .reasoning import ReasoningChain, run_reasoning_chain
 
 logger = logging.getLogger(__name__)
 
-# ─── Prompt template ─────────────────────────────────────────────────────────
+# ─── Single-shot prompt (v1 fallback) ────────────────────────────────────────
 
 _BASE_PROMPT = """\
 You are a prediction market analyst. Analyse the following Polymarket market
@@ -80,7 +81,7 @@ def _build_prompt(
     clob: OrderbookSnapshot | None,
     price_change_1h: float | None,
 ) -> str:
-    """Build the full analysis prompt, optionally enriched with CLOB data."""
+    """Build the v1 single-shot prompt (fallback mode)."""
     base = _BASE_PROMPT.format(
         question=market.question,
         description=(market.description or "No description provided.")[:500],
@@ -128,9 +129,11 @@ class LLMSignal:
     # CLOB enrichment (set if available — used for Kelly sizing in submission.py)
     clob: OrderbookSnapshot | None = None
     price_change_1h: float | None = None
+    # Phase 2: full reasoning chain (None when using v1 single-shot mode)
+    reasoning_chain: ReasoningChain | None = None
 
 
-# ─── Analysis function ────────────────────────────────────────────────────────
+# ─── Analysis functions ──────────────────────────────────────────────────────
 
 
 async def analyse_market(
@@ -140,11 +143,7 @@ async def analyse_market(
     clob: OrderbookSnapshot | None = None,
     price_change_1h: float | None = None,
 ) -> LLMSignal | None:
-    """Call the LLM and parse its probability estimate.
-
-    Pass `clob` and `price_change_1h` for enriched analysis.
-    Returns None if the LLM returns an invalid response or recommends PASS.
-    """
+    """Single-shot analysis (v1 fallback). Used when reasoning chain is disabled."""
     prompt = _build_prompt(market, clob, price_change_1h)
 
     try:
@@ -192,6 +191,51 @@ async def analyse_market(
         clob=clob,
         price_change_1h=price_change_1h,
     )
+
+
+async def analyse_market_v2(
+    market: GammaMarket,
+    cfg: AlphaConfig,
+    client: AsyncOpenAI,
+    clob: OrderbookSnapshot | None = None,
+    price_change_1h: float | None = None,
+) -> tuple[LLMSignal | None, ReasoningChain | None]:
+    """Enhanced analysis with reasoning chain (v2).
+
+    Returns (signal, chain):
+      - signal is non-None when the analysis is actionable (BUY/SELL with sufficient confidence)
+      - chain is non-None whenever Call 1 succeeds (even for PASS — useful for memory/UI)
+
+    Falls back to v1 single-shot when reasoning_chain is disabled in config.
+    """
+    if not cfg.reasoning_chain_enabled:
+        signal = await analyse_market(market, cfg, client, clob, price_change_1h)
+        return signal, None
+
+    chain = await run_reasoning_chain(market, cfg, client, clob, price_change_1h)
+    if chain is None:
+        return None, None
+
+    # Check if result is actionable
+    if chain.final_action == "PASS" or chain.final_confidence < cfg.confidence_floor:
+        logger.debug(
+            "Chain PASS for %s (action=%s conf=%.2f)",
+            market.question[:60], chain.final_action, chain.final_confidence,
+        )
+        return None, chain
+
+    signal = LLMSignal(
+        market=market,
+        yes_probability=chain.final_probability,
+        confidence=chain.final_confidence,
+        reasoning=chain.summary_reasoning,
+        recommended_action=chain.final_action,
+        analysis_id=str(uuid.uuid4()),
+        clob=clob,
+        price_change_1h=price_change_1h,
+        reasoning_chain=chain,
+    )
+    return signal, chain
 
 
 def compute_edge(llm: LLMSignal) -> float:

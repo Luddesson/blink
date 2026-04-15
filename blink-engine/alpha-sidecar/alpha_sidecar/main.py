@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import signal
 import sys
@@ -30,7 +31,7 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from .analysis.calibration import calibrate_confidence
-from .analysis.llm import LLMSignal, analyse_market, compute_edge
+from .analysis.llm import LLMSignal, analyse_market, analyse_market_v2, compute_edge
 from .config import AlphaConfig
 from .connectors.clob import OrderbookSnapshot, get_orderbook, get_price_change_1h
 from .connectors.gamma import GammaMarket, fetch_active_markets
@@ -178,6 +179,7 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_sto
         action: str,
         *,
         size_usdc: float | None = None,
+        reasoning_chain_json: str | None = None,
     ) -> dict:
         """Build enriched market entry for cycle report."""
         entry: dict = {
@@ -196,6 +198,21 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_sto
             "token_id": market.token_id,
             "recommended_size_usdc": round(size_usdc, 2) if size_usdc is not None else None,
         }
+        # Phase 2: Include reasoning chain summary if present
+        if reasoning_chain_json:
+            try:
+                chain = json.loads(reasoning_chain_json)
+                entry["reasoning_chain"] = {
+                    "call1_probability": chain.get("call1_probability"),
+                    "call2_probability": chain.get("call2_probability"),
+                    "final_probability": chain.get("final_probability"),
+                    "combination_method": chain.get("combination_method"),
+                    "category": chain.get("category"),
+                    "call1_reasoning": chain.get("call1_reasoning", "")[:200],
+                    "call2_critique": chain.get("call2_critique", "")[:200],
+                }
+            except (json.JSONDecodeError, TypeError):
+                pass
         return entry
 
     for market in markets[:n_to_analyze]:
@@ -208,8 +225,19 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_sto
             clob_enriched += 1
 
         # Step 4: LLM analysis with full context
-        llm_signal = await analyse_market(
-            market, cfg, openai_client, clob=clob, price_change_1h=price_change_1h
+        # Phase 2: Use reasoning chain (2-call pipeline) when enabled
+        reasoning_chain = None
+        if cfg.reasoning_chain_enabled:
+            llm_signal, reasoning_chain = await analyse_market_v2(
+                market, cfg, openai_client, clob=clob, price_change_1h=price_change_1h
+            )
+        else:
+            llm_signal = await analyse_market(
+                market, cfg, openai_client, clob=clob, price_change_1h=price_change_1h
+            )
+
+        reasoning_chain_json = (
+            json.dumps(reasoning_chain.to_dict()) if reasoning_chain else None
         )
 
         if llm_signal is None:
@@ -252,6 +280,7 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_sto
             skipped_edge += 1
             top_markets.append(_build_market_entry(
                 market, llm_signal, clob, price_change_1h, edge_bps, "LOW_EDGE",
+                reasoning_chain_json=reasoning_chain_json,
             ))
             # Record LOW_EDGE prediction in memory
             if prediction_store:
@@ -271,6 +300,7 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_sto
                     reasoning=llm_signal.reasoning[:500],
                     model_used=cfg.openai_model,
                     side=llm_signal.recommended_action,
+                    reasoning_chain_json=reasoning_chain_json,
                     clob_best_bid=clob.best_bid if clob else None,
                     clob_best_ask=clob.best_ask if clob else None,
                     clob_spread_pct=clob.spread_pct if clob else None,
@@ -291,6 +321,7 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_sto
         top_markets.append(_build_market_entry(
             market, llm_signal, clob, price_change_1h, edge_bps, action,
             size_usdc=size_usdc,
+            reasoning_chain_json=reasoning_chain_json,
         ))
 
         # Record SUBMITTED / REJECTED prediction in memory
@@ -312,6 +343,7 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_sto
                 model_used=cfg.openai_model,
                 recommended_size_usdc=size_usdc,
                 side=llm_signal.recommended_action,
+                reasoning_chain_json=reasoning_chain_json,
                 clob_best_bid=clob.best_bid if clob else None,
                 clob_best_ask=clob.best_ask if clob else None,
                 clob_spread_pct=clob.spread_pct if clob else None,
@@ -397,7 +429,7 @@ async def main_loop(cfg: AlphaConfig) -> None:
 
     logger.info(
         "Alpha sidecar starting | model=%s | clob=%s | interval=%ds "
-        "| min_edge=%dbps | conf_floor=%.2f | vol=$%.0f–$%.0f | rpc=%s | memory=%s",
+        "| min_edge=%dbps | conf_floor=%.2f | vol=$%.0f–$%.0f | rpc=%s | memory=%s | reasoning_chain=%s",
         cfg.openai_model,
         cfg.clob_api_url,
         cfg.discovery_interval_secs,
@@ -407,6 +439,7 @@ async def main_loop(cfg: AlphaConfig) -> None:
         cfg.scanner_max_volume_usdc,
         cfg.blink_rpc_url,
         "ON" if prediction_store else "OFF",
+        "ON" if cfg.reasoning_chain_enabled else "OFF",
     )
 
     cycle_count = 0

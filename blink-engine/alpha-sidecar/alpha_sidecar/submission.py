@@ -61,7 +61,15 @@ async def submit_signal(llm: LLMSignal, cfg: AlphaConfig) -> SubmitResult:
     AlphaRiskConfig before it ever reaches the order pipeline.
     """
     side = "BUY" if llm.recommended_action == "BUY" else "SELL"
-    if llm.recommended_action == "BUY":
+    token_id = llm.market.token_id
+
+    # SELL→BUY NO conversion: when the LLM says SELL (YES overpriced),
+    # buy the NO token instead — the engine only opens long positions.
+    if llm.recommended_action == "SELL" and llm.market.no_token_id:
+        token_id = llm.market.no_token_id
+        side = "BUY"
+        price = llm.market.no_price * 1.005  # cross the NO spread slightly
+    elif llm.recommended_action == "BUY":
         price = llm.market.yes_price * 1.005  # cross the spread slightly
     else:
         price = llm.market.yes_price * 0.995
@@ -80,7 +88,7 @@ async def submit_signal(llm: LLMSignal, cfg: AlphaConfig) -> SubmitResult:
         "id": str(uuid.uuid4()),
         "method": "submit_alpha_signal",
         "params": {
-            "token_id": llm.market.token_id,
+            "token_id": token_id,
             "condition_id": llm.market.condition_id,
             "side": side,
             "confidence": round(llm.confidence, 4),

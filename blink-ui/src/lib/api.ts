@@ -89,6 +89,15 @@ export type AlphaCycleMarket = {
   side: string | null
   token_id: string | null
   recommended_size_usdc: number | null
+  reasoning_chain?: {
+    call1_probability: number | null
+    call2_probability: number | null
+    final_probability: number | null
+    combination_method: string | null
+    category: string | null
+    call1_reasoning: string | null
+    call2_critique: string | null
+  }
 }
 
 export type AlphaSignalRecord = {

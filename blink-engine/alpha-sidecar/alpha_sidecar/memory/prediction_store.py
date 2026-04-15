@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS predictions (
     recommended_size_usdc REAL,
     side            TEXT,            -- BUY / SELL
 
+    -- Reasoning chain (Phase 2)
+    reasoning_chain_json TEXT,       -- JSON blob from ReasoningChain.to_dict()
+
     -- CLOB snapshot at prediction time
     clob_best_bid   REAL,
     clob_best_ask   REAL,
@@ -92,6 +95,7 @@ class PredictionRecord:
         "predicted_prob", "confidence", "edge_bps",
         "reasoning", "model_used", "prompt_version",
         "recommended_size_usdc", "side",
+        "reasoning_chain_json",
         "clob_best_bid", "clob_best_ask", "clob_spread_pct",
         "clob_bid_depth", "clob_ask_depth", "price_change_1h",
     )
@@ -117,6 +121,7 @@ class PredictionRecord:
         prompt_version: str = "v1",
         recommended_size_usdc: float | None = None,
         side: str | None = None,
+        reasoning_chain_json: str | None = None,
         clob_best_bid: float | None = None,
         clob_best_ask: float | None = None,
         clob_spread_pct: float | None = None,
@@ -142,6 +147,7 @@ class PredictionRecord:
         self.prompt_version = prompt_version
         self.recommended_size_usdc = recommended_size_usdc
         self.side = side
+        self.reasoning_chain_json = reasoning_chain_json
         self.clob_best_bid = clob_best_bid
         self.clob_best_ask = clob_best_ask
         self.clob_spread_pct = clob_spread_pct
@@ -164,6 +170,14 @@ class PredictionStore:
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA busy_timeout=5000")
         await self._db.executescript(_SCHEMA)
+        # Migrate existing DBs: add new columns that didn't exist in Phase 1
+        for col, coltype in [("reasoning_chain_json", "TEXT")]:
+            try:
+                await self._db.execute(
+                    f"ALTER TABLE predictions ADD COLUMN {col} {coltype}"
+                )
+            except Exception:
+                pass  # column already exists
         await self._db.commit()
         logger.info("Prediction store opened: %s", self._db_path)
 
@@ -186,6 +200,7 @@ class PredictionStore:
                     predicted_prob, confidence, edge_bps,
                     reasoning, model_used, prompt_version,
                     recommended_size_usdc, side,
+                    reasoning_chain_json,
                     clob_best_bid, clob_best_ask, clob_spread_pct,
                     clob_bid_depth, clob_ask_depth, price_change_1h,
                     next_check_at
@@ -196,6 +211,7 @@ class PredictionStore:
                     ?, ?, ?,
                     ?, ?, ?,
                     ?, ?,
+                    ?,
                     ?, ?, ?,
                     ?, ?, ?,
                     ?
@@ -207,6 +223,7 @@ class PredictionStore:
                     rec.predicted_prob, rec.confidence, rec.edge_bps,
                     rec.reasoning, rec.model_used, rec.prompt_version,
                     rec.recommended_size_usdc, rec.side,
+                    rec.reasoning_chain_json,
                     rec.clob_best_bid, rec.clob_best_ask, rec.clob_spread_pct,
                     rec.clob_bid_depth, rec.clob_ask_depth, rec.price_change_1h,
                     next_check,

@@ -35,6 +35,9 @@ class AlphaConfig:
     confidence_floor: float = 0.50
     max_recommended_size_usdc: float = 25.0
 
+    # Reasoning chain (Phase 2)
+    reasoning_chain_enabled: bool = True
+
     # Optional connectors
     newsapi_key: str = ""
     tavily_key: str = ""
@@ -62,6 +65,7 @@ class AlphaConfig:
             chroma_persist_dir=os.getenv("ALPHA_CHROMA_DIR", cls.chroma_persist_dir),
             confidence_floor=float(os.getenv("ALPHA_CONFIDENCE_FLOOR", str(cls.confidence_floor))),
             max_recommended_size_usdc=float(os.getenv("ALPHA_MAX_SINGLE_ORDER_USDC", str(cls.max_recommended_size_usdc))),
+            reasoning_chain_enabled=os.getenv("ALPHA_REASONING_CHAIN", "true").lower() in ("true", "1", "yes"),
             newsapi_key=os.getenv("NEWSAPI_KEY", ""),
             tavily_key=os.getenv("TAVILY_API_KEY", ""),
         )

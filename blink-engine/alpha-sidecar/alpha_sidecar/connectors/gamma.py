@@ -30,6 +30,7 @@ class GammaMarket:
     active: bool
     closed: bool
     extra: dict = field(default_factory=dict)  # raw fields for LLM context
+    no_token_id: str = ""  # CLOB token ID (NO outcome) — for SELL→BUY NO conversion
 
 
 async def fetch_active_markets(
@@ -73,6 +74,8 @@ async def fetch_active_markets(
             if not token_id:
                 continue
 
+            no_token_id = _get_no_token_id(m)
+
             end_date = (
                 m.get("endDateIso")
                 or m.get("end_date_iso")
@@ -95,6 +98,7 @@ async def fetch_active_markets(
                 extra={k: v for k, v in m.items() if k in (
                     "category", "tags", "liquidity", "spread"
                 )},
+                no_token_id=no_token_id or "",
             ))
         except Exception as e:
             logger.debug("Skipping market parse error: %s", e)
@@ -159,4 +163,28 @@ def _get_yes_token_id(m: dict) -> str | None:
             ids = []
     if ids:
         return str(ids[0])
+    return None
+
+
+def _get_no_token_id(m: dict) -> str | None:
+    """Extract the NO outcome token ID (for SELL→BUY NO conversion)."""
+    import json as _json
+
+    tokens = m.get("tokens") or []
+    for tok in tokens:
+        outcome = str(tok.get("outcome") or "").upper()
+        if outcome in ("NO", "0", "FALSE"):
+            return str(tok.get("token_id") or tok.get("tokenId") or "")
+    # Fallback: second token
+    if len(tokens) > 1:
+        return str(tokens[1].get("token_id") or tokens[1].get("tokenId") or "")
+    # Last resort: clobTokenIds[1]
+    ids = m.get("clobTokenIds") or m.get("clob_token_ids") or []
+    if isinstance(ids, str):
+        try:
+            ids = _json.loads(ids)
+        except Exception:
+            ids = []
+    if len(ids) > 1:
+        return str(ids[1])
     return None

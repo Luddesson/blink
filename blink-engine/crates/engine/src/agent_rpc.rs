@@ -381,7 +381,7 @@ async fn submit_alpha_signal(params: Value, state: &AgentRpcState) -> std::resul
         timestamp: chrono::Utc::now().to_rfc3339(),
         analysis_id: signal.analysis_id.clone(),
         token_id: signal.token_id.clone(),
-        market_question: String::new(), // filled later from cycle report data
+        market_question: signal.market_question.clone(),
         side: format!("{:?}", signal.side),
         confidence: signal.confidence,
         reasoning: signal.reasoning.clone(),

@@ -56,6 +56,9 @@ pub struct AlphaSignal {
     pub source: SignalSource,
     /// Unique analysis ID for ClickHouse traceability.
     pub analysis_id: String,
+    /// Human-readable market question (set by sidecar).
+    #[serde(default)]
+    pub market_question: String,
     /// Wall-clock detection timestamp (set by engine on receipt).
     #[serde(skip)]
     pub received_at: Option<Instant>,

@@ -1003,7 +1003,11 @@ async fn main() -> Result<()> {
 
                     let rn1_compat = RN1Signal {
                         token_id: signal.token_id.clone(),
-                        market_title: Some(format!("[ALPHA] {}", signal.analysis_id)),
+                        market_title: Some(if signal.market_question.is_empty() {
+                            format!("[ALPHA] {}", signal.analysis_id)
+                        } else {
+                            signal.market_question.clone()
+                        }),
                         market_outcome: None,
                         side: signal.side,
                         price: (signal.recommended_price * 1000.0) as u64,

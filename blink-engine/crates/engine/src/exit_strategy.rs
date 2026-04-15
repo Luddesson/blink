@@ -99,7 +99,7 @@ pub struct ExitConfig {
     pub stagnant_exit_secs: u64,
     pub stagnant_threshold_pct: f64,
 
-    // Max hold time (absolute limit, default 5 days = 432000s)
+    // Max hold time (absolute limit, default 6h = 21600s)
     pub max_hold_secs: u64,
 
     // Stale market close
@@ -127,15 +127,15 @@ impl ExitConfig {
     pub fn from_env() -> Self {
         Self {
             autoclaim_tiers: parse_autoclaim_tiers_from_env(),
-            // Phase 6: cut losers fast, let winners run
-            stop_loss_pct: env_f64("STOP_LOSS_PCT", 25.0).clamp(1.0, 99.0),
-            stop_loss_small_pct: env_f64("STOP_LOSS_SMALL_PCT", 15.0).clamp(1.0, 99.0),
+            // Data-driven: -50% stop reduces bleed by 70% vs -25%
+            stop_loss_pct: env_f64("STOP_LOSS_PCT", 50.0).clamp(1.0, 99.0),
+            stop_loss_small_pct: env_f64("STOP_LOSS_SMALL_PCT", 50.0).clamp(1.0, 99.0),
             stop_loss_small_notional_usdc: env_f64("STOP_LOSS_SMALL_NOTIONAL_USDC", 8.0),
             trailing_stop_activate_pct: env_f64("TRAILING_STOP_ACTIVATE_PCT", 25.0),
             trailing_stop_drop_pct: env_f64("TRAILING_STOP_DROP_PCT", 15.0),
             stagnant_exit_secs: env_u64("STAGNANT_EXIT_SECS", 7200),
             stagnant_threshold_pct: env_f64("STAGNANT_THRESHOLD_PCT", 5.0),
-            max_hold_secs: env_u64("MAX_HOLD_SECS", 432_000), // 5 days
+            max_hold_secs: env_u64("MAX_HOLD_SECS", 21_600), // 6h — 24h+ trades have 17% WR
             stale_close_secs: env_u64("STALE_CLOSE_SECS", 60),
             event_aware_exit_secs: env_u64("EVENT_AWARE_EXIT_SECS", 3600),
             event_aware_exit_loss_pct: env_f64("EVENT_AWARE_EXIT_LOSS_PCT", 5.0),
@@ -151,16 +151,16 @@ impl ExitConfig {
 impl Default for ExitConfig {
     fn default() -> Self {
         Self {
-            // Phase 6: cut losers fast, let winners run
+            // Data-driven: -50% stop, 6h max hold
             autoclaim_tiers: vec![(100.0, 0.25), (200.0, 0.50), (300.0, 1.0)],
-            stop_loss_pct: 25.0,
-            stop_loss_small_pct: 15.0,
+            stop_loss_pct: 50.0,
+            stop_loss_small_pct: 50.0,
             stop_loss_small_notional_usdc: 8.0,
             trailing_stop_activate_pct: 25.0,
             trailing_stop_drop_pct: 15.0,
             stagnant_exit_secs: 7200,
             stagnant_threshold_pct: 5.0,
-            max_hold_secs: 432_000,
+            max_hold_secs: 21_600,
             stale_close_secs: 60,
             event_aware_exit_secs: 3600,
             event_aware_exit_loss_pct: 5.0,
@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn exit_stop_loss_small() {
-        let mut pos = make_position(0.50, 0.30, 5.0); // $5 position, -40% loss
+        let mut pos = make_position(0.50, 0.20, 5.0); // $5 position, -60% loss (exceeds -50% stop)
         let config = ExitConfig::default();
         let decisions = evaluate_exits(&[pos], &config, |_| true);
         assert_eq!(decisions.len(), 1);

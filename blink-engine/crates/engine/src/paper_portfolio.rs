@@ -13,7 +13,7 @@ use crate::types::OrderSide;
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 /// Starting virtual balance in USDC.
-pub const STARTING_BALANCE_USDC: f64 = 100.0; // $100 starter bankroll
+pub const STARTING_BALANCE_USDC: f64 = 200.0; // $200 starter bankroll
 
 /// We mirror `SIZE_MULTIPLIER × RN1's notional` as our trade size.
 pub const SIZE_MULTIPLIER: f64 = 0.10; // 10% of RN1 notional (Phase 6: up from 5%)
@@ -527,7 +527,7 @@ impl PaperPortfolio {
         let max_order_usdc = std::env::var("PAPER_MAX_ORDER_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(25.0) // Phase 6: $25 (up from $4 — let positions realize edge)
+            .unwrap_or(5.0) // Data-driven: trades >$5 have negative E[V]
             .clamp(min_floor_usdc, 500.0);
 
         let raw        = rn1_notional_usdc * size_multiplier;
@@ -1134,17 +1134,17 @@ mod tests {
 
     #[test]
     fn size_capped_at_max_order() {
-        let p = PaperPortfolio::new(); // NAV = 100
-        // RN1 trades $20,000 → 10% = $2,000, capped at max_order_usdc ($25 default)
+        let p = PaperPortfolio::new(); // NAV = 200
+        // RN1 trades $20,000 → 10% = $2,000, capped at max_order_usdc ($5 default)
         let size = p.calculate_size_usdc(20_000.0).unwrap();
-        // Phase 6: PAPER_MAX_ORDER_USDC default is $25
-        assert!((size - 25.0).abs() < 1e-9, "size={size} expected cap=25");
+        // Data-driven: PAPER_MAX_ORDER_USDC default is $5
+        assert!((size - 5.0).abs() < 1e-9, "size={size} expected cap=5");
     }
 
     #[test]
     fn size_below_minimum_returns_none() {
         let p = PaperPortfolio::new();
-        // 5% of $100 = $5, which meets the floor, so should size.
+        // 5% of $200 NAV = $10, capped at $5 max, which meets the floor, so should size.
         assert!(p.calculate_size_usdc(100.0).is_some());
     }
 
@@ -1156,10 +1156,10 @@ mod tests {
         p.open_position("tok".into(), OrderSide::Buy, 0.65, 20.0, "oid".into());
         let shares = 20.0 / 0.65;
         let entry_fee = polymarket_taker_fee(shares, 0.65);
-        assert!((p.nav() - (100.0 - entry_fee)).abs() < 0.01,
-            "nav={} expected={}", p.nav(), 100.0 - entry_fee);
-        assert!((p.cash_usdc - (80.0 - entry_fee)).abs() < 0.01,
-            "cash={} expected={}", p.cash_usdc, 80.0 - entry_fee);
+        assert!((p.nav() - (200.0 - entry_fee)).abs() < 0.01,
+            "nav={} expected={}", p.nav(), 200.0 - entry_fee);
+        assert!((p.cash_usdc - (180.0 - entry_fee)).abs() < 0.01,
+            "cash={} expected={}", p.cash_usdc, 180.0 - entry_fee);
         std::env::remove_var("PAPER_REALISM_MODE");
     }
 

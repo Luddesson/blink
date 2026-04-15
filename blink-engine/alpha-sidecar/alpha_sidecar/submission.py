@@ -101,6 +101,7 @@ async def submit_signal(llm: LLMSignal, cfg: AlphaConfig) -> SubmitResult:
                 "prompt_id": llm.analysis_id,
             },
             "analysis_id": llm.analysis_id,
+            "market_question": llm.market.question,
         },
     }
 

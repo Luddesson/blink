@@ -628,9 +628,9 @@ impl PaperEngine {
         }
 
         // ── Extreme price filter: skip very low or very high odds ──────────
-        // Phase 6: tighter price band — most edge lives in 0.15-0.85 range.
-        // Alpha signals use wider band (0.03-0.97) because the LLM already evaluated edge.
-        let (price_lo, price_hi) = if is_alpha { (0.03, 0.97) } else { (0.15, 0.85) };
+        // Data-driven: prices 0.10-0.70 have best E[V]; >0.70 has <53% WR.
+        // Alpha signals use slightly wider band (0.05-0.75) because the LLM already evaluated edge.
+        let (price_lo, price_hi) = if is_alpha { (0.05, 0.75) } else { (0.10, 0.70) };
         if entry_price < price_lo || entry_price > price_hi {
             let mut p = self.portfolio.lock().await;
             p.skipped_orders += 1;

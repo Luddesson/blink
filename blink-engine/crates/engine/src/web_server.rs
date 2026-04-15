@@ -24,6 +24,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::activity_log::ActivityLog;
+use crate::alpha_signal::AlphaAnalytics;
 use crate::backtest_engine::{load_ticks_csv, run_parameter_sweep, run_walk_forward, BacktestConfig, BacktestEngine, SweepAxes, WalkForwardAggregate};
 use crate::blink_twin::TwinSnapshot;
 use crate::clickhouse_logger;
@@ -77,6 +78,8 @@ pub struct AppState {
     pub snapshot_seq: Arc<AtomicU64>,
     /// Unix-millis timestamp of the last successful portfolio cache write.
     pub portfolio_cached_at_ms: Arc<AtomicU64>,
+    /// Alpha analytics — present when ALPHA_ENABLED=true. Shared with agent_rpc.
+    pub alpha_analytics: Option<Arc<Mutex<AlphaAnalytics>>>,
 }
 
 // ─── JSON response types ────────────────────────────────────────────────────
@@ -171,6 +174,7 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/backtest/sweep", post(post_backtest_sweep))
         .route("/api/backtest/walk-forward", post(post_backtest_walk_forward))
         .route("/api/analytics/equity", get(get_analytics_equity))
+        .route("/api/alpha", get(get_alpha_status))
         .route("/ws", get(ws_handler))
         .with_state(state)
         .layer(cors);
@@ -1656,4 +1660,35 @@ async fn get_analytics_equity(
     let empty: Vec<EquityPoint> = Vec::new();
     Json(json!({ "source": "none", "range": range, "points": empty }))
         .into_response()
+}
+
+// ─── Alpha status ─────────────────────────────────────────────────────────────
+
+/// GET /api/alpha
+///
+/// Returns alpha sidecar analytics — signal counts, reject reasons, and P&L.
+/// Returns 404 when the alpha pipeline is not enabled (ALPHA_ENABLED=true not set).
+async fn get_alpha_status(State(state): State<AppState>) -> impl IntoResponse {
+    let Some(ref analytics) = state.alpha_analytics else {
+        return Json(json!({
+            "enabled": false,
+            "reason": "Alpha pipeline not enabled — set ALPHA_ENABLED=true and restart"
+        })).into_response();
+    };
+
+    let a = analytics.lock().unwrap();
+    Json(json!({
+        "enabled": true,
+        "signals_received": a.signals_received,
+        "signals_accepted": a.signals_accepted,
+        "signals_rejected": a.signals_rejected,
+        "accept_rate_pct": if a.signals_received > 0 {
+            (a.signals_accepted as f64 / a.signals_received as f64) * 100.0
+        } else { 0.0 },
+        "reject_reasons": a.reject_reasons,
+        "realized_pnl_usdc": a.realized_pnl_usdc,
+        "unrealized_pnl_usdc": a.unrealized_pnl_usdc,
+        "positions_opened": a.positions_opened,
+        "positions_closed": a.positions_closed,
+    })).into_response()
 }

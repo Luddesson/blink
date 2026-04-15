@@ -147,3 +147,23 @@ export async function submitSignedTx(payload: unknown) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
+
+// ─── Alpha sidecar status ─────────────────────────────────────────────────────
+
+export type AlphaStatus = {
+  enabled: boolean;
+  signals_received: number;
+  signals_accepted: number;
+  signals_rejected: number;
+  accept_rate_pct: number;
+  reject_reasons: Record<string, number>;
+  realized_pnl_usdc: number;
+  unrealized_pnl_usdc: number;
+  positions_opened: number;
+  positions_closed: number;
+  reason?: string; // present when not enabled
+};
+
+export function useAlpha(intervalMs = 5000) {
+  return useFetch<AlphaStatus>('/api/alpha', intervalMs);
+}

@@ -4,6 +4,7 @@ import Markets from './pages/Markets';
 import History from './pages/History';
 import Risk from './pages/Risk';
 import Twin from './pages/Twin';
+import Alpha from './pages/Alpha';
 
 const tabs = [
   { id: 'dashboard', label: 'Dashboard', shortcut: '1' },
@@ -11,6 +12,7 @@ const tabs = [
   { id: 'history', label: 'History', shortcut: '3' },
   { id: 'risk', label: 'Risk', shortcut: '4' },
   { id: 'twin', label: 'Twin', shortcut: '5' },
+  { id: 'alpha', label: 'Alpha', shortcut: '6' },
 ] as const;
 
 type TabId = typeof tabs[number]['id'];
@@ -59,6 +61,7 @@ export default function App() {
         {activeTab === 'history' && <History />}
         {activeTab === 'risk' && <Risk />}
         {activeTab === 'twin' && <Twin />}
+        {activeTab === 'alpha' && <Alpha />}
       </main>
 
       {/* Footer */}

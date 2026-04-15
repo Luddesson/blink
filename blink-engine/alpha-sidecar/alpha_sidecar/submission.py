@@ -10,8 +10,12 @@ import httpx
 
 from .analysis.llm import LLMSignal
 from .config import AlphaConfig
+from .connectors.clob import compute_expected_value
 
 logger = logging.getLogger(__name__)
+
+# Quarter-Kelly multiplier — conservative bet sizing given model uncertainty.
+KELLY_FRACTION: float = 0.25
 
 
 @dataclass
@@ -19,6 +23,35 @@ class SubmitResult:
     success: bool
     analysis_id: str
     error: str | None = None
+
+
+def _compute_size(llm: LLMSignal, cfg: AlphaConfig) -> float:
+    """Compute order size using Kelly fraction when CLOB data is available.
+
+    Falls back to cfg.max_recommended_size_usdc / 2 when CLOB is unavailable.
+    Kelly is capped at max_recommended_size_usdc and floored at $1.
+    """
+    if llm.clob is not None:
+        ev = compute_expected_value(llm.yes_probability, llm.market.yes_price)
+        kelly_raw = (
+            ev.kelly_fraction_yes
+            if llm.recommended_action == "BUY"
+            else ev.kelly_fraction_no
+        )
+        # Quarter-Kelly × bankroll estimate ($100 virtual start)
+        bankroll_estimate = 100.0
+        kelly_size = kelly_raw * bankroll_estimate * KELLY_FRACTION
+        size = max(1.0, min(cfg.max_recommended_size_usdc, kelly_size))
+        logger.debug(
+            "Kelly sizing: kelly_raw=%.3f → size=$%.2f (cap=$%.2f)",
+            kelly_raw,
+            size,
+            cfg.max_recommended_size_usdc,
+        )
+        return round(size, 2)
+
+    # Fallback: half the configured max (conservative default)
+    return round(min(cfg.max_recommended_size_usdc, cfg.max_recommended_size_usdc * 0.5), 2)
 
 
 async def submit_signal(llm: LLMSignal, cfg: AlphaConfig) -> SubmitResult:
@@ -34,7 +67,13 @@ async def submit_signal(llm: LLMSignal, cfg: AlphaConfig) -> SubmitResult:
         price = llm.market.yes_price * 0.995
 
     price = round(max(0.01, min(0.99, price)), 4)
-    size = min(cfg.max_recommended_size_usdc, 5.0)
+    size = _compute_size(llm, cfg)
+
+    # Compute EV for logging / engine metadata
+    ev = compute_expected_value(llm.yes_probability, llm.market.yes_price)
+    ev_bps = round(
+        (ev.ev_yes if llm.recommended_action == "BUY" else ev.ev_no) * 10_000, 1
+    )
 
     payload = {
         "jsonrpc": "2.0",
@@ -78,9 +117,18 @@ async def submit_signal(llm: LLMSignal, cfg: AlphaConfig) -> SubmitResult:
         logger.info("Engine rejected signal %s: %s", llm.analysis_id, err_msg)
         return SubmitResult(success=False, analysis_id=llm.analysis_id, error=err_msg)
 
+    spread_info = (
+        f" spread={llm.clob.spread_pct * 10_000:.0f}bps" if llm.clob else ""
+    )
     logger.info(
-        "✓ Signal submitted: %s %s @ %.4f (conf=%.2f edge=%+.0fbps)",
-        side, llm.market.question[:50], price, llm.confidence,
+        "✓ Signal submitted: %s %s @ %.4f (conf=%.2f edge=%+.0fbps ev=%+.0fbps size=$%.2f%s)",
+        side,
+        llm.market.question[:50],
+        price,
+        llm.confidence,
         (llm.yes_probability - llm.market.yes_price) * 10_000,
+        ev_bps,
+        size,
+        spread_info,
     )
     return SubmitResult(success=True, analysis_id=llm.analysis_id)

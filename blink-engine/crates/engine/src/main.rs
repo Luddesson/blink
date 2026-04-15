@@ -1090,6 +1090,7 @@ async fn main() -> Result<()> {
             clickhouse_url: std::env::var("CLICKHOUSE_URL").ok().filter(|s| !s.is_empty()),
             snapshot_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             portfolio_cached_at_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            alpha_analytics: alpha_analytics.clone(),
         };
 
         let static_dir = std::env::var("WEB_UI_STATIC_DIR").ok()

@@ -1,8 +1,12 @@
 """LLM-based market analysis.
 
-Sends a Polymarket market to GPT and asks it to estimate the true
-probability that YES resolves. Returns an AlphaSignal if the
-LLM's estimate diverges from the market price by more than the edge threshold.
+Sends a Polymarket market to GPT/Grok and asks it to estimate the true
+probability that YES resolves. Returns an AlphaSignal if the LLM's estimate
+diverges from the market price by more than the edge threshold.
+
+When CLOB data is available (orderbook, spread, price history), it is included
+in the prompt to dramatically improve signal quality — the LLM can see whether
+the market is liquid/efficient or wide/inefficient.
 """
 
 from __future__ import annotations
@@ -15,11 +19,14 @@ from dataclasses import dataclass
 from openai import AsyncOpenAI
 
 from ..config import AlphaConfig
+from ..connectors.clob import OrderbookSnapshot
 from ..connectors.gamma import GammaMarket
 
 logger = logging.getLogger(__name__)
 
-ANALYSIS_PROMPT_TEMPLATE = """\
+# ─── Prompt template ─────────────────────────────────────────────────────────
+
+_BASE_PROMPT = """\
 You are a prediction market analyst. Analyse the following Polymarket market
 and estimate the true probability that the YES outcome resolves.
 
@@ -30,12 +37,29 @@ Current NO price:  {no_price:.2%}
 24h Volume: ${volume:,.0f}
 Closes: {end_date}
 Category: {category}
+"""
+
+_CLOB_SECTION = """\
+
+Live Orderbook (CLOB data):
+  Best Bid:     {best_bid:.4f}  (highest buyer)
+  Best Ask:     {best_ask:.4f}  (lowest seller)
+  Spread:       {spread_bps:.0f}bps  ({spread_pct:.2%} of mid)
+  Bid Depth:    ${bid_depth_usdc:,.0f} USDC (top 5 levels)
+  Ask Depth:    ${ask_depth_usdc:,.0f} USDC (top 5 levels)
+  1h Price Δ:   {price_change}
+"""
+
+_INSTRUCTIONS = """\
 
 Instructions:
 1. Reason about the true probability of YES resolving based on your knowledge.
 2. Consider any relevant facts, recent news, or base rates.
-3. Be concise but specific in your reasoning.
-4. Output ONLY valid JSON with this exact schema:
+3. If orderbook data is present, use the spread and depth to judge market efficiency.
+   A wide spread (> 200bps) often signals genuine disagreement — your edge may be real.
+   A tight spread (< 50bps) suggests the market is efficient — be conservative.
+4. Be concise but specific in your reasoning.
+5. Output ONLY valid JSON with this exact schema:
    {{
      "yes_probability": <float 0.0-1.0>,
      "confidence": <float 0.0-1.0>,
@@ -48,27 +72,13 @@ If you lack sufficient information to form a confident view, set
 """
 
 
-@dataclass
-class LLMSignal:
-    """Raw output from LLM analysis before risk filtering."""
-    market: GammaMarket
-    yes_probability: float
-    confidence: float
-    reasoning: str
-    recommended_action: str   # "BUY", "SELL", "PASS"
-    analysis_id: str
-
-
-async def analyse_market(
+def _build_prompt(
     market: GammaMarket,
-    cfg: AlphaConfig,
-    client: AsyncOpenAI,
-) -> LLMSignal | None:
-    """Call the LLM and parse its probability estimate.
-
-    Returns None if the LLM returns an invalid response or recommends PASS.
-    """
-    prompt = ANALYSIS_PROMPT_TEMPLATE.format(
+    clob: OrderbookSnapshot | None,
+    price_change_1h: float | None,
+) -> str:
+    """Build the full analysis prompt, optionally enriched with CLOB data."""
+    base = _BASE_PROMPT.format(
         question=market.question,
         description=(market.description or "No description provided.")[:500],
         yes_price=market.yes_price,
@@ -78,12 +88,68 @@ async def analyse_market(
         category=market.extra.get("category") or "unknown",
     )
 
+    if clob is not None:
+        if price_change_1h is not None:
+            direction = "+" if price_change_1h >= 0 else ""
+            change_str = f"{direction}{price_change_1h:.2%}"
+        else:
+            change_str = "n/a"
+
+        clob_section = _CLOB_SECTION.format(
+            best_bid=clob.best_bid,
+            best_ask=clob.best_ask,
+            spread_bps=clob.spread_pct * 10_000,
+            spread_pct=clob.spread_pct,
+            bid_depth_usdc=clob.bid_depth_usdc,
+            ask_depth_usdc=clob.ask_depth_usdc,
+            price_change=change_str,
+        )
+        return base + clob_section + _INSTRUCTIONS
+
+    return base + _INSTRUCTIONS
+
+
+# ─── Dataclass ───────────────────────────────────────────────────────────────
+
+
+@dataclass
+class LLMSignal:
+    """Raw output from LLM analysis before risk filtering."""
+
+    market: GammaMarket
+    yes_probability: float
+    confidence: float
+    reasoning: str
+    recommended_action: str   # "BUY", "SELL", "PASS"
+    analysis_id: str
+    # CLOB enrichment (set if available — used for Kelly sizing in submission.py)
+    clob: OrderbookSnapshot | None = None
+    price_change_1h: float | None = None
+
+
+# ─── Analysis function ────────────────────────────────────────────────────────
+
+
+async def analyse_market(
+    market: GammaMarket,
+    cfg: AlphaConfig,
+    client: AsyncOpenAI,
+    clob: OrderbookSnapshot | None = None,
+    price_change_1h: float | None = None,
+) -> LLMSignal | None:
+    """Call the LLM and parse its probability estimate.
+
+    Pass `clob` and `price_change_1h` for enriched analysis.
+    Returns None if the LLM returns an invalid response or recommends PASS.
+    """
+    prompt = _build_prompt(market, clob, price_change_1h)
+
     try:
         response = await client.chat.completions.create(
             model=cfg.openai_model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
-            max_tokens=300,
+            max_tokens=350,
             response_format={"type": "json_object"},
         )
     except Exception as e:
@@ -120,6 +186,8 @@ async def analyse_market(
         reasoning=reasoning,
         recommended_action=action,
         analysis_id=str(uuid.uuid4())[:8],
+        clob=clob,
+        price_change_1h=price_change_1h,
     )
 
 

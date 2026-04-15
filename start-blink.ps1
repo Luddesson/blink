@@ -101,6 +101,10 @@ Set-Location '$root\blink-engine'
 `$env:MIN_SIGNAL_NOTIONAL_USD = '5.0'
 `$env:TUI = 'false'
 `$env:ALPHA_ENABLED = 'true'
+`$env:ALPHA_TRADING_ENABLED = 'true'
+`$env:ALPHA_CONFIDENCE_FLOOR = '0.45'
+`$env:ALPHA_MAX_CONCURRENT_POSITIONS = '10'
+`$env:ALPHA_MAX_SINGLE_ORDER_USDC = '10'
 & '.\target\$buildProfile\engine.exe' > '$engineLog' 2>&1
 "@ | Set-Content $engineLauncher
 

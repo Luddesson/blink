@@ -610,9 +610,11 @@ impl PaperEngine {
         }
 
         // ── Min-notional filter (skip micro-signals before sizing) ──────────
+        // Alpha signals use Kelly-sized amounts — bypass notional floor.
+        let is_alpha = signal.signal_source == "alpha";
         let min_notional: f64 = std::env::var("MIN_SIGNAL_NOTIONAL_USD")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(10.0);
-        if rn1_notional_usd < min_notional {
+        if !is_alpha && rn1_notional_usd < min_notional {
             let mut p = self.portfolio.lock().await;
             p.skipped_orders += 1;
             drop(p);
@@ -626,8 +628,10 @@ impl PaperEngine {
         }
 
         // ── Extreme price filter: skip very low or very high odds ──────────
-        // Phase 6: tighter price band — most edge lives in 0.15-0.85 range
-        if entry_price < 0.15 || entry_price > 0.85 {
+        // Phase 6: tighter price band — most edge lives in 0.15-0.85 range.
+        // Alpha signals use wider band (0.03-0.97) because the LLM already evaluated edge.
+        let (price_lo, price_hi) = if is_alpha { (0.03, 0.97) } else { (0.15, 0.85) };
+        if entry_price < price_lo || entry_price > price_hi {
             let mut p = self.portfolio.lock().await;
             p.skipped_orders += 1;
             drop(p);

@@ -13,7 +13,7 @@ use crate::types::OrderSide;
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 /// Starting virtual balance in USDC.
-pub const STARTING_BALANCE_USDC: f64 = 200.0; // $200 starter bankroll
+pub const STARTING_BALANCE_USDC: f64 = 100.0; // $100 starter bankroll
 
 /// We mirror `SIZE_MULTIPLIER × RN1's notional` as our trade size.
 pub const SIZE_MULTIPLIER: f64 = 0.10; // 10% of RN1 notional (Phase 6: up from 5%)
@@ -1156,10 +1156,10 @@ mod tests {
         p.open_position("tok".into(), OrderSide::Buy, 0.65, 20.0, "oid".into());
         let shares = 20.0 / 0.65;
         let entry_fee = polymarket_taker_fee(shares, 0.65);
-        assert!((p.nav() - (200.0 - entry_fee)).abs() < 0.01,
-            "nav={} expected={}", p.nav(), 200.0 - entry_fee);
-        assert!((p.cash_usdc - (180.0 - entry_fee)).abs() < 0.01,
-            "cash={} expected={}", p.cash_usdc, 180.0 - entry_fee);
+        assert!((p.nav() - (100.0 - entry_fee)).abs() < 0.01,
+            "nav={} expected={}", p.nav(), 100.0 - entry_fee);
+        assert!((p.cash_usdc - (80.0 - entry_fee)).abs() < 0.01,
+            "cash={} expected={}", p.cash_usdc, 80.0 - entry_fee);
         std::env::remove_var("PAPER_REALISM_MODE");
     }
 

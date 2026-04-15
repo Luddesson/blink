@@ -11,7 +11,14 @@ alpha_sidecar.egg-info/entry_points.txt
 alpha_sidecar.egg-info/requires.txt
 alpha_sidecar.egg-info/top_level.txt
 alpha_sidecar/analysis/__init__.py
+alpha_sidecar/analysis/calibration.py
 alpha_sidecar/analysis/llm.py
 alpha_sidecar/connectors/__init__.py
+alpha_sidecar/connectors/clob.py
 alpha_sidecar/connectors/gamma.py
+alpha_sidecar/connectors/scanner.py
+alpha_sidecar/memory/__init__.py
+alpha_sidecar/memory/calibration.py
+alpha_sidecar/memory/outcome_tracker.py
+alpha_sidecar/memory/prediction_store.py
 alpha_sidecar/rag/__init__.py

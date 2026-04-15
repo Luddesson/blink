@@ -1,0 +1,75 @@
+19:08:47 [INFO] alpha_sidecar.memory.prediction_store: Prediction store opened: C:\Users\ludvi\Documents\GitHub\blink\blink-engine\data\alpha_predictions.db
+19:08:47 [INFO] alpha_sidecar: Alpha sidecar starting | model=gpt-4o-mini | clob=https://clob.polymarket.com | interval=300s | min_edge=150bps | conf_floor=0.50 | vol=$5000–$50000000 | rpc=http://127.0.0.1:7878 | memory=ON | reasoning_chain=ON
+19:08:47 [INFO] alpha_sidecar: === Alpha cycle start ===
+19:08:47 [INFO] alpha_sidecar.memory.outcome_tracker: Outcome tracker started (interval=120s)
+19:08:47 [INFO] httpx: HTTP Request: GET https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&order=volumeNum&ascending=false "HTTP/1.1 200 OK"
+19:08:47 [INFO] alpha_sidecar.connectors.gamma: Gamma: fetched 94 qualifying markets (vol > $5000)
+19:08:47 [INFO] alpha_sidecar.connectors.scanner: Scanner: 94 \u2192 10 markets after filtering (vol $5000–$50000000)
+19:08:47 [INFO] alpha_sidecar: Analysing up to 10 markets (scanner output=10, limit=20)
+19:08:48 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/book?token_id=54533043819946592547517511176940999955633860128497669742211153063842200957669 "HTTP/1.1 200 OK"
+19:08:48 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/prices-history?market=54533043819946592547517511176940999955633860128497669742211153063842200957669&interval=1h&fidelity=60 "HTTP/1.1 200 OK"
+19:08:54 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:08:56 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:08:56 [INFO] alpha_sidecar.analysis.reasoning: Chain: Will Gavin Newsom win the 2028 Democrati | call1=0.25 call2=0.24 -> final=0.25 (weighted_70_30) | cat=politics | 1885 tok
+19:08:57 [INFO] httpx: HTTP Request: POST http://127.0.0.1:7878/rpc "HTTP/1.1 200 OK"
+19:08:57 [INFO] alpha_sidecar.submission: \u2713 Signal submitted: BUY Will Gavin Newsom win the 2028 Democratic presiden @ 0.7301 (conf=0.57 edge=-265bps ev=+265bps size=$2.42 spread=73bps)
+19:08:57 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/book?token_id=107505882767731489358349912513945399560393482969656700824895970500493757150417 "HTTP/1.1 200 OK"
+19:08:58 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/prices-history?market=107505882767731489358349912513945399560393482969656700824895970500493757150417&interval=1h&fidelity=60 "HTTP/1.1 200 OK"
+19:09:03 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:09:09 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:09:09 [INFO] alpha_sidecar.analysis.reasoning: Chain: Will the US confirm that aliens exist be | call1=0.15 call2=0.25 -> final=0.18 (weighted_70_30) | cat=politics | 2042 tok
+19:09:09 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/book?token_id=10991849228756847439673778874175365458450913336396982752046655649803657501964 "HTTP/1.1 200 OK"
+19:09:09 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/prices-history?market=10991849228756847439673778874175365458450913336396982752046655649803657501964&interval=1h&fidelity=60 "HTTP/1.1 200 OK"
+19:09:17 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:09:22 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:09:22 [INFO] alpha_sidecar.analysis.reasoning: Chain: Will the Iranian regime fall before 2027 | call1=0.15 call2=0.25 -> final=0.18 (weighted_70_30) | cat=geopolitics | 2151 tok
+19:09:22 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/book?token_id=102227184035967850089766981958743064457339118173548431660886438726896222843254 "HTTP/1.1 200 OK"
+19:09:22 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/prices-history?market=102227184035967850089766981958743064457339118173548431660886438726896222843254&interval=1h&fidelity=60 "HTTP/1.1 200 OK"
+19:09:28 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:09:31 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:09:31 [INFO] alpha_sidecar.analysis.reasoning: Chain: Will the San Antonio Spurs win the 2026  | call1=0.10 call2=0.20 -> final=0.13 (weighted_70_30) | cat=sports | 1783 tok
+19:09:31 [INFO] httpx: HTTP Request: POST http://127.0.0.1:7878/rpc "HTTP/1.1 200 OK"
+19:09:31 [INFO] alpha_sidecar.submission: \u2713 Signal submitted: BUY Will the San Antonio Spurs win the 2026 NBA Finals @ 0.8477 (conf=0.60 edge=-265bps ev=+265bps size=$4.23 spread=128bps)
+19:09:32 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/book?token_id=98250445447699368679516529207365255018790721464590833209064266254238063117329 "HTTP/1.1 200 OK"
+19:09:32 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/prices-history?market=98250445447699368679516529207365255018790721464590833209064266254238063117329&interval=1h&fidelity=60 "HTTP/1.1 200 OK"
+19:09:37 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:09:40 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:09:40 [INFO] alpha_sidecar.analysis.reasoning: Chain: Will Gavin Newsom win the 2028 US Presid | call1=0.15 call2=0.18 -> final=0.16 (weighted_70_30) | cat=politics | 1812 tok
+19:09:40 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/book?token_id=94559586571241563470235664821564670251180951772614764383113614156422396181162 "HTTP/1.1 200 OK"
+19:09:41 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/prices-history?market=94559586571241563470235664821564670251180951772614764383113614156422396181162&interval=1h&fidelity=60 "HTTP/1.1 200 OK"
+19:09:45 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:09:49 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:09:49 [INFO] alpha_sidecar.analysis.reasoning: Chain: Will China invade Taiwan by end of 2026? | call1=0.15 call2=0.20 -> final=0.16 (weighted_70_30) | cat=geopolitics | 1833 tok
+19:09:49 [INFO] httpx: HTTP Request: POST http://127.0.0.1:7878/rpc "HTTP/1.1 200 OK"
+19:09:49 [INFO] alpha_sidecar.submission: \u2713 Signal submitted: BUY Will China invade Taiwan by end of 2026? @ 0.0874 (conf=0.60 edge=+780bps ev=+780bps size=$2.14 spread=118bps)
+19:09:50 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/book?token_id=39199930181061027002976945656289590914091865583643541107948177704448092689848 "HTTP/1.1 200 OK"
+19:09:50 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/prices-history?market=39199930181061027002976945656289590914091865583643541107948177704448092689848&interval=1h&fidelity=60 "HTTP/1.1 200 OK"
+19:09:55 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:09:58 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:09:58 [INFO] alpha_sidecar.analysis.reasoning: Chain: Will Atletico Madrid win the 2025–26 Cha | call1=0.08 call2=0.09 -> final=0.08 (weighted_70_30) | cat=sports | 1850 tok
+19:09:58 [INFO] httpx: HTTP Request: POST http://127.0.0.1:7878/rpc "HTTP/1.1 200 OK"
+19:09:58 [INFO] alpha_sidecar.submission: \u2713 Signal submitted: BUY Will Atletico Madrid win the 2025–26 Champions Lea @ 0.8990 (conf=0.62 edge=-225bps ev=+225bps size=$5.33 spread=95bps)
+19:09:59 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/book?token_id=38397507750621893057346880033441136112987238933685677349709401910643842844855 "HTTP/1.1 200 OK"
+19:09:59 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/prices-history?market=38397507750621893057346880033441136112987238933685677349709401910643842844855&interval=1h&fidelity=60 "HTTP/1.1 200 OK"
+19:10:06 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:10:10 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:10:10 [INFO] alpha_sidecar.analysis.reasoning: Chain: Will the Iranian regime fall by June 30? | call1=0.15 call2=0.25 -> final=0.18 (weighted_70_30) | cat=geopolitics | 1922 tok
+19:10:10 [INFO] httpx: HTTP Request: POST http://127.0.0.1:7878/rpc "HTTP/1.1 200 OK"
+19:10:10 [INFO] alpha_sidecar.submission: \u2713 Signal submitted: BUY Will the Iranian regime fall by June 30? @ 0.0754 (conf=0.59 edge=+1050bps ev=+1050bps size=$2.84 spread=1333bps)
+19:10:11 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/book?token_id=21743669032210695168079601505378236205866986767926346409604806906483294819314 "HTTP/1.1 200 OK"
+19:10:11 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/prices-history?market=21743669032210695168079601505378236205866986767926346409604806906483294819314&interval=1h&fidelity=60 "HTTP/1.1 200 OK"
+19:10:17 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:10:21 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:10:21 [INFO] alpha_sidecar.analysis.reasoning: Chain: Iran x Israel/US conflict ends by April  | call1=0.40 call2=0.35 -> final=0.38 (weighted_70_30) | cat=geopolitics | 1987 tok
+19:10:21 [INFO] httpx: HTTP Request: POST http://127.0.0.1:7878/rpc "HTTP/1.1 200 OK"
+19:10:21 [INFO] alpha_sidecar.submission: \u2713 Signal submitted: BUY Iran x Israel/US conflict ends by April 7? @ 0.1201 (conf=0.57 edge=-4955bps ev=+4955bps size=$14.07 spread=102bps)
+19:10:22 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/book?token_id=5161623255678193352839985156330393796378434470119114669671615782853260939535 "HTTP/1.1 200 OK"
+19:10:22 [INFO] httpx: HTTP Request: GET https://clob.polymarket.com/prices-history?market=5161623255678193352839985156330393796378434470119114669671615782853260939535&interval=1h&fidelity=60 "HTTP/1.1 200 OK"
+19:10:28 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:10:31 [INFO] httpx: HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:10:31 [INFO] alpha_sidecar.analysis.reasoning: Chain: Will Trump acquire Greenland before 2027 | call1=0.03 call2=0.05 -> final=0.04 (weighted_70_30) | cat=politics | 1844 tok
+19:10:31 [INFO] httpx: HTTP Request: POST http://127.0.0.1:7878/rpc "HTTP/1.1 200 OK"
+19:10:31 [INFO] alpha_sidecar.submission: \u2713 Signal submitted: BUY Will Trump acquire Greenland before 2027? @ 0.9206 (conf=0.85 edge=-480bps ev=+480bps size=$14.29 spread=238bps)
+19:10:32 [INFO] alpha_sidecar: === Cycle done: 7 submitted, 1 skipped (low edge), 2 skipped (LLM PASS), 10/10 CLOB-enriched (104.6s) ===
+19:10:32 [INFO] httpx: HTTP Request: POST http://127.0.0.1:7878/rpc "HTTP/1.1 200 OK"
+19:10:32 [INFO] alpha_sidecar: Next cycle in 300s

@@ -188,7 +188,7 @@ async fn main() -> Result<()> {
     let rn1_diagnostics: Rn1PollDiagnosticsHandle = Arc::new(Mutex::new(Rn1PollDiagnostics::default()));
 
     log_push(&activity, EntryKind::Engine,
-        format!("Engine started — PAPER={paper_mode} TUI={tui_mode} RN1={}...", &rn1_wallet[..10]));
+        format!("Engine started — PAPER={paper_mode} TUI={tui_mode} RN1={}...", &rn1_wallet[..rn1_wallet.len().min(10)]));
     log_push(&activity, EntryKind::Engine, format!("Session log: {session_log_path}"));
     if tui_requested {
         log_push(

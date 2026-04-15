@@ -140,6 +140,8 @@ def _extract_prices(m: dict) -> tuple[float | None, float | None]:
 
 def _get_yes_token_id(m: dict) -> str | None:
     """Extract the YES outcome token ID."""
+    import json as _json
+
     tokens = m.get("tokens") or []
     for tok in tokens:
         outcome = str(tok.get("outcome") or "").upper()
@@ -148,8 +150,13 @@ def _get_yes_token_id(m: dict) -> str | None:
     # Fallback: first token
     if tokens:
         return str(tokens[0].get("token_id") or tokens[0].get("tokenId") or "")
-    # Last resort: top-level clobTokenIds
+    # Last resort: top-level clobTokenIds — may be a JSON-encoded string
     ids = m.get("clobTokenIds") or m.get("clob_token_ids") or []
+    if isinstance(ids, str):
+        try:
+            ids = _json.loads(ids)
+        except Exception:
+            ids = []
     if ids:
         return str(ids[0])
     return None

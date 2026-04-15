@@ -234,10 +234,44 @@ function MarketRow({ m, expanded, onToggle }: { m: AlphaCycleMarket; expanded: b
                     </span>
                   </div>
 
+                  {/* Base rate */}
+                  {m.reasoning_chain.base_rate && (
+                    <div>
+                      <div className="text-[10px] text-violet-500/70 uppercase tracking-widest mb-0.5">Base Rate</div>
+                      <p className="text-xs text-slate-400 leading-relaxed">{m.reasoning_chain.base_rate}</p>
+                    </div>
+                  )}
+
+                  {/* Evidence for / against */}
+                  {(m.reasoning_chain.evidence_for?.length > 0 || m.reasoning_chain.evidence_against?.length > 0) && (
+                    <div className="grid grid-cols-2 gap-2">
+                      {m.reasoning_chain.evidence_for?.length > 0 && (
+                        <div>
+                          <div className="text-[10px] text-emerald-500/70 uppercase tracking-widest mb-0.5">Evidence For</div>
+                          <ul className="space-y-0.5">
+                            {m.reasoning_chain.evidence_for.map((e, i) => (
+                              <li key={i} className="text-[11px] text-emerald-400/60 leading-tight">• {e}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {m.reasoning_chain.evidence_against?.length > 0 && (
+                        <div>
+                          <div className="text-[10px] text-rose-500/70 uppercase tracking-widest mb-0.5">Evidence Against</div>
+                          <ul className="space-y-0.5">
+                            {m.reasoning_chain.evidence_against.map((e, i) => (
+                              <li key={i} className="text-[11px] text-rose-400/60 leading-tight">• {e}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Call 1 reasoning */}
                   {m.reasoning_chain.call1_reasoning && (
                     <div>
-                      <div className="text-[10px] text-slate-600 uppercase tracking-widest mb-0.5">Deep Analysis</div>
+                      <div className="text-[10px] text-slate-600 uppercase tracking-widest mb-0.5">Bayesian Analysis</div>
                       <p className="text-xs text-slate-400 leading-relaxed">{m.reasoning_chain.call1_reasoning}</p>
                     </div>
                   )}
@@ -247,6 +281,20 @@ function MarketRow({ m, expanded, onToggle }: { m: AlphaCycleMarket; expanded: b
                     <div>
                       <div className="text-[10px] text-amber-500/70 uppercase tracking-widest mb-0.5">Devil's Advocate</div>
                       <p className="text-xs text-amber-400/70 leading-relaxed">{m.reasoning_chain.call2_critique}</p>
+                    </div>
+                  )}
+
+                  {/* Cognitive biases detected */}
+                  {m.reasoning_chain.cognitive_biases?.length > 0 && (
+                    <div>
+                      <div className="text-[10px] text-orange-500/70 uppercase tracking-widest mb-0.5">Cognitive Biases Detected</div>
+                      <div className="flex flex-wrap gap-1">
+                        {m.reasoning_chain.cognitive_biases.map((b, i) => (
+                          <span key={i} className="px-1.5 py-0.5 rounded text-[10px] bg-orange-500/10 text-orange-400 border border-orange-500/20">
+                            {b}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>

@@ -198,6 +198,9 @@ pub struct AlphaCycleMarket {
     /// Recommended size in USDC (Kelly output).
     #[serde(default)]
     pub recommended_size_usdc: Option<f64>,
+    /// Reasoning chain data (Phase 2) — Call 1 + Devil's Advocate + final combination.
+    #[serde(default)]
+    pub reasoning_chain: Option<serde_json::Value>,
 }
 
 /// Cycle-level report sent by the Python sidecar after each analysis run.

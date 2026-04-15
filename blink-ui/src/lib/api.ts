@@ -97,6 +97,10 @@ export type AlphaCycleMarket = {
     category: string | null
     call1_reasoning: string | null
     call2_critique: string | null
+    base_rate: string | null
+    evidence_for: string[]
+    evidence_against: string[]
+    cognitive_biases: string[]
   }
 }
 

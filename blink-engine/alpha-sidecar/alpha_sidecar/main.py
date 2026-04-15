@@ -203,13 +203,17 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_sto
             try:
                 chain = json.loads(reasoning_chain_json)
                 entry["reasoning_chain"] = {
-                    "call1_probability": chain.get("call1_probability"),
-                    "call2_probability": chain.get("call2_probability"),
+                    "call1_probability": chain.get("initial_probability"),
+                    "call2_probability": chain.get("revised_probability"),
                     "final_probability": chain.get("final_probability"),
                     "combination_method": chain.get("combination_method"),
                     "category": chain.get("category"),
-                    "call1_reasoning": chain.get("call1_reasoning", "")[:200],
-                    "call2_critique": chain.get("call2_critique", "")[:200],
+                    "call1_reasoning": chain.get("bayesian_reasoning", "")[:200],
+                    "call2_critique": chain.get("critique", "")[:200],
+                    "base_rate": chain.get("base_rate", "")[:150],
+                    "evidence_for": chain.get("evidence_for", []),
+                    "evidence_against": chain.get("evidence_against", []),
+                    "cognitive_biases": chain.get("cognitive_biases", []),
                 }
             except (json.JSONDecodeError, TypeError):
                 pass

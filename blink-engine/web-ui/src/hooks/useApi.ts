@@ -150,6 +150,64 @@ export async function submitSignedTx(payload: unknown) {
 
 // ─── Alpha sidecar status ─────────────────────────────────────────────────────
 
+export type AlphaSignalRecord = {
+  timestamp: string;
+  analysis_id: string;
+  token_id: string;
+  market_question: string;
+  side: string;
+  confidence: number;
+  reasoning: string;
+  recommended_price: number;
+  recommended_size_usdc: number;
+  status: string;
+  position_id?: number;
+  entry_price?: number;
+  current_price?: number;
+  realized_pnl?: number;
+  unrealized_pnl?: number;
+};
+
+export type AlphaCycleMarket = {
+  question: string;
+  yes_price: number;
+  llm_probability?: number;
+  confidence?: number;
+  edge_bps?: number;
+  action: string;
+  reasoning?: string;
+  side?: string;
+  token_id: string;
+  reasoning_chain?: {
+    call1_probability?: number;
+    call2_probability?: number;
+    final_probability?: number;
+    combination_method?: string;
+    category?: string;
+    call1_reasoning?: string;
+    call2_critique?: string;
+    base_rate?: string;
+    evidence_for?: string[];
+    evidence_against?: string[];
+    cognitive_biases?: string[];
+  };
+};
+
+export type AlphaPosition = {
+  id: number;
+  token_id: string;
+  market_title: string;
+  side: string;
+  entry_price: number;
+  current_price: number;
+  shares: number;
+  usdc_spent: number;
+  unrealized_pnl: number;
+  unrealized_pnl_pct: number;
+  analysis_id: string;
+  duration_secs: number;
+};
+
 export type AlphaStatus = {
   enabled: boolean;
   signals_received: number;
@@ -161,7 +219,41 @@ export type AlphaStatus = {
   unrealized_pnl_usdc: number;
   positions_opened: number;
   positions_closed: number;
-  reason?: string; // present when not enabled
+  reason?: string;
+  // Cycle info
+  cycles_completed?: number;
+  last_cycle_at?: string;
+  last_cycle_markets_scanned?: number;
+  last_cycle_markets_analyzed?: number;
+  last_cycle_signals_submitted?: number;
+  last_cycle_duration_secs?: number;
+  last_cycle_top_markets?: AlphaCycleMarket[];
+  // History
+  signal_history?: AlphaSignalRecord[];
+  ai_positions?: AlphaPosition[];
+  ai_closed_trades?: Array<{
+    token_id: string;
+    market_title: string;
+    side: string;
+    entry_price: number;
+    exit_price: number;
+    realized_pnl: number;
+    reason: string;
+    duration_secs: number;
+    closed_at: string;
+  }>;
+  // Performance
+  performance?: {
+    win_count: number;
+    loss_count: number;
+    win_rate_pct: number;
+    avg_pnl_per_trade: number;
+    best_trade_pnl: number;
+    worst_trade_pnl: number;
+    total_fees_paid: number;
+  };
+  // Calibration
+  calibration?: unknown;
 };
 
 export function useAlpha(intervalMs = 5000) {

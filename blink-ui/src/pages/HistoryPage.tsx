@@ -8,7 +8,7 @@ import DrawdownTracker from '../components/DrawdownTracker'
 import type { ClosedTrade } from '../types'
 import { useState, useEffect } from 'react'
 
-export default function HistoryPage({ equityCurve }: { equityCurve: number[] }) {
+export default function HistoryPage({ equityCurve = [] }: { equityCurve?: number[] }) {
   const { data: history } = usePoll(() => api.history(1, 200), 10_000)
   const [allTrades, setAllTrades] = useState<ClosedTrade[]>([])
 

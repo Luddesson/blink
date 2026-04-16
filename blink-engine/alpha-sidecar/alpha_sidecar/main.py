@@ -32,7 +32,9 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from .analysis.calibration import calibrate_confidence
+from .analysis.consensus import run_consensus
 from .analysis.llm import LLMSignal, analyse_market, analyse_market_v2, compute_edge
+from .analysis.auto_tuner import get_category_thresholds, run_auto_tuner
 from .config import AlphaConfig
 from .connectors.clob import OrderbookSnapshot, get_orderbook, get_price_change_1h
 from .connectors.gamma import GammaMarket, fetch_active_markets
@@ -40,6 +42,7 @@ from .connectors.scanner import score_markets
 from .memory.calibration import CalibrationTracker
 from .memory.outcome_tracker import run_outcome_tracker
 from .memory.prediction_store import PredictionRecord, PredictionStore
+from .rag.news import fetch_news_context
 from .submission import submit_signal
 
 def _compute_size_for_report(llm: LLMSignal, cfg: AlphaConfig) -> float | None:
@@ -259,12 +262,16 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_sto
         if clob is not None:
             clob_enriched += 1
 
+        # Step 3b: Fetch real-time news context (if Tavily key configured)
+        news_context = await fetch_news_context(market.question, cfg.tavily_key)
+
         # Step 4: LLM analysis with full context
         # Phase 2: Use reasoning chain (2-call pipeline) when enabled
         reasoning_chain = None
         if cfg.reasoning_chain_enabled:
             llm_signal, reasoning_chain = await analyse_market_v2(
-                market, cfg, openai_client, clob=clob, price_change_1h=price_change_1h
+                market, cfg, openai_client, clob=clob, price_change_1h=price_change_1h,
+                news_context=news_context,
             )
         else:
             llm_signal = await analyse_market(
@@ -344,6 +351,29 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_sto
                     price_change_1h=price_change_1h,
                 ))
             continue
+
+        # Step 6b: Multi-model consensus for high-edge signals
+        consensus_result = await run_consensus(
+            market, cfg, openai_client, edge_bps,
+            clob=clob, price_change_1h=price_change_1h,
+            news_context=news_context,
+        )
+        if consensus_result is not None:
+            # Apply consensus adjustments to signal
+            consensus_conf = consensus_result["consensus_confidence"]
+            consensus_prob = consensus_result["mean_probability"]
+            # Blend original with consensus: 60% original, 40% consensus
+            llm_signal.yes_probability = (
+                0.6 * llm_signal.yes_probability + 0.4 * consensus_prob
+            )
+            llm_signal.confidence = min(llm_signal.confidence, consensus_conf)
+            # Recompute edge after consensus adjustment
+            edge_bps = compute_edge(llm_signal)
+            logger.info(
+                "Post-consensus: prob=%.3f conf=%.2f edge=%.0fbps (model=%s)",
+                llm_signal.yes_probability, llm_signal.confidence,
+                edge_bps, consensus_result["model_used"],
+            )
 
         # Step 7: Submit with Kelly sizing
         result = await submit_signal(llm_signal, cfg)
@@ -492,6 +522,15 @@ async def main_loop(cfg: AlphaConfig) -> None:
                     await _report_calibration_to_engine(cfg, report)
                 except Exception as e:
                     logger.debug("Calibration report failed: %s", e)
+
+            # Run auto-tuner every 100 cycles (~2.5h at 90s interval)
+            if prediction_store and cycle_count % 100 == 0 and cycle_count > 0:
+                try:
+                    adjustments = await run_auto_tuner(prediction_store)
+                    if adjustments:
+                        logger.info("Auto-tuner: %d category adjustments applied", len(adjustments))
+                except Exception as e:
+                    logger.warning("Auto-tuner failed: %s", e)
 
         except Exception:
             logger.exception("Unhandled error in cycle — continuing after backoff")

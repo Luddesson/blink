@@ -1142,7 +1142,164 @@ async fn main() -> Result<()> {
         info!(bind_addr = %web_bind, "Web UI server enabled");
     }
 
-    // ── Wait for shutdown (Ctrl-C or TUI q) ──────────────────────────────
+    // ── External health heartbeat webhook ────────────────────────────────
+    // Sends a periodic POST to an external monitoring service (BetterStack,
+    // UptimeRobot, etc.) with engine health summary.
+    if let Ok(webhook_url) = std::env::var("HEARTBEAT_WEBHOOK_URL") {
+        if !webhook_url.is_empty() {
+            let hb_paper = paper_for_persist.as_ref().map(Arc::clone);
+            let hb_started = std::time::Instant::now();
+            let hb_interval_secs: u64 = std::env::var("HEARTBEAT_WEBHOOK_INTERVAL_SECS")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(300); // 5 min default
+            let hb_client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_default();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(hb_interval_secs));
+                ticker.tick().await; // skip immediate
+                let mut consecutive_fails: u32 = 0;
+                loop {
+                    ticker.tick().await;
+                    let (nav, positions, cash) = if let Some(ref p) = hb_paper {
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(1),
+                            p.portfolio.lock(),
+                        ).await {
+                            Ok(guard) => (guard.nav(), guard.positions.len(), guard.cash_usdc),
+                            Err(_) => (0.0, 0, 0.0),
+                        }
+                    } else {
+                        (0.0, 0, 0.0)
+                    };
+                    let uptime_h = hb_started.elapsed().as_secs_f64() / 3600.0;
+                    let payload = serde_json::json!({
+                        "status": "ok",
+                        "nav": format!("{:.2}", nav),
+                        "cash": format!("{:.2}", cash),
+                        "positions": positions,
+                        "uptime_h": format!("{:.1}", uptime_h),
+                    });
+                    match hb_client.post(&webhook_url).json(&payload).send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            consecutive_fails = 0;
+                            tracing::debug!(nav, positions, "📡 Health webhook OK");
+                        }
+                        Ok(resp) => {
+                            consecutive_fails += 1;
+                            tracing::warn!(
+                                status = %resp.status(),
+                                consecutive = consecutive_fails,
+                                "📡 Health webhook non-2xx"
+                            );
+                        }
+                        Err(e) => {
+                            consecutive_fails += 1;
+                            tracing::warn!(
+                                err = %e,
+                                consecutive = consecutive_fails,
+                                "📡 Health webhook failed"
+                            );
+                        }
+                    }
+                    if consecutive_fails >= 3 {
+                        tracing::error!("📡 Health webhook failed 3x consecutively — suspending for 30 min");
+                        tokio::time::sleep(Duration::from_secs(1800)).await;
+                        consecutive_fails = 0;
+                    }
+                }
+            });
+            log_push(&activity, EntryKind::Engine, format!("Health webhook enabled (every {hb_interval_secs}s)"));
+            info!(interval_secs = hb_interval_secs, "📡 External health webhook enabled");
+        }
+    }
+
+    // ── Daily performance report (UTC midnight) ──────────────────────────
+    // Computes NAV, daily P&L, win rate, Sharpe; posts to webhook + saves to disk.
+    {
+        let dr_paper = paper_for_persist.as_ref().map(Arc::clone);
+        let dr_webhook = std::env::var("DAILY_REPORT_WEBHOOK_URL").ok().filter(|s| !s.is_empty());
+        if dr_paper.is_some() {
+            let dr_client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .unwrap_or_default();
+            tokio::spawn(async move {
+                loop {
+                    // Sleep until next UTC midnight
+                    let now = chrono::Utc::now();
+                    let tomorrow = (now + chrono::Duration::days(1))
+                        .date_naive()
+                        .and_hms_opt(0, 0, 0)
+                        .unwrap();
+                    let until_midnight = tomorrow.and_utc().signed_duration_since(now);
+                    let sleep_secs = until_midnight.num_seconds().max(60) as u64;
+                    tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+
+                    let Some(ref paper) = dr_paper else { continue; };
+                    let report = match tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        paper.portfolio.lock(),
+                    ).await {
+                        Ok(p) => {
+                            let nav = p.nav();
+                            let cash = p.cash_usdc;
+                            let open_positions = p.positions.len();
+                            let total_trades = p.closed_trades.len();
+                            let winning = p.closed_trades.iter().filter(|t| t.realized_pnl > 0.0).count();
+                            let win_rate = if total_trades > 0 { winning as f64 / total_trades as f64 * 100.0 } else { 0.0 };
+                            let total_pnl: f64 = p.closed_trades.iter().map(|t| t.realized_pnl).sum();
+                            let avg_pnl = if total_trades > 0 { total_pnl / total_trades as f64 } else { 0.0 };
+                            let pnl_vs_start = nav - engine::paper_portfolio::STARTING_BALANCE_USDC;
+
+                            serde_json::json!({
+                                "date": chrono::Utc::now().format("%Y-%m-%d").to_string(),
+                                "nav": format!("{:.2}", nav),
+                                "cash": format!("{:.2}", cash),
+                                "pnl_vs_start": format!("{:.2}", pnl_vs_start),
+                                "open_positions": open_positions,
+                                "total_trades": total_trades,
+                                "win_rate_pct": format!("{:.1}", win_rate),
+                                "avg_pnl_per_trade": format!("{:.4}", avg_pnl),
+                                "total_pnl": format!("{:.2}", total_pnl),
+                            })
+                        }
+                        Err(_) => {
+                            tracing::warn!("📊 Daily report: portfolio lock timeout");
+                            continue;
+                        }
+                    };
+
+                    // Save to disk
+                    let report_dir = "logs/reports";
+                    let _ = std::fs::create_dir_all(report_dir);
+                    let date_str = chrono::Utc::now().format("%Y%m%d").to_string();
+                    let report_path = format!("{report_dir}/daily-{date_str}.json");
+                    if let Ok(json_str) = serde_json::to_string_pretty(&report) {
+                        let _ = std::fs::write(&report_path, &json_str);
+                        tracing::info!(path = %report_path, "📊 Daily report saved");
+                    }
+
+                    // Post to webhook if configured
+                    if let Some(ref url) = dr_webhook {
+                        match dr_client.post(url).json(&report).send().await {
+                            Ok(resp) if resp.status().is_success() => {
+                                tracing::info!("📊 Daily report webhook sent");
+                            }
+                            Ok(resp) => {
+                                tracing::warn!(status = %resp.status(), "📊 Daily report webhook non-2xx");
+                            }
+                            Err(e) => {
+                                tracing::warn!(err = %e, "📊 Daily report webhook failed");
+                            }
+                        }
+                    }
+                }
+            });
+            log_push(&activity, EntryKind::Engine, "Daily performance report enabled (UTC midnight)".to_string());
+            info!("📊 Daily performance report task started");
+        }
+    }
     loop {
         if shutdown.load(Ordering::Relaxed) { break; }
         tokio::time::sleep(Duration::from_millis(100)).await;

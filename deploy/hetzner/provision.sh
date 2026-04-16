@@ -97,9 +97,9 @@ WorkingDirectory=/opt/blink
 EnvironmentFile=/opt/blink/.env
 ExecStart=/opt/blink/engine
 Restart=always
-RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=5
+RestartSec=10
+StartLimitIntervalSec=600
+StartLimitBurst=10
 
 # Resource limits
 MemoryMax=1536M
@@ -182,8 +182,22 @@ cat > /etc/logrotate.d/blink << 'EOF'
     notifempty
     copytruncate
     create 0644 blink blink
+    maxsize 100M
+    dateext
 }
 EOF
+
+# Disk usage monitoring cron — alerts if /opt/blink exceeds 5GB
+cat > /etc/cron.daily/blink-disk-check << 'CRON'
+#!/bin/bash
+SIZE=$(du -sm /opt/blink/data /opt/blink/logs 2>/dev/null | awk '{s+=$1} END {print s}')
+if [ "$SIZE" -gt 5000 ]; then
+    echo "BLINK DISK WARNING: /opt/blink using ${SIZE}MB (>5GB)" | logger -t blink-disk
+    # Prune oldest session logs beyond 30
+    ls -t /opt/blink/logs/sessions/*.log 2>/dev/null | tail -n +31 | xargs -r rm -f
+fi
+CRON
+chmod +x /etc/cron.daily/blink-disk-check
 
 echo ""
 echo "══════════════════════════════════════════════"

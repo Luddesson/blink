@@ -344,6 +344,30 @@ class PredictionStore:
         cols = [d[0] for d in cursor.description]
         return dict(zip(cols, row))
 
+    async def get_category_stats(self) -> dict[str, dict]:
+        """Get per-category prediction statistics (for auto-tuner)."""
+        if not self._db:
+            return {}
+        cursor = await self._db.execute(
+            """SELECT
+                COALESCE(category, 'default') AS cat,
+                COUNT(*) AS total_count,
+                SUM(CASE WHEN resolved = 1 THEN 1 ELSE 0 END) AS resolved_count,
+                AVG(CASE WHEN resolved = 1 THEN brier_score END) AS brier_score,
+                AVG(CASE WHEN resolved = 1 THEN was_correct END) AS accuracy,
+                SUM(CASE WHEN resolved = 1 THEN pnl_usdc ELSE 0 END) AS total_pnl
+            FROM predictions
+            GROUP BY COALESCE(category, 'default')"""
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        result: dict[str, dict] = {}
+        for row in rows:
+            d = dict(zip(cols, row))
+            cat = d.pop("cat", "default")
+            result[cat] = d
+        return result
+
     async def count(self) -> int:
         """Total number of predictions stored."""
         if not self._db:

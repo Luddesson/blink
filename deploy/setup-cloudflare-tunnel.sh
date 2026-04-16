@@ -7,7 +7,7 @@
 set -euo pipefail
 
 ARCH=$(dpkg --print-architecture)  # arm64 on Oracle ARM
-TUNNEL_PORT="${1:-5173}"
+TUNNEL_PORT="${1:-3030}"
 
 echo "🌐 Setting up Cloudflare Tunnel for Blink Dashboard..."
 

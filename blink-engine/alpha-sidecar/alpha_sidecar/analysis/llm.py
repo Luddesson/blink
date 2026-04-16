@@ -199,6 +199,7 @@ async def analyse_market_v2(
     client: AsyncOpenAI,
     clob: OrderbookSnapshot | None = None,
     price_change_1h: float | None = None,
+    news_context: str | None = None,
 ) -> tuple[LLMSignal | None, ReasoningChain | None]:
     """Enhanced analysis with reasoning chain (v2).
 
@@ -212,7 +213,7 @@ async def analyse_market_v2(
         signal = await analyse_market(market, cfg, client, clob, price_change_1h)
         return signal, None
 
-    chain = await run_reasoning_chain(market, cfg, client, clob, price_change_1h)
+    chain = await run_reasoning_chain(market, cfg, client, clob, price_change_1h, news_context=news_context)
     if chain is None:
         return None, None
 

@@ -14,7 +14,7 @@ use crate::mev_router::MevRouter;
 use crate::order_book::OrderBookStore;
 use crate::order_executor::OrderExecutor;
 use crate::order_signer::{sign_order_with_vault_policy, OrderParams, OrderSigningPolicy};
-use crate::paper_portfolio::{DRIFT_THRESHOLD, PaperPortfolio, STARTING_BALANCE_USDC};
+use crate::paper_portfolio::{drift_threshold, PaperPortfolio, STARTING_BALANCE_USDC};
 use crate::risk_manager::{RiskConfig, RiskManager};
 use crate::truth_reconciler::{PendingOrder, process_order_status, ReconciliationOutcome};
 use crate::types::{OrderSide, RN1Signal, TimeInForce};
@@ -727,7 +727,7 @@ impl LiveEngine {
                         metrics.max_observed_drift_bps = drift_bps;
                     }
                 }
-                if drift > DRIFT_THRESHOLD {
+                if drift > drift_threshold() {
                     self.failsafe_metrics.lock().unwrap().trigger_count += 1;
                     warn!(
                         check,
@@ -813,6 +813,17 @@ impl LiveEngine {
             pending_after_cancel = pending,
             "🚨 EMERGENCY STOP complete — trading halted. See logs/EMERGENCY_STOP.flag"
         );
+    }
+
+    /// Graceful shutdown: log and persist state.
+    pub async fn graceful_shutdown(&self) {
+        info!("Live engine graceful shutdown initiated");
+        // Save portfolio state
+        let p = self.portfolio.lock().await;
+        let nav = p.nav();
+        let positions = p.positions.len();
+        drop(p);
+        info!(nav = %format!("{:.2}", nav), positions, "Live engine shutdown — final state");
     }
 }
 

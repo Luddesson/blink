@@ -23,7 +23,7 @@ use crate::clickhouse_logger::{ClosedTradeFull, EquitySnapshot, WarehouseEvent};
 use crate::exit_strategy::{ExitAction, ExitConfig, evaluate_exits};
 use crate::latency_tracker::LatencyStats;
 use crate::order_book::{OrderBook, OrderBookStore};
-use crate::paper_portfolio::{DRIFT_THRESHOLD, PaperPortfolio, STARTING_BALANCE_USDC, polymarket_taker_fee_with_rate};
+use crate::paper_portfolio::{drift_threshold, PaperPortfolio, STARTING_BALANCE_USDC, polymarket_taker_fee_with_rate};
 use crate::risk_manager::{RiskConfig, RiskManager};
 use crate::types::{OrderSide, RN1Signal, format_price};
 
@@ -102,6 +102,8 @@ pub struct PaperEngine {
     session_start_nav: Arc<std::sync::Mutex<Option<(f64, u32)>>>,
     /// Optional warehouse sender — emits equity snapshots and closed trades to ClickHouse.
     warehouse_tx: Option<crossbeam_channel::Sender<WarehouseEvent>>,
+    /// Tracks when the engine was started — used for warmup bypass on vol gate.
+    engine_started_at: Instant,
 }
 
 /// Snapshot of the currently active fill window, if any.
@@ -146,12 +148,15 @@ impl PartialOrd for PrioritySignal {
 struct VolatilityState {
     samples: VecDeque<f64>,
     max_samples: usize,
+    last_push: Instant,
 }
 
 #[derive(Debug, Clone)]
 struct CachedSignalMeta {
     market_title: Option<String>,
     market_outcome: Option<String>,
+    event_start_time: Option<i64>,
+    event_end_time: Option<i64>,
     cached_at: Instant,
 }
 
@@ -173,6 +178,7 @@ impl VolatilityState {
         Self {
             samples: VecDeque::with_capacity(max_samples),
             max_samples: max_samples.max(16),
+            last_push: Instant::now(),
         }
     }
 
@@ -181,6 +187,7 @@ impl VolatilityState {
             self.samples.pop_front();
         }
         self.samples.push_back(p);
+        self.last_push = Instant::now();
     }
 
     fn volatility_bps(&self) -> f64 {
@@ -200,7 +207,17 @@ impl VolatilityState {
             })
             .sum::<f64>()
             / self.samples.len() as f64;
-        (var.sqrt() / mean) * 10_000.0
+        let raw = (var.sqrt() / mean) * 10_000.0;
+
+        // Decay stale vol toward 0 — prevents permanent lockout when no fills feed data.
+        let stale_secs = self.last_push.elapsed().as_secs_f64();
+        let decay_start_secs = 300.0; // start decaying after 5 min of no data
+        if stale_secs > decay_start_secs {
+            let decay = 1.0 - ((stale_secs - decay_start_secs) / 600.0).min(1.0);
+            raw * decay.max(0.0)
+        } else {
+            raw
+        }
     }
 }
 
@@ -305,7 +322,7 @@ impl PaperEngine {
             println!("║         📄  BLINK PAPER TRADING MODE ACTIVE               ║");
             println!("║  Starting balance:  ${:<10.2}  (virtual USDC)           ║", STARTING_BALANCE_USDC);
             println!("║  Sizing:            2% of RN1 notional, max 10% of NAV   ║");
-            println!("║  Fill window:       3 s — aborts if price drifts >1.5%   ║");
+            println!("║  Fill window:       realism mode — aborts if drift >{}%  ║", (drift_threshold() * 100.0) as u32);
             println!("║  NO REAL ORDERS WILL BE PLACED                            ║");
             println!("╚════════════════════════════════════════════════════════════╝");
             println!();
@@ -348,6 +365,7 @@ impl PaperEngine {
             recent_fills: Arc::new(std::sync::Mutex::new(HashMap::new())),
             session_start_nav: Arc::new(std::sync::Mutex::new(None)),
             warehouse_tx,
+            engine_started_at: Instant::now(),
         }
     }
 
@@ -523,19 +541,27 @@ impl PaperEngine {
         }
 
         // 1B: Volatility gate — skip when the signal environment is too noisy.
+        //     Warmup bypass: first 5 minutes after startup, skip vol gate entirely
+        //     (the vol tracker needs data before it can make meaningful decisions).
         {
-            let vol_gate_threshold: f64 = std::env::var("VOL_GATE_THRESHOLD_BPS")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(800.0);
-            if vol_bps > vol_gate_threshold {
-                warn!(
-                    vol_bps, threshold = vol_gate_threshold,
-                    "⏭️  Signal gated — volatility too high"
-                );
-                let mut p = self.portfolio.lock().await;
-                p.skipped_orders += 1;
-                drop(p);
-                self.record_rejection("vol_gate").await;
-                return;
+            let warmup_secs: u64 = std::env::var("VOL_WARMUP_SECS")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(300);
+            let in_warmup = self.engine_started_at.elapsed() < Duration::from_secs(warmup_secs);
+
+            if !in_warmup {
+                let vol_gate_threshold: f64 = std::env::var("VOL_GATE_THRESHOLD_BPS")
+                    .ok().and_then(|v| v.parse().ok()).unwrap_or(3000.0);
+                if vol_bps > vol_gate_threshold {
+                    warn!(
+                        vol_bps, threshold = vol_gate_threshold,
+                        "⏭️  Signal gated — volatility too high"
+                    );
+                    let mut p = self.portfolio.lock().await;
+                    p.skipped_orders += 1;
+                    drop(p);
+                    self.record_rejection("vol_gate").await;
+                    return;
+                }
             }
         }
 
@@ -626,9 +652,13 @@ impl PaperEngine {
         }
 
         // ── Extreme price filter: skip very low or very high odds ──────────
-        // Data-driven: prices 0.10-0.70 have best E[V]; >0.70 has <53% WR.
-        // Alpha signals use slightly wider band (0.05-0.75) because the LLM already evaluated edge.
-        let (price_lo, price_hi) = if is_alpha { (0.05, 0.75) } else { (0.10, 0.70) };
+        // Configurable via EXTREME_PRICE_HI / EXTREME_PRICE_LO env vars.
+        let price_hi_default = if is_alpha { 0.90 } else { 0.85 };
+        let price_lo_default = if is_alpha { 0.05 } else { 0.10 };
+        let price_hi: f64 = std::env::var("EXTREME_PRICE_HI")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(price_hi_default);
+        let price_lo: f64 = std::env::var("EXTREME_PRICE_LO")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(price_lo_default);
         if entry_price < price_lo || entry_price > price_hi {
             let mut p = self.portfolio.lock().await;
             p.skipped_orders += 1;
@@ -1528,7 +1558,7 @@ impl PaperEngine {
                     elapsed,
                     countdown,
                 });
-                if drift > DRIFT_THRESHOLD {
+                if drift > drift_threshold() {
                     warn!(
                         check        = check,
                         entry_price  = %format!("{:.3}", entry_price),
@@ -1967,6 +1997,11 @@ impl PaperEngine {
             .collect();
         for (token_id, price) in updates {
             p.update_price(&token_id, price);
+            // Feed vol state from market ticks — prevents deadlock where vol state
+            // only gets data from fill_window_check (which requires passing vol gate).
+            if let Ok(mut vs) = self.volatility_state.try_lock() {
+                vs.push(price);
+            }
         }
         if should_push {
             p.push_equity_snapshot();
@@ -2049,6 +2084,8 @@ impl PaperEngine {
             CachedSignalMeta {
                 market_title: title.clone(),
                 market_outcome: outcome.clone(),
+                event_start_time: None,
+                event_end_time: None,
                 cached_at: Instant::now(),
             },
         );

@@ -26,7 +26,16 @@ pub const MIN_TRADE_USDC: f64 = 5.0; // $5 minimum (Phase 6: up from $2 — filt
 
 /// If price drifts more than this fraction from entry during the fill
 /// window, the order is aborted (simulates an in-play failsafe).
-pub const DRIFT_THRESHOLD: f64 = 0.015; // 1.5 %
+/// Configurable via `PAPER_DRIFT_THRESHOLD_PCT` env var (default 8.0 = 8%).
+/// Set higher when shadowing whales who move markets on entry.
+pub fn drift_threshold() -> f64 {
+    std::env::var("PAPER_DRIFT_THRESHOLD_PCT")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(8.0)
+        .clamp(0.5, 50.0)
+        / 100.0
+}
 
 /// Maximum number of NAV snapshots kept for the equity curve (10s sampling → ~28h).
 const EQUITY_CURVE_MAX: usize = 10_080;

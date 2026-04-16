@@ -1158,11 +1158,11 @@ async fn main() -> Result<()> {
     // ── Live mode: graceful shutdown with reconciliation + state persist ──
     if let Some(live) = live_for_shutdown.take() {
         info!("Running live engine graceful shutdown (reconcile + cancel + persist)…");
-        let shutdown_timeout = tokio::time::timeout(
+        let shutdown_result = tokio::time::timeout(
             Duration::from_secs(30),
             live.graceful_shutdown(),
         ).await;
-        if shutdown_timeout.is_err() {
+        if shutdown_result.is_err() {
             tracing::warn!("Live engine graceful shutdown timed out after 30s");
         }
     }

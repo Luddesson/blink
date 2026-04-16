@@ -1,0 +1,12 @@
+# Shared SSH config for Blink Hetzner.
+# Included by each machine's ~/.ssh/config via:
+#   Include <repo>/deploy/ssh/blink-ssh-config
+# Edit here (in the repo), not in ~/.ssh/config.
+
+Host blink
+  HostName 5.161.100.38
+  User root
+  IdentityFile ~/.ssh/blink_hetzner
+  IdentitiesOnly yes
+  ServerAliveInterval 30
+  ServerAliveCountMax 3

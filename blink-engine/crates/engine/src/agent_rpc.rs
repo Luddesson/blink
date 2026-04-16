@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::alpha_signal::{AlphaAnalytics, AlphaCycleReport, AlphaRiskConfig, AlphaSignal, AlphaSignalRecord};
 use crate::paper_engine::PaperEngine;
 
 #[derive(Clone)]
@@ -32,6 +33,12 @@ pub struct AgentRpcState {
     pub bullpen: Option<Arc<crate::bullpen_bridge::BullpenBridge>>,
     pub discovery_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_discovery::DiscoveryStore>>>,
     pub convergence_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_smart_money::ConvergenceStore>>>,
+    /// Channel for submitting AI-generated alpha signals into the engine.
+    pub alpha_signal_tx: Option<tokio::sync::mpsc::Sender<AlphaSignal>>,
+    /// Alpha trading analytics (accept/reject counts, P&L attribution).
+    pub alpha_analytics: Option<Arc<Mutex<AlphaAnalytics>>>,
+    /// Alpha-specific risk configuration.
+    pub alpha_risk_config: Option<AlphaRiskConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -145,6 +152,10 @@ async fn handle_rpc(req: RpcRequest, state: &AgentRpcState) -> std::result::Resu
         "bullpen_convergence" => bullpen_convergence(state).await,
         "bullpen_discover" => bullpen_discover(req.params, state).await,
         "bullpen_smart_money" => bullpen_smart_money_rpc(req.params, state).await,
+        "submit_alpha_signal" => submit_alpha_signal(req.params, state).await,
+        "report_alpha_cycle" => report_alpha_cycle(req.params, state).await,
+        "report_alpha_calibration" => report_alpha_calibration(req.params, state).await,
+        "alpha_status" => alpha_status(state).await,
         _ => Err(RpcError { code: -32601, message: "Method not found".to_string() }),
     }
 }
@@ -340,4 +351,155 @@ async fn bullpen_smart_money_rpc(params: Value, state: &AgentRpcState) -> std::r
             message: format!("Smart money failed: {e}"),
         }),
     }
+}
+
+// ── Alpha Signal RPC methods ────────────────────────────────────────────────
+
+async fn submit_alpha_signal(params: Value, state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    let tx = state.alpha_signal_tx.as_ref().ok_or(RpcError {
+        code: -32000,
+        message: "Alpha pipeline not enabled (set ALPHA_ENABLED=true)".into(),
+    })?;
+    let analytics = state.alpha_analytics.as_ref().ok_or(RpcError {
+        code: -32000,
+        message: "Alpha analytics not available".into(),
+    })?;
+    let risk_cfg = state.alpha_risk_config.as_ref().ok_or(RpcError {
+        code: -32000,
+        message: "Alpha risk config not loaded".into(),
+    })?;
+
+    // Deserialize the incoming signal.
+    let mut signal: AlphaSignal = serde_json::from_value(params).map_err(|e| RpcError {
+        code: -32602,
+        message: format!("Invalid alpha signal: {e}"),
+    })?;
+    signal.received_at = Some(std::time::Instant::now());
+
+    // Build the signal record for history tracking
+    let record = AlphaSignalRecord {
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        analysis_id: signal.analysis_id.clone(),
+        token_id: signal.token_id.clone(),
+        market_question: signal.market_question.clone(),
+        side: format!("{:?}", signal.side),
+        confidence: signal.confidence,
+        reasoning: signal.reasoning.clone(),
+        recommended_price: signal.recommended_price,
+        recommended_size_usdc: signal.recommended_size_usdc,
+        status: String::new(), // set below
+        position_id: None,
+        realized_pnl: None,
+        unrealized_pnl: None,
+        entry_price: None,
+        current_price: None,
+    };
+
+    // ── Pre-submission validation ──
+    if !risk_cfg.enabled {
+        let mut rec = record;
+        rec.status = "rejected:alpha_disabled".to_string();
+        let mut a = analytics.lock().unwrap();
+        a.record_reject("alpha_disabled");
+        a.record_signal(rec);
+        return Ok(json!({ "accepted": false, "reason": "Alpha trading disabled" }));
+    }
+
+    if signal.confidence < risk_cfg.confidence_floor {
+        let mut rec = record;
+        rec.status = format!("rejected:low_confidence({:.2})", signal.confidence);
+        let mut a = analytics.lock().unwrap();
+        a.record_reject("low_confidence");
+        a.record_signal(rec);
+        return Ok(json!({
+            "accepted": false,
+            "reason": format!("Confidence {:.2} below floor {:.2}", signal.confidence, risk_cfg.confidence_floor)
+        }));
+    }
+
+    if signal.recommended_size_usdc > risk_cfg.max_single_order_usdc {
+        // Clamp rather than reject — the engine decides final sizing.
+        signal.recommended_size_usdc = risk_cfg.max_single_order_usdc;
+    }
+
+    let analysis_id = signal.analysis_id.clone();
+
+    // Enqueue the signal for the engine to process.
+    match tx.try_send(signal) {
+        Ok(()) => {
+            let mut rec = record;
+            rec.status = "accepted".to_string();
+            let mut a = analytics.lock().unwrap();
+            a.record_accept();
+            a.record_signal(rec);
+            tracing::info!(analysis_id = %analysis_id, "Alpha signal accepted");
+            Ok(json!({ "accepted": true, "analysis_id": analysis_id }))
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            let mut rec = record;
+            rec.status = "rejected:queue_full".to_string();
+            let mut a = analytics.lock().unwrap();
+            a.record_reject("queue_full");
+            a.record_signal(rec);
+            Ok(json!({ "accepted": false, "reason": "Signal queue full" }))
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            let mut rec = record;
+            rec.status = "rejected:engine_shutdown".to_string();
+            let mut a = analytics.lock().unwrap();
+            a.record_reject("engine_shutdown");
+            a.record_signal(rec);
+            Err(RpcError { code: -32000, message: "Engine shutting down".into() })
+        }
+    }
+}
+
+async fn report_alpha_cycle(params: Value, state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    let analytics = state.alpha_analytics.as_ref().ok_or(RpcError {
+        code: -32000,
+        message: "Alpha analytics not available".into(),
+    })?;
+
+    let report: AlphaCycleReport = serde_json::from_value(params).map_err(|e| RpcError {
+        code: -32602,
+        message: format!("Invalid cycle report: {e}"),
+    })?;
+
+    let n_markets = report.top_markets.len();
+    analytics.lock().unwrap().record_cycle(report);
+    tracing::info!(markets = n_markets, "Alpha cycle report received");
+
+    Ok(json!({ "ok": true }))
+}
+
+async fn alpha_status(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    let analytics = state.alpha_analytics.as_ref().ok_or(RpcError {
+        code: -32000,
+        message: "Alpha pipeline not enabled".into(),
+    })?;
+    let a = analytics.lock().unwrap();
+    Ok(json!({
+        "enabled": state.alpha_risk_config.as_ref().map(|c| c.enabled).unwrap_or(false),
+        "signals_received": a.signals_received,
+        "signals_accepted": a.signals_accepted,
+        "signals_rejected": a.signals_rejected,
+        "reject_reasons": a.reject_reasons,
+        "realized_pnl_usdc": a.realized_pnl_usdc,
+        "unrealized_pnl_usdc": a.unrealized_pnl_usdc,
+        "positions_opened": a.positions_opened,
+        "positions_closed": a.positions_closed,
+    }))
+}
+
+async fn report_alpha_calibration(params: Value, state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    let analytics = state.alpha_analytics.as_ref().ok_or(RpcError {
+        code: -32000,
+        message: "Alpha analytics not available".into(),
+    })?;
+
+    // Store the calibration data as-is (JSON blob from Python sidecar)
+    analytics.lock().unwrap().calibration = Some(params);
+    tracing::info!("Alpha calibration report received");
+
+    Ok(json!({ "ok": true }))
 }

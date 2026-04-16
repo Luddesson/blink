@@ -3,12 +3,14 @@
 //! Modes controlled by `.env` variables:
 //! - Default (read-only): connect, maintain order books, log RN1 activity.
 //! - `PAPER_TRADING=true`: simulate mirror orders with virtual $100 USDC.
-//! - `TUI=true`: full ratatui terminal dashboard for paper or live mode.
+//! - Web UI is the active dashboard. The legacy ratatui TUI is archived and no
+//!   longer launched, even if `TUI=true` is present in the environment.
 //!   Tracing is always persisted to `logs/engine.log` + per-session log files.
 
 use std::sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc, Mutex};
 use std::time::Duration;
 use std::io::{BufRead, BufReader, Write};
+use futures_util::FutureExt as _; // .catch_unwind() on futures
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -30,6 +32,7 @@ use engine::tick_recorder::{TickRecord, TickRecorder};
 use engine::tui_app::run_tui;
 use engine::blink_twin::TwinSnapshot;
 use engine::types::RN1Signal;
+use engine::r2_uploader;
 use engine::web_server::{AppState, run_web_server};
 use engine::ws_client::run_ws;
 use engine::rn1_poller::{run_rn1_poller, Rn1PollDiagnostics, Rn1PollDiagnosticsHandle};
@@ -52,7 +55,7 @@ async fn main() -> Result<()> {
     // ── Panic hook — save portfolio state before dying ───────────────────
     {
         let state_path = std::env::var("PAPER_STATE_PATH")
-            .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());
+            .unwrap_or_else(|_| "logs/paper_portfolio_state.json".to_string());
         let original = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             eprintln!("BLINK ENGINE PANIC: {info}");
@@ -66,6 +69,18 @@ async fn main() -> Result<()> {
     }
 
     let args: Vec<String> = std::env::args().collect();
+
+    // ── Wallet/keystore CLI commands (no .env needed) ─────────────────────
+    if args.iter().any(|a| a == "--generate-wallet") {
+        return run_generate_wallet(&args);
+    }
+    if args.iter().any(|a| a == "--encrypt-key") {
+        return run_encrypt_key(&args);
+    }
+    if args.iter().any(|a| a == "--decrypt-key") {
+        return run_decrypt_key(&args);
+    }
+
     if let Some(pos) = args.iter().position(|a| a == "--backtest") {
         let csv_path = args
             .get(pos + 1)
@@ -82,7 +97,10 @@ async fn main() -> Result<()> {
     // ── Feature flags ────────────────────────────────────────────────────
     let paper_mode = env_flag("PAPER_TRADING");
     let live_mode  = env_flag("LIVE_TRADING");
-    let tui_mode   = (paper_mode || live_mode) && env_flag("TUI");
+    let tui_requested = (paper_mode || live_mode) && env_flag("TUI");
+    let web_ui_requested = env_flag("WEB_UI");
+    let web_ui_enabled = web_ui_requested || paper_mode || live_mode || tui_requested;
+    let tui_mode = false;
 
     if live_mode && paper_mode {
         eprintln!("Error: Cannot enable both PAPER_TRADING and LIVE_TRADING. Pick one.");
@@ -91,15 +109,15 @@ async fn main() -> Result<()> {
     
     // ── Tracing: ALWAYS persist logs to disk + per-session file ───────────
     std::fs::create_dir_all("logs").ok();
-    std::fs::create_dir_all("logs\\sessions").ok();
+    std::fs::create_dir_all("logs/sessions").ok();
 
     let session_stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let session_filename = format!("engine-session-{session_stamp}.log");
-    let session_log_path = format!("logs\\sessions\\{session_filename}");
-    let _ = std::fs::write("logs\\LATEST_SESSION_LOG.txt", format!("{session_log_path}\n"));
+    let session_log_path = format!("logs/sessions/{session_filename}");
+    let _ = std::fs::write("logs/LATEST_SESSION_LOG.txt", format!("{session_log_path}\n"));
 
     let engine_file_appender = tracing_appender::rolling::daily("logs", "engine.log");
-    let session_file_appender = tracing_appender::rolling::never("logs\\sessions", &session_filename);
+    let session_file_appender = tracing_appender::rolling::never("logs/sessions", &session_filename);
     let (engine_writer, engine_guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
         .lossy(false)
         .finish(engine_file_appender);
@@ -170,8 +188,22 @@ async fn main() -> Result<()> {
     let rn1_diagnostics: Rn1PollDiagnosticsHandle = Arc::new(Mutex::new(Rn1PollDiagnostics::default()));
 
     log_push(&activity, EntryKind::Engine,
-        format!("Engine started — PAPER={paper_mode} TUI={tui_mode} RN1={}...", &rn1_wallet[..10]));
+        format!("Engine started — PAPER={paper_mode} TUI={tui_mode} RN1={}...", &rn1_wallet[..rn1_wallet.len().min(10)]));
     log_push(&activity, EntryKind::Engine, format!("Session log: {session_log_path}"));
+    if tui_requested {
+        log_push(
+            &activity,
+            EntryKind::Warn,
+            "TUI request redirected: ratatui dashboard is archived; using the web UI instead".to_string(),
+        );
+    }
+    if web_ui_enabled && !web_ui_requested {
+        log_push(
+            &activity,
+            EntryKind::Engine,
+            "Web UI auto-enabled for paper/live mode".to_string(),
+        );
+    }
 
     // ── eBPF kernel telemetry ───────────────────────────────────────────────
     let kernel_snapshot: Option<Arc<Mutex<bpf_probes::KernelSnapshot>>> =
@@ -199,8 +231,8 @@ async fn main() -> Result<()> {
 
     // ── ClickHouse tick recorder (optional — activated by CLICKHOUSE_URL) ─
     let tick_tx: Option<crossbeam_channel::Sender<TickRecord>> =
-        match std::env::var("CLICKHOUSE_URL") {
-            Ok(url) => {
+        match std::env::var("CLICKHOUSE_URL").ok().filter(|s| !s.is_empty()) {
+            Some(url) => {
                 let (tx, rx) = crossbeam_channel::bounded::<TickRecord>(10_000);
                 let recorder = TickRecorder::new(&url);
                 let act = activity.clone();
@@ -216,16 +248,16 @@ async fn main() -> Result<()> {
                 info!("ClickHouse tick recording enabled");
                 Some(tx)
             }
-            Err(_) => {
+            None => {
                 info!("CLICKHOUSE_URL not set — tick recording disabled");
                 None
             }
         };
 
     // ── ClickHouse data warehouse (optional — activated by CLICKHOUSE_URL) ─
-    let _warehouse_tx: Option<crossbeam_channel::Sender<WarehouseEvent>> =
-        match std::env::var("CLICKHOUSE_URL") {
-            Ok(ref url) => {
+    let warehouse_tx: Option<crossbeam_channel::Sender<WarehouseEvent>> =
+        match std::env::var("CLICKHOUSE_URL").ok().filter(|s| !s.is_empty()) {
+            Some(ref url) => {
                 let (tx, rx) = crossbeam_channel::bounded::<WarehouseEvent>(10_000);
                 let logger = ClickHouseLogger::new(url);
                 let act = activity.clone();
@@ -242,11 +274,14 @@ async fn main() -> Result<()> {
                 info!("ClickHouse data warehouse enabled");
                 Some(tx)
             }
-            Err(_) => {
+            None => {
                 info!("CLICKHOUSE_URL not set — data warehouse disabled");
                 None
             }
         };
+
+    // ── Cloudflare R2 uploader (optional — activated by R2_ACCESS_KEY_ID) ───
+    r2_uploader::start_r2_uploader();
 
     // ── Gas oracle (optional — activated by ETHERSCAN_API_KEY) ────────────
     let _gas_oracle = {
@@ -254,8 +289,30 @@ async fn main() -> Result<()> {
         Arc::new(GasOracle::new(api_key))
     };
 
-    // ── Channel ───────────────────────────────────────────────────────────
-    let (signal_tx, signal_rx) = crossbeam_channel::bounded::<RN1Signal>(1024);
+    // ── Channels ──────────────────────────────────────────────────────────
+    let (signal_tx, signal_rx) = tokio::sync::mpsc::channel::<RN1Signal>(1024);
+
+    // Alpha signal channel (AI sidecar → engine). Only allocated when enabled.
+    let alpha_enabled = config.alpha_enabled;
+    let (alpha_signal_tx, alpha_signal_rx) = if alpha_enabled {
+        let (tx, rx) = tokio::sync::mpsc::channel::<engine::alpha_signal::AlphaSignal>(256);
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+    let alpha_analytics = if alpha_enabled {
+        Some(Arc::new(Mutex::new(engine::alpha_signal::AlphaAnalytics::default())))
+    } else {
+        None
+    };
+    let alpha_risk_config = if alpha_enabled {
+        Some(engine::alpha_signal::AlphaRiskConfig::from_env())
+    } else {
+        None
+    };
+    if alpha_enabled {
+        info!(sidecar_url = %config.alpha_sidecar_url, "Alpha pipeline enabled");
+    }
 
     // ── Task: Ctrl-C sets shutdown flag ───────────────────────────────────
     {
@@ -287,15 +344,45 @@ async fn main() -> Result<()> {
     };
 
     // ── Task: RN1 trade poller (REST-based detection) ────────────────────
+    // Primary wallet from RN1_WALLET; additional wallets from TRACK_WALLETS=addr:weight,...
     let rn1_task = {
-        let cfg = Arc::clone(&config);
-        let tx  = signal_tx.clone();
-        let act = Some(activity.clone());
-        let diag = Arc::clone(&rn1_diagnostics);
-        tokio::spawn(async move {
-            run_rn1_poller(cfg, tx, act, diag).await;
-        })
+        // Build the list of wallets to track: primary first, then any extras.
+        let primary_wallet = config.rn1_wallet.clone();
+        let mut wallet_list: Vec<(String, f64)> = vec![(primary_wallet, 1.0)];
+        if let Ok(extra) = std::env::var("TRACK_WALLETS") {
+            for entry in extra.split(',') {
+                let entry = entry.trim();
+                if entry.is_empty() { continue; }
+                let (addr, weight) = if let Some(pos) = entry.rfind(':') {
+                    let w = entry[pos+1..].parse::<f64>().unwrap_or(0.8).clamp(0.0, 2.0);
+                    (entry[..pos].to_string(), w)
+                } else {
+                    (entry.to_string(), 0.8)
+                };
+                if !addr.is_empty() { wallet_list.push((addr, weight)); }
+            }
+        }
+        if wallet_list.len() > 1 {
+            tracing::info!(
+                n = wallet_list.len(),
+                wallets = ?wallet_list.iter().map(|(w, _)| &w[..w.len().min(10)]).collect::<Vec<_>>(),
+                "1A: Multi-wallet tracking enabled"
+            );
+        }
+        // Spawn one poller task per wallet; share a single diagnostics handle for the primary.
+        let _tasks: Vec<_> = wallet_list.into_iter().map(|(wallet, weight)| {
+            let cfg  = Arc::clone(&config);
+            let tx   = signal_tx.clone();
+            let act  = Some(activity.clone());
+            let diag = Arc::clone(&rn1_diagnostics);
+            tokio::spawn(async move {
+                run_rn1_poller(cfg, wallet, weight, tx, act, diag).await;
+            })
+        }).collect();
+        // Return the first task handle for join tracking (primary wallet).
+        _tasks.into_iter().next()
     };
+    let rn1_task = rn1_task.unwrap_or_else(|| tokio::spawn(async {}));
 
     // ── Optional Agent JSON-RPC server (for orchestrator/agents) ─────────
 
@@ -367,6 +454,7 @@ async fn main() -> Result<()> {
     let mut tui_thread: Option<std::thread::JoinHandle<()>> = None;
     let mut paper_for_persist: Option<Arc<PaperEngine>> = None;
     let mut live_for_web: Option<Arc<engine::live_engine::LiveEngine>> = None;
+    let mut live_for_shutdown: Option<Arc<engine::live_engine::LiveEngine>> = None;
     
     let twin_enabled = env_flag("BLINK_TWIN");
     let twin_engine = if twin_enabled {
@@ -381,6 +469,7 @@ async fn main() -> Result<()> {
             Some(activity.clone()),
             Arc::clone(&market_subscriptions),
             Arc::clone(&ws_force_reconnect),
+            warehouse_tx.clone(),
         );
         paper_inner.discovery_store = Some(Arc::clone(&discovery_store));
         paper_inner.convergence_store = convergence_store.clone();
@@ -388,11 +477,11 @@ async fn main() -> Result<()> {
         paper_for_persist = Some(Arc::clone(&paper));
 
         let paper_state_path = std::env::var("PAPER_STATE_PATH")
-            .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());
+            .unwrap_or_else(|_| "logs/paper_portfolio_state.json".to_string());
         let warm_state_path = std::env::var("PAPER_WARM_STATE_PATH")
-            .unwrap_or_else(|_| "logs\\paper_warm_state.json".to_string());
+            .unwrap_or_else(|_| "logs/paper_warm_state.json".to_string());
         let rejection_state_path = std::env::var("PAPER_REJECTIONS_PATH")
-            .unwrap_or_else(|_| "logs\\paper_rejections.json".to_string());
+            .unwrap_or_else(|_| "logs/paper_rejections.json".to_string());
         let reset_paper_state = std::env::var("PAPER_RESET_STATE_ON_START")
             .ok()
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
@@ -564,7 +653,7 @@ async fn main() -> Result<()> {
                     eprintln!("TUI error: {e}");
                 }
             }));
-        } else {
+        } else if !web_ui_enabled {
             let pd = Arc::clone(&paper);
             tokio::spawn(async move {
                 loop {
@@ -599,12 +688,32 @@ async fn main() -> Result<()> {
             let pd = Arc::clone(&paper);
             let sd_mt = Arc::clone(&shutdown);
             tokio::spawn(async move {
+                tracing::info!("tick_mark_prices task STARTED");
+                let mut consecutive_ok: u64 = 0;
                 loop {
                     if sd_mt.load(Ordering::Relaxed) {
+                        tracing::info!("tick_mark_prices task exiting (shutdown)");
                         break;
                     }
                     tokio::time::sleep(Duration::from_secs(1)).await;
-                    pd.tick_mark_prices().await;
+                    let result = std::panic::AssertUnwindSafe(pd.tick_mark_prices())
+                        .catch_unwind()
+                        .await;
+                    match result {
+                        Ok(()) => {
+                            consecutive_ok += 1;
+                            if consecutive_ok == 1 || consecutive_ok % 30 == 0 {
+                                tracing::info!(tick = consecutive_ok, "tick_mark_prices heartbeat");
+                            }
+                        }
+                        Err(e) => {
+                            let msg = e.downcast_ref::<String>()
+                                .map(|s| s.as_str())
+                                .or_else(|| e.downcast_ref::<&str>().copied())
+                                .unwrap_or("unknown panic");
+                            tracing::error!(err = msg, "tick_mark_prices PANICKED — recovering");
+                        }
+                    }
                 }
             });
         }
@@ -622,18 +731,21 @@ async fn main() -> Result<()> {
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(10);
             let psp = std::env::var("PAPER_STATE_PATH")
-                .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());
+                .unwrap_or_else(|_| "logs/paper_portfolio_state.json".to_string());
             let wsp = std::env::var("PAPER_WARM_STATE_PATH")
-                .unwrap_or_else(|_| "logs\\paper_warm_state.json".to_string());
+                .unwrap_or_else(|_| "logs/paper_warm_state.json".to_string());
             let rsp = std::env::var("PAPER_REJECTIONS_PATH")
-                .unwrap_or_else(|_| "logs\\paper_rejections.json".to_string());
+                .unwrap_or_else(|_| "logs/paper_rejections.json".to_string());
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_secs(save_interval_secs)).await;
                     if sd_save.load(Ordering::Relaxed) {
                         break;
                     }
-                    let _ = ps.save_portfolio(&psp).await;
+                    match ps.save_portfolio(&psp).await {
+                        Ok(()) => tracing::info!("autosave: portfolio saved"),
+                        Err(e) => tracing::error!(err = %e, "autosave: save_portfolio FAILED"),
+                    }
                     let subs = subs_save.lock().unwrap().clone();
                     let _ = ps.save_warm_state(&wsp, &subs, &psp).await;
                     let _ = ps.save_rejections(&rsp).await;
@@ -645,10 +757,10 @@ async fn main() -> Result<()> {
         let twin_opt = twin_engine.clone();
         let subs_for_signals = Arc::clone(&market_subscriptions);
         let ws_reconnect_for_signals = Arc::clone(&ws_force_reconnect);
+        let mut signal_rx = signal_rx;
+        let handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all().build().expect("paper rt");
-            for signal in &signal_rx {
+            while let Some(signal) = handle.block_on(signal_rx.recv()) {
                 latency.lock().unwrap().record(signal.detected_at.elapsed());
                 if tp.load(Ordering::Relaxed) { continue; }
                 {
@@ -661,13 +773,13 @@ async fn main() -> Result<()> {
                 let p = Arc::clone(&paper);
                 let t_opt = twin_opt.clone();
                 let sig = signal.clone();
-                rt.block_on(async move {
-                    if let Some(twin) = t_opt {
+                if let Some(twin) = t_opt {
+                    handle.block_on(async {
                         tokio::join!(p.handle_signal(sig.clone()), twin.handle_signal(sig));
-                    } else {
-                        p.handle_signal(sig).await;
-                    }
-                });
+                    });
+                } else {
+                    handle.block_on(p.handle_signal(sig));
+                }
             }
         })
     } else if live_mode {
@@ -677,12 +789,14 @@ async fn main() -> Result<()> {
             Some(activity.clone()),
         )?);
         live_for_web = Some(Arc::clone(&live));
+        live_for_shutdown = Some(Arc::clone(&live));
         Arc::clone(&live).spawn_reconciliation_worker();
 
-        // Spawn heartbeat — keeps the Polymarket session alive every 29s.
+        // Spawn heartbeat — keeps the Polymarket session alive every 8s.
         {
             let hb_executor = live.executor.clone();
-            let hb_metrics = engine::heartbeat::spawn_heartbeat_worker(hb_executor, None);
+            let hb_risk = Arc::clone(&live.risk);
+            let hb_metrics = engine::heartbeat::spawn_heartbeat_worker(hb_executor, None, Some(hb_risk));
             let l = Arc::clone(&live);
             tokio::spawn(async move {
                 let mut t = tokio::time::interval(Duration::from_secs(30));
@@ -727,6 +841,26 @@ async fn main() -> Result<()> {
                         heartbeat_fail = fs.heartbeat_fail_count,
                         "Live SLO heartbeat"
                     );
+                }
+            });
+        }
+        // ── Daily risk reset (UTC midnight) ───────────────────────────────
+        {
+            let risk_for_reset = Arc::clone(&live.risk);
+            let sd = Arc::clone(&shutdown);
+            tokio::spawn(async move {
+                loop {
+                    // Sleep until next UTC midnight.
+                    let now = chrono::Utc::now();
+                    let tomorrow = (now + chrono::Duration::days(1)).date_naive().and_hms_opt(0, 0, 0).unwrap();
+                    let until_midnight = chrono::NaiveDateTime::signed_duration_since(tomorrow, now.naive_utc());
+                    let secs = until_midnight.num_seconds().max(1) as u64;
+                    tracing::info!(secs_until_reset = secs, "Daily risk reset scheduled");
+                    tokio::time::sleep(Duration::from_secs(secs)).await;
+
+                    if sd.load(Ordering::Relaxed) { break; }
+                    risk_for_reset.lock().unwrap().reset_daily();
+                    tracing::info!("🔄 Daily risk counters reset (UTC midnight)");
                 }
             });
         }
@@ -821,33 +955,105 @@ async fn main() -> Result<()> {
 
         let tp = Arc::clone(&trading_paused);
         let twin_opt = twin_engine.clone();
+        let mut signal_rx = signal_rx;
+        let handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all().build().expect("live rt");
-            for signal in &signal_rx {
+            while let Some(signal) = handle.block_on(signal_rx.recv()) {
                 latency.lock().unwrap().record(signal.detected_at.elapsed());
                 if tp.load(Ordering::Relaxed) { continue; }
                 let l = Arc::clone(&live);
                 let t_opt = twin_opt.clone();
                 let sig = signal.clone();
-                rt.block_on(async move {
-                    if let Some(twin) = t_opt {
+                if let Some(twin) = t_opt {
+                    handle.block_on(async {
                         tokio::join!(l.handle_signal(sig.clone()), twin.handle_signal(sig));
-                    } else {
-                        l.handle_signal(sig).await;
-                    }
-                });
+                    });
+                } else {
+                    handle.block_on(l.handle_signal(sig));
+                }
             }
         })
     } else {
         // Read-only mode
-        tokio::task::spawn_blocking(move || {
-            for signal in &signal_rx {
+        let mut signal_rx = signal_rx;
+        tokio::spawn(async move {
+            while let Some(signal) = signal_rx.recv().await {
                 latency.lock().unwrap().record(signal.detected_at.elapsed());
                 tracing::warn!(token_id = %signal.token_id, "RN1 signal — read-only");
             }
         })
     };
+
+    // ── Alpha signal consumer (AI sidecar → PaperEngine) ────────────────
+    if let Some(mut alpha_rx) = alpha_signal_rx {
+        let alpha_paper = paper_for_persist.as_ref().map(Arc::clone);
+        let alpha_act = activity.clone();
+        let alpha_analytics_ref = alpha_analytics.clone();
+        let alpha_handle = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            while let Some(signal) = alpha_handle.block_on(alpha_rx.recv()) {
+                let source_label = format!("AI/{}", signal.analysis_id);
+                let analysis_id_clone = signal.analysis_id.clone();
+                if let Some(ref paper) = alpha_paper {
+                    // Snapshot filled_orders BEFORE handle_signal to detect actual opens
+                    let filled_before = alpha_handle.block_on(async {
+                        let p = paper.portfolio.lock().await;
+                        p.filled_orders
+                    });
+
+                    let rn1_compat = RN1Signal {
+                        token_id: signal.token_id.clone(),
+                        market_title: Some(if signal.market_question.is_empty() {
+                            format!("[ALPHA] {}", signal.analysis_id)
+                        } else {
+                            signal.market_question.clone()
+                        }),
+                        market_outcome: None,
+                        side: signal.side,
+                        price: (signal.recommended_price * 1000.0) as u64,
+                        size: (signal.recommended_size_usdc * 1000.0) as u64,
+                        order_id: format!("alpha-{}", signal.analysis_id),
+                        detected_at: signal.received_at.unwrap_or_else(std::time::Instant::now),
+                        event_start_time: None,
+                        event_end_time: None,
+                        source_wallet: "alpha-sidecar".to_string(),
+                        wallet_weight: 1.0,
+                        signal_source: "alpha".to_string(),
+                        analysis_id: Some(signal.analysis_id.clone()),
+                    };
+
+                    alpha_handle.block_on(paper.handle_signal(rn1_compat));
+
+                    // Check if a position was actually opened
+                    if let Some(ref analytics) = alpha_analytics_ref {
+                        let (filled_after, pos_info) = alpha_handle.block_on(async {
+                            let p = paper.portfolio.lock().await;
+                            let info = p.positions.iter()
+                                .find(|pos| pos.analysis_id.as_deref() == Some(&analysis_id_clone))
+                                .map(|pos| (pos.id, pos.entry_price));
+                            (p.filled_orders, info)
+                        });
+
+                        if filled_after > filled_before {
+                            if let Ok(mut a) = analytics.lock() {
+                                if let Some((pos_id, entry_price)) = pos_info {
+                                    a.mark_signal_opened(&analysis_id_clone, pos_id, entry_price);
+                                }
+                            }
+                        } else {
+                            if let Ok(mut a) = analytics.lock() {
+                                a.mark_signal_engine_rejected(&analysis_id_clone);
+                            }
+                        }
+                    }
+                }
+                log_push(&alpha_act, engine::activity_log::EntryKind::Signal,
+                    format!("Alpha signal processed: {source_label}"));
+            }
+        });
+        log_push(&activity, EntryKind::Engine, "Alpha signal consumer started".to_string());
+        info!("Alpha signal consumer task spawned");
+    }
 
     if rpc_enabled {
         let state = AgentRpcState {
@@ -861,6 +1067,9 @@ async fn main() -> Result<()> {
             bullpen: _bullpen.clone(),
             discovery_store: Some(Arc::clone(&discovery_store)),
             convergence_store: convergence_store.clone(),
+            alpha_signal_tx: alpha_signal_tx.clone(),
+            alpha_analytics: alpha_analytics.clone(),
+            alpha_risk_config: alpha_risk_config.clone(),
         };
         let bind = rpc_bind_addr.clone();
         let act = activity.clone();
@@ -876,8 +1085,7 @@ async fn main() -> Result<()> {
         info!("AGENT_RPC_ENABLED not set — agent RPC server disabled");
     }
 
-    // ── Optional Web UI server (WEB_UI=true) ─────────────────────────────
-    let web_ui_enabled = env_flag("WEB_UI");
+    // ── Optional Web UI server (auto-enabled for paper/live mode) ────────
     if web_ui_enabled {
         let web_ui_port = std::env::var("WEB_UI_PORT")
             .ok()
@@ -907,9 +1115,19 @@ async fn main() -> Result<()> {
             bullpen: _bullpen.clone(),
             discovery_store: Some(Arc::clone(&discovery_store)),
             convergence_store: convergence_store.clone(),
+            slug_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            portfolio_cache: Arc::new(std::sync::RwLock::new(None)),
+            clickhouse_url: std::env::var("CLICKHOUSE_URL").ok().filter(|s| !s.is_empty()),
+            snapshot_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            portfolio_cached_at_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            alpha_analytics: alpha_analytics.clone(),
         };
 
         let static_dir = std::env::var("WEB_UI_STATIC_DIR").ok()
+            .or_else(|| {
+                let candidate = "static/ui".to_string();
+                if std::path::Path::new(&candidate).exists() { Some(candidate) } else { None }
+            })
             .or_else(|| {
                 let candidate = "web-ui/dist".to_string();
                 if std::path::Path::new(&candidate).exists() { Some(candidate) } else { None }
@@ -936,9 +1154,22 @@ async fn main() -> Result<()> {
     drop(signal_tx);
     signal_task.abort();
     let _ = tokio::time::timeout(Duration::from_secs(2), signal_task).await;
+
+    // ── Live mode: graceful shutdown with reconciliation + state persist ──
+    if let Some(live) = live_for_shutdown.take() {
+        info!("Running live engine graceful shutdown (reconcile + cancel + persist)…");
+        let shutdown_timeout = tokio::time::timeout(
+            Duration::from_secs(30),
+            live.graceful_shutdown(),
+        ).await;
+        if shutdown_timeout.is_err() {
+            tracing::warn!("Live engine graceful shutdown timed out after 30s");
+        }
+    }
+
     if paper_mode {
         let paper_state_path = std::env::var("PAPER_STATE_PATH")
-            .unwrap_or_else(|_| "logs\\paper_portfolio_state.json".to_string());
+            .unwrap_or_else(|_| "logs/paper_portfolio_state.json".to_string());
         if let Some(paper) = paper_for_persist.as_ref() {
             if let Err(e) = paper.save_portfolio(&paper_state_path).await {
                 log_push(&activity, EntryKind::Warn, format!("Failed to save paper state: {e}"));
@@ -948,9 +1179,9 @@ async fn main() -> Result<()> {
                 info!(path = %paper_state_path, "Saved paper portfolio state");
             }
             let warm_state_path = std::env::var("PAPER_WARM_STATE_PATH")
-                .unwrap_or_else(|_| "logs\\paper_warm_state.json".to_string());
+                .unwrap_or_else(|_| "logs/paper_warm_state.json".to_string());
             let rejection_state_path = std::env::var("PAPER_REJECTIONS_PATH")
-                .unwrap_or_else(|_| "logs\\paper_rejections.json".to_string());
+                .unwrap_or_else(|_| "logs/paper_rejections.json".to_string());
             let subs = market_subscriptions.lock().unwrap().clone();
             let _ = paper.save_warm_state(&warm_state_path, &subs, &paper_state_path).await;
             let _ = paper.save_rejections(&rejection_state_path).await;
@@ -1046,64 +1277,109 @@ async fn run_preflight_live(config: &Config) -> Result<()> {
     anyhow::ensure!(config.live_trading, "--preflight-live requires LIVE_TRADING=true");
     config.validate_live_profile_contract()?;
 
-    // ── Check 1: market data reachable ───────────────────────────────────
-    let clob = ClobClient::new(&config.clob_host);
-    let token = &config.markets[0];
-    let buy_price = clob
-        .get_price(token, engine::types::OrderSide::Buy)
-        .await
-        .map_err(|e| anyhow::anyhow!("preflight failed: get_price BUY for token {token}: {e}"))?;
-    let sell_price = clob
-        .get_price(token, engine::types::OrderSide::Sell)
-        .await
-        .map_err(|e| anyhow::anyhow!("preflight failed: get_price SELL for token {token}: {e}"))?;
-    let mid = clob
-        .get_midpoint(token)
-        .await
-        .map_err(|e| anyhow::anyhow!("preflight failed: get_midpoint for token {token}: {e}"))?;
-    let _ = buy_price
-        .parse::<f64>()
-        .map_err(|e| anyhow::anyhow!("preflight failed: BUY price parse error for token {token}: {e}"))?;
-    let _ = sell_price
-        .parse::<f64>()
-        .map_err(|e| anyhow::anyhow!("preflight failed: SELL price parse error for token {token}: {e}"))?;
-    let _ = mid
-        .parse::<f64>()
-        .map_err(|e| anyhow::anyhow!("preflight failed: midpoint parse error for token {token}: {e}"))?;
+    let mut check = 1u8;
+    let total_checks = 7;
 
-    println!(
-        "✅ preflight-live [1/4] market data: token={} buy={} sell={} mid={}",
-        token, buy_price, sell_price, mid,
-    );
+    // ── Check 1: market data reachable (all tokens) ─────────────────────
+    let clob = ClobClient::new(&config.clob_host);
+    for (i, token) in config.markets.iter().enumerate() {
+        let buy_price = clob
+            .get_price(token, engine::types::OrderSide::Buy)
+            .await
+            .map_err(|e| anyhow::anyhow!("preflight: get_price BUY for token[{i}] {token}: {e}"))?;
+        let mid = clob
+            .get_midpoint(token)
+            .await
+            .map_err(|e| anyhow::anyhow!("preflight: get_midpoint for token[{i}] {token}: {e}"))?;
+        let buy_f = buy_price.parse::<f64>()
+            .map_err(|e| anyhow::anyhow!("preflight: BUY price parse for token[{i}] {token}: {e}"))?;
+        let mid_f = mid.parse::<f64>()
+            .map_err(|e| anyhow::anyhow!("preflight: midpoint parse for token[{i}] {token}: {e}"))?;
+        anyhow::ensure!(
+            buy_f > 0.0 && buy_f <= 1.0 && mid_f > 0.0 && mid_f <= 1.0,
+            "preflight: token[{i}] prices out of range: buy={buy_f} mid={mid_f}"
+        );
+        if i == 0 {
+            println!(
+                "✅ preflight-live [{check}/{total_checks}] market data: {}/{} tokens reachable (first: buy={} mid={})",
+                config.markets.len(), config.markets.len(), buy_price, mid,
+            );
+        }
+    }
+    if config.markets.is_empty() {
+        println!(
+            "⚠️  preflight-live [{check}/{total_checks}] MARKETS list is empty — no tokens to validate"
+        );
+    }
+    check += 1;
 
     // ── Check 2: auth credentials valid ──────────────────────────────────
     let executor = engine::order_executor::OrderExecutor::from_config(config);
     executor
         .validate_credentials()
         .await
-        .map_err(|e| anyhow::anyhow!("preflight failed: auth check: {e}"))?;
-    println!("✅ preflight-live [2/4] auth credentials valid (GET /auth/ok)");
+        .map_err(|e| anyhow::anyhow!("preflight: auth check failed: {e}"))?;
+    println!("✅ preflight-live [{check}/{total_checks}] auth credentials valid");
+    check += 1;
 
-    // ── Check 3: signature fields present ────────────────────────────────
+    // ── Check 3: heartbeat endpoint reachable ────────────────────────────
+    match executor.send_heartbeat().await {
+        Ok(()) => println!("✅ preflight-live [{check}/{total_checks}] heartbeat endpoint OK"),
+        Err(e) => {
+            return Err(anyhow::anyhow!("preflight: heartbeat failed: {e}. Is session active?"));
+        }
+    }
+    check += 1;
+
+    // ── Check 4: TEE vault operational ───────────────────────────────────
+    if !config.signer_private_key.is_empty() {
+        let vault = tee_vault::VaultHandle::spawn(&config.signer_private_key)
+            .map_err(|e| anyhow::anyhow!("preflight: TEE vault init failed: {e}"))?;
+        let test_digest = [0xABu8; 32];
+        vault
+            .sign_digest(&test_digest)
+            .await
+            .map_err(|e| anyhow::anyhow!("preflight: TEE vault sign_digest failed: {e}"))?;
+        println!("✅ preflight-live [{check}/{total_checks}] TEE vault operational (sign_digest OK)");
+    } else {
+        println!("⚠️  preflight-live [{check}/{total_checks}] TEE vault SKIPPED — no SIGNER_PRIVATE_KEY set");
+    }
+    check += 1;
+
+    // ── Check 5: persistence paths writable ──────────────────────────────
+    std::fs::create_dir_all("data")
+        .map_err(|e| anyhow::anyhow!("preflight: cannot create data/ directory: {e}"))?;
+    std::fs::create_dir_all("logs")
+        .map_err(|e| anyhow::anyhow!("preflight: cannot create logs/ directory: {e}"))?;
+    // Test atomic write to a temp file.
+    let test_path = "data\\.preflight_test";
+    std::fs::write(test_path, b"ok")
+        .map_err(|e| anyhow::anyhow!("preflight: data/ not writable: {e}"))?;
+    let _ = std::fs::remove_file(test_path);
+    println!("✅ preflight-live [{check}/{total_checks}] data/ and logs/ directories writable");
+    check += 1;
+
+    // ── Check 6: signature config ────────────────────────────────────────
     println!(
-        "✅ preflight-live [3/4] order config: signature_type={} nonce={} expiration={}",
+        "✅ preflight-live [{check}/{total_checks}] order config: signature_type={} nonce={} expiration={}",
         config.polymarket_signature_type,
         config.polymarket_order_nonce,
         config.polymarket_order_expiration,
     );
+    check += 1;
 
-    // ── Check 4: risk config non-zero ─────────────────────────────────────
+    // ── Check 7: risk config non-zero ────────────────────────────────────
     let risk_cfg = engine::risk_manager::RiskConfig::from_env();
     anyhow::ensure!(
         risk_cfg.max_single_order_usdc > 0.0,
-        "preflight failed: MAX_SINGLE_ORDER_USDC must be > 0"
+        "preflight: MAX_SINGLE_ORDER_USDC must be > 0"
     );
     println!(
-        "✅ preflight-live [4/4] risk limits: max_single_order_usdc={} max_daily_loss_pct={}",
-        risk_cfg.max_single_order_usdc, risk_cfg.max_daily_loss_pct,
+        "✅ preflight-live [{check}/{total_checks}] risk limits: max_order=${} max_daily_loss={:.1}%",
+        risk_cfg.max_single_order_usdc, risk_cfg.max_daily_loss_pct * 100.0,
     );
 
-    println!("\n🟢  ALL PREFLIGHT CHECKS PASSED — safe to go live");
+    println!("\n🟢  ALL {total_checks} PREFLIGHT CHECKS PASSED — safe to go live");
     Ok(())
 }
 
@@ -1118,7 +1394,7 @@ async fn run_emergency_stop(config: &Config) -> Result<()> {
     }
     std::fs::create_dir_all("logs")?;
     std::fs::write(
-        "logs\\EMERGENCY_STOP.flag",
+        "logs/EMERGENCY_STOP.flag",
         format!("reason=operator_cli\ntimestamp={}\n", chrono::Utc::now()),
     )?;
     eprintln!("📄 Wrote logs/EMERGENCY_STOP.flag");
@@ -1276,7 +1552,7 @@ fn analyze_session_log(path: &str) -> std::io::Result<RunReview> {
 fn write_postrun_review(session_log_path: &str) -> Result<String> {
     let review = analyze_session_log(session_log_path)?;
     let ts = Utc::now().format("%Y%m%d-%H%M%S");
-    let dir = std::env::var("POSTRUN_REVIEW_DIR").unwrap_or_else(|_| "logs\\reports".to_string());
+    let dir = std::env::var("POSTRUN_REVIEW_DIR").unwrap_or_else(|_| "logs/reports".to_string());
     std::fs::create_dir_all(&dir)?;
     let out_path = format!("{dir}\\postrun-review-{ts}.txt");
 
@@ -1319,9 +1595,9 @@ fn write_postrun_review(session_log_path: &str) -> Result<String> {
         _ => 0.0,
     };
     let session_size_bytes = std::fs::metadata(session_log_path).map(|m| m.len()).unwrap_or(0);
-    let paper_state = "logs\\paper_portfolio_state.json";
-    let warm_state = "logs\\paper_warm_state.json";
-    let rej_state = "logs\\paper_rejections.json";
+    let paper_state = "logs/paper_portfolio_state.json";
+    let warm_state = "logs/paper_warm_state.json";
+    let rej_state = "logs/paper_rejections.json";
 
     let mut assumptions: Vec<String> = Vec::new();
     if review.max_gap_secs >= 3 {
@@ -1418,6 +1694,165 @@ fn write_postrun_review(session_log_path: &str) -> Result<String> {
     writeln!(file, "summary.max_log_gap_secs={}", review.max_gap_secs)?;
     writeln!(file, "summary.realism_alert={realism_alert}")?;
 
-    std::fs::write("logs\\LATEST_POSTRUN_REVIEW.txt", format!("{out_path}\n"))?;
+    std::fs::write("logs/LATEST_POSTRUN_REVIEW.txt", format!("{out_path}\n"))?;
     Ok(out_path)
+}
+
+// ─── Wallet / Keystore CLI ──────────────────────────────────────────────────
+
+/// Generate a fresh secp256k1 keypair for Polymarket order signing.
+fn run_generate_wallet(args: &[String]) -> Result<()> {
+    use tee_vault::keystore;
+
+    let (private_key, address) = keystore::generate_keypair()?;
+
+    println!("╔══════════════════════════════════════════════════════════╗");
+    println!("║           🔑 BLINK WALLET GENERATED                    ║");
+    println!("╠══════════════════════════════════════════════════════════╣");
+    println!("║ Address (signer):  {address}  ║");
+    println!("╠══════════════════════════════════════════════════════════╣");
+    println!("║ Private Key:                                           ║");
+    println!("║ {} ║", &*private_key);
+    println!("╠══════════════════════════════════════════════════════════╣");
+    println!("║ ⚠️  SAVE THIS KEY NOW — it will NOT be shown again!    ║");
+    println!("╚══════════════════════════════════════════════════════════╝");
+
+    // Optionally encrypt to keystore
+    if let Some(pos) = args.iter().position(|a| a == "--save") {
+        let path = args
+            .get(pos + 1)
+            .map(|s| s.as_str())
+            .unwrap_or("data/keystore.json");
+
+        let passphrase = std::env::var("KEYSTORE_PASSPHRASE").unwrap_or_else(|_| {
+            eprint!("Enter keystore passphrase: ");
+            let mut buf = String::new();
+            std::io::stdin().read_line(&mut buf).expect("read passphrase");
+            buf.trim().to_string()
+        });
+
+        if passphrase.len() < 8 {
+            anyhow::bail!("passphrase must be at least 8 characters");
+        }
+
+        let secrets = keystore::KeystoreSecrets {
+            signer_private_key: private_key.to_string(),
+            funder_address: String::new(), // filled after Polymarket registration
+            api_key: String::new(),
+            api_secret: String::new(),
+            api_passphrase: String::new(),
+        };
+
+        let p = std::path::Path::new(path);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        keystore::encrypt_keystore(&secrets, &passphrase, p)?;
+        println!("\n✅ Encrypted keystore saved to: {path}");
+        println!("   Run --encrypt-key later to add API credentials after Polymarket registration.");
+    }
+
+    println!("\n📋 NEXT STEPS:");
+    println!("   1. Register on Polymarket with this address");
+    println!("   2. Deposit USDC on Polygon to your Polymarket proxy wallet");
+    println!("   3. Get CLOB API credentials (api_key, api_secret, api_passphrase)");
+    println!("   4. Run: cargo run -p engine -- --encrypt-key data/keystore.json");
+    println!("   5. Run: cargo run -p engine -- --preflight-live");
+
+    Ok(())
+}
+
+/// Encrypt credentials into a keystore file (or update existing).
+fn run_encrypt_key(args: &[String]) -> Result<()> {
+    use tee_vault::keystore;
+
+    let path = args
+        .iter()
+        .position(|a| a == "--encrypt-key")
+        .and_then(|pos| args.get(pos + 1))
+        .map(|s| s.as_str())
+        .unwrap_or("data/keystore.json");
+
+    println!("🔐 Encrypting credentials to: {path}");
+    println!("   (Set env vars to avoid prompts: SIGNER_PRIVATE_KEY, POLYMARKET_FUNDER_ADDRESS, etc.)\n");
+
+    let read_env_or_prompt = |var: &str, prompt: &str| -> String {
+        std::env::var(var).unwrap_or_else(|_| {
+            eprint!("{prompt}: ");
+            let mut buf = String::new();
+            std::io::stdin().read_line(&mut buf).expect("read input");
+            buf.trim().to_string()
+        })
+    };
+
+    let signer_key = read_env_or_prompt("SIGNER_PRIVATE_KEY", "Signer private key (hex, 64 chars)");
+    let funder = read_env_or_prompt("POLYMARKET_FUNDER_ADDRESS", "Funder address (0x...)");
+    let api_key = read_env_or_prompt("POLYMARKET_API_KEY", "API key");
+    let api_secret = read_env_or_prompt("POLYMARKET_API_SECRET", "API secret (base64)");
+    let api_passphrase = read_env_or_prompt("POLYMARKET_API_PASSPHRASE", "API passphrase");
+    let passphrase = read_env_or_prompt("KEYSTORE_PASSPHRASE", "Keystore encryption passphrase (min 8 chars)");
+
+    if passphrase.len() < 8 {
+        anyhow::bail!("passphrase must be at least 8 characters");
+    }
+    if signer_key.len() != 64 && signer_key.len() != 66 {
+        anyhow::bail!("signer private key must be 64 hex chars (or 66 with 0x prefix)");
+    }
+
+    let clean_key = signer_key.strip_prefix("0x").unwrap_or(&signer_key).to_string();
+
+    let secrets = keystore::KeystoreSecrets {
+        signer_private_key: clean_key,
+        funder_address: funder,
+        api_key,
+        api_secret,
+        api_passphrase,
+    };
+
+    let p = std::path::Path::new(path);
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    keystore::encrypt_keystore(&secrets, &passphrase, p)?;
+
+    println!("\n✅ Keystore encrypted and saved to: {path}");
+    println!("   You can now set KEYSTORE_PATH={path} and KEYSTORE_PASSPHRASE in .env");
+    println!("   and remove the plaintext SIGNER_PRIVATE_KEY from .env.");
+
+    Ok(())
+}
+
+/// Decrypt and display keystore contents (redacted).
+fn run_decrypt_key(args: &[String]) -> Result<()> {
+    use tee_vault::keystore;
+
+    let path = args
+        .iter()
+        .position(|a| a == "--decrypt-key")
+        .and_then(|pos| args.get(pos + 1))
+        .map(|s| s.as_str())
+        .unwrap_or("data/keystore.json");
+
+    let passphrase = std::env::var("KEYSTORE_PASSPHRASE").unwrap_or_else(|_| {
+        eprint!("Enter keystore passphrase: ");
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf).expect("read input");
+        buf.trim().to_string()
+    });
+
+    let secrets = keystore::decrypt_keystore(std::path::Path::new(path), &passphrase)?;
+
+    let mask = |s: &str| -> String {
+        if s.len() <= 8 { "****".into() }
+        else { format!("{}…{}", &s[..4], &s[s.len()-4..]) }
+    };
+
+    println!("✅ Keystore decrypted successfully: {path}");
+    println!("   Signer key:      {}", mask(&secrets.signer_private_key));
+    println!("   Funder address:   {}", if secrets.funder_address.is_empty() { "(not set)".into() } else { secrets.funder_address.clone() });
+    println!("   API key:          {}", mask(&secrets.api_key));
+    println!("   API secret:       {}", mask(&secrets.api_secret));
+    println!("   API passphrase:   {}", mask(&secrets.api_passphrase));
+
+    Ok(())
 }

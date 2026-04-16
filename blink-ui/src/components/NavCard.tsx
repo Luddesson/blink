@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { TrendingUp, TrendingDown } from 'lucide-react'
 import {
   Area,
@@ -22,6 +23,18 @@ interface Props {
   equityTimestamps: number[]
   portfolio?: PortfolioSummary
 }
+
+type TimeRange = '30m' | '1h' | '6h' | '24h'
+const RANGES: TimeRange[] = ['30m', '1h', '6h', '24h']
+
+const WINDOW_MS: Record<TimeRange, number> = {
+  '30m': 30 * 60 * 1000,
+  '1h':  60 * 60 * 1000,
+  '6h':  6 * 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+}
+
+interface FetchedPoint { timestamp_ms: number; nav_usdc: number }
 
 function Stat({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
   return (
@@ -48,29 +61,91 @@ export default function NavCard({
   const isLive = viewMode === 'live'
   const positive = netPnl >= 0
 
+  // Client-side uptime ticker — uses authoritative engine_uptime_secs from WS
+  // snapshot, with 1s client-side interpolation between updates.
+  const [localUptime, setLocalUptime] = useState(portfolio?.uptime_secs ?? 0)
+  const [lastUptimeSync, setLastUptimeSync] = useState(Date.now())
+  useEffect(() => {
+    if (portfolio?.uptime_secs != null) {
+      setLocalUptime(portfolio.uptime_secs)
+      setLastUptimeSync(Date.now())
+    }
+  }, [portfolio?.uptime_secs])
+  useEffect(() => {
+    const id = setInterval(() => {
+      // Interpolate: server uptime + seconds since last WS update
+      setLocalUptime(prev => {
+        const serverBase = portfolio?.uptime_secs ?? prev
+        const elapsed = Math.floor((Date.now() - lastUptimeSync) / 1000)
+        return serverBase + elapsed
+      })
+    }, 1000)
+    return () => clearInterval(id)
+  }, [portfolio?.uptime_secs, lastUptimeSync])
+
+  // nowMs ticks every second so the chart window scrolls in real-time
+  const [nowMs, setNowMs] = useState(Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  // Time-range selector state
+  const [range, setRange] = useState<TimeRange>('30m')
+  const [fetchedPoints, setFetchedPoints] = useState<FetchedPoint[]>([])
+
+  // Fetch from /api/analytics/equity when range changes (or every 30s)
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const r = await fetch(`http://127.0.0.1:3030/api/analytics/equity?range=${range}`)
+        if (!r.ok) return
+        const data = await r.json() as { points: FetchedPoint[] }
+        if (!cancelled && Array.isArray(data.points)) setFetchedPoints(data.points)
+      } catch { /* engine may not be running */ }
+    }
+    void load()
+    const id = setInterval(load, 30_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [range])
+
   const strokeColor = positive
     ? (isLive ? '#f59e0b' : '#818cf8')
     : '#ef4444'
 
-  // Transform NAV → P&L in dollars (NAV − $100 starting balance)
+  // Prefer fetched historical data when available; fall back to in-memory WS curve
   const START_BALANCE = 100
-  const chartData = equityCurve.map((v, i) => ({
-    t: equityTimestamps[i] ?? i,
-    v: v - START_BALANCE,
-  }))
+  const rawChartData: { t: number; v: number }[] = fetchedPoints.length > 0
+    ? fetchedPoints.map(p => ({ t: p.timestamp_ms, v: p.nav_usdc - START_BALANCE }))
+    : equityCurve.map((v, i) => ({ t: equityTimestamps[i] ?? i, v: v - START_BALANCE }))
 
-  // Rolling 30-min window: domain always ends at latest point
-  const CHART_WINDOW_MS = 30 * 60 * 1000
-  const latestTs = equityTimestamps[equityTimestamps.length - 1] ?? Date.now()
-  const windowStart = latestTs - CHART_WINDOW_MS
+  // Chart window: right edge = now, left = now - selected range
+  const chartWindowMs = WINDOW_MS[range]
+  const windowStart = nowMs - chartWindowMs
 
-  // Generate 1-min tick marks within the visible window
-  const TICK_INTERVAL_MS = 60 * 1000
-  const firstTick = Math.ceil(windowStart / TICK_INTERVAL_MS) * TICK_INTERVAL_MS
-  const xTicks: number[] = []
-  for (let t = firstTick; t <= latestTs; t += TICK_INTERVAL_MS) {
-    xTicks.push(t)
+  // Filter data to the visible window and inject a "now" anchor point
+  const filteredData = rawChartData.filter(d => d.t >= windowStart && d.t <= nowMs)
+  const currentPnl = nav - START_BALANCE
+  // Append a synthetic "now" point so the chart always extends to the right edge
+  if (filteredData.length > 0) {
+    const last = filteredData[filteredData.length - 1]
+    if (nowMs - last.t > 2000) {
+      filteredData.push({ t: nowMs, v: currentPnl })
+    }
+  } else {
+    // No data in window — show a flat line at current NAV
+    filteredData.push({ t: windowStart, v: currentPnl })
+    filteredData.push({ t: nowMs, v: currentPnl })
   }
+  const chartData = filteredData
+
+  // Generate tick marks — 6 evenly-spaced ticks
+  const TICK_COUNT = 6
+  const tickInterval = chartWindowMs / TICK_COUNT
+  const xTicks: number[] = Array.from({ length: TICK_COUNT + 1 }, (_, i) =>
+    windowStart + i * tickInterval
+  )
 
   const fmtTickTime = (ms: number) =>
     new Date(ms).toLocaleTimeString('sv-SE', {
@@ -79,10 +154,9 @@ export default function NavCard({
       minute: '2-digit',
     })
 
-  const uptime = portfolio?.uptime_secs ?? 0
-  const uptimeStr = uptime < 3600
-    ? `${Math.floor(uptime / 60)}m ${uptime % 60}s`
-    : `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m`
+  const uptimeStr = localUptime < 3600
+    ? `${Math.floor(localUptime / 60)}m ${localUptime % 60}s`
+    : `${Math.floor(localUptime / 3600)}h ${Math.floor((localUptime % 3600) / 60)}m`
 
   return (
     <div className={`card ${isLive ? 'border-amber-900/60' : 'border-indigo-900/40'}`}>
@@ -118,9 +192,29 @@ export default function NavCard({
         )}
       </div>
 
+      {/* Time-range selector */}
+      <div className="flex items-center gap-1 mt-2">
+        {RANGES.map(r => (
+          <button
+            key={r}
+            onClick={() => setRange(r)}
+            className={`text-[10px] px-2 py-0.5 rounded font-mono transition-colors ${
+              range === r
+                ? 'bg-indigo-800 text-indigo-200'
+                : 'text-slate-600 hover:text-slate-400'
+            }`}
+          >
+            {r}
+          </button>
+        ))}
+        {fetchedPoints.length > 0 && (
+          <span className="text-[9px] text-slate-700 ml-1">historical</span>
+        )}
+      </div>
+
       {/* Equity chart */}
-      {chartData.length > 1 ? (
-        <div className="h-52 -mx-1 mt-3">
+      {chartData.length >= 1 ? (
+        <div className="h-48 -mx-1 mt-2">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={chartData} margin={{ top: 4, right: 8, bottom: 18, left: 44 }}>
               <defs>
@@ -139,7 +233,8 @@ export default function NavCard({
                 dataKey="t"
                 type="number"
                 scale="time"
-                domain={[windowStart, latestTs]}
+                domain={[windowStart, nowMs]}
+                allowDataOverflow={true}
                 ticks={xTicks}
                 tickFormatter={fmtTickTime}
                 tick={{ fill: '#475569', fontSize: 9 }}
@@ -152,11 +247,11 @@ export default function NavCard({
                 const vals = chartData.map(d => d.v)
                 const mn = Math.min(...vals)
                 const mx = Math.max(...vals)
-                const range = mx - mn || 1
+                const rng = mx - mn || 1
                 return [0.2, 0.4, 0.6, 0.8].map(p => (
                   <ReferenceLine
                     key={p}
-                    y={mn + range * p}
+                    y={mn + rng * p}
                     stroke="#1e293b"
                     strokeDasharray="2 4"
                     strokeOpacity={0.5}
@@ -192,7 +287,7 @@ export default function NavCard({
           </ResponsiveContainer>
         </div>
       ) : (
-        <div className="h-52 flex items-center justify-center text-slate-700 text-sm mt-3 border border-dashed border-surface-700 rounded-lg">
+        <div className="h-48 flex items-center justify-center text-slate-700 text-sm mt-2 border border-dashed border-surface-700 rounded-lg">
           Waiting for equity data…
         </div>
       )}

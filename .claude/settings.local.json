@@ -18,7 +18,10 @@
       "Bash(python3 -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\(f'NAV: {d.get\\(\\\\\"nav_usdc\\\\\",\\\\\"?\\\\\"\\)}, cash: {d.get\\(\\\\\"cash_usdc\\\\\",\\\\\"?\\\\\"\\)}, positions: {len\\(d.get\\(\\\\\"open_positions\\\\\",[]\\)\\)}'\\)\")",
       "Bash(taskkill:*)",
       "Bash(netstat -ano)",
-      "Bash(tasklist //FI \"IMAGENAME eq engine.exe\")"
+      "Bash(tasklist //FI \"IMAGENAME eq engine.exe\")",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(ls:*)"
     ]
   }
 }

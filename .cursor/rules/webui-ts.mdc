@@ -1,0 +1,31 @@
+---
+description: React/TypeScript conventions for the Blink web dashboard.
+globs: ["blink-engine/web-ui/src/**"]
+alwaysApply: false
+---
+
+## TypeScript
+- Strict mode on. Never use `any` — use `unknown` + type guards.
+- Prefer `type` over `interface`. Always type component props explicitly.
+
+## React 19
+- Use `use()` hook for async data, not `useEffect` + fetch.
+- Derived state computed during render — not stored in `useState`.
+- `useCallback`/`useMemo` only when profiling shows real cost.
+
+## WebSocket
+- Engine broadcasts every `WS_BROADCAST_INTERVAL_SECS` (default 10s).
+- Handle `readyState` changes — show stale-data indicator when disconnected.
+- Treat all incoming WS data as `readonly`.
+
+## Styling
+- Tailwind CSS 4 utility classes only. No custom CSS files.
+- Monetary values: `$X.XX` (2dp). Prices as decimals (`0.65`), not percentages.
+
+## API
+- All engine REST calls to `http://127.0.0.1:7878`. Never hardcode port elsewhere.
+- Handle 503/network errors — engine may not be running.
+
+## Quality
+- `npm run lint` must pass. Never `// eslint-disable`.
+- `npm run build` (tsc + vite) must succeed before committing.

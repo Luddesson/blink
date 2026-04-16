@@ -138,13 +138,18 @@ struct ActivityEntry {
 
 // ─── Poller ──────────────────────────────────────────────────────────────────
 
-/// Polls the public Polymarket Data API for the RN1 wallet's trades.
+/// Polls the public Polymarket Data API for a tracked wallet's trades.
+///
+/// `wallet` and `wallet_weight` are supplied by the caller so that multiple
+/// wallets can be tracked concurrently by spawning one poller per wallet.
 #[allow(unused_assignments)]
 pub async fn run_rn1_poller(
-    config:    Arc<Config>,
-    signal_tx: crossbeam_channel::Sender<RN1Signal>,
-    activity:  Option<ActivityLog>,
-    diagnostics: Rn1PollDiagnosticsHandle,
+    _config:       Arc<Config>,
+    wallet:        String,
+    wallet_weight: f64,
+    signal_tx:     tokio::sync::mpsc::Sender<RN1Signal>,
+    activity:      Option<ActivityLog>,
+    diagnostics:   Rn1PollDiagnosticsHandle,
 ) {
     let client = Client::builder()
         .timeout(Duration::from_secs(8))
@@ -166,16 +171,16 @@ pub async fn run_rn1_poller(
     let mut next_interval = POLL_INTERVAL;
     let mut metrics_last_logged = Instant::now();
 
-    let rn1_short = if config.rn1_wallet.len() >= 10 {
-        &config.rn1_wallet[..10]
+    let rn1_short = if wallet.len() >= 10 {
+        &wallet[..10]
     } else {
-        &config.rn1_wallet
+        &wallet
     };
 
-    info!(rn1_wallet = %config.rn1_wallet, "RN1 poller started (data-api, no auth) — every {}ms", POLL_INTERVAL.as_millis());
+    info!(rn1_wallet = %wallet, wallet_weight, "RN1 poller started (data-api, no auth) — every {}ms", POLL_INTERVAL.as_millis());
     if let Some(ref log) = activity {
         log_push(log, EntryKind::Engine,
-            format!("RN1 poller started — tracking {rn1_short}… every {}ms (public API)", POLL_INTERVAL.as_millis()));
+            format!("RN1 poller started — tracking {rn1_short}… (weight={wallet_weight:.2}) every {}ms", POLL_INTERVAL.as_millis()));
     }
 
     loop {
@@ -186,7 +191,7 @@ pub async fn run_rn1_poller(
             d.total_polls = total_polls;
         }
 
-        match poll_activity_with_retry(&client, &config.rn1_wallet).await {
+        match poll_activity_with_retry(&client, &wallet).await {
             Ok(entries) => {
                 consecutive_errors = 0;
                 total_entries_seen += entries.len() as u64;
@@ -249,6 +254,10 @@ pub async fn run_rn1_poller(
                         detected_at: Instant::now(),
                         event_start_time: None,
                         event_end_time: None,
+                        source_wallet: wallet.clone(),
+                        wallet_weight,
+                        signal_source: "rn1".to_string(),
+                        analysis_id: None,
                     };
 
                     total_signals += 1;

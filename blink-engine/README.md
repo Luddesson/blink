@@ -73,7 +73,7 @@ Blink Engine connects to Polymarket's live WebSocket feed, maintains an in-memor
 │                                       └──────────────────────┘  │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  tui_app (ratatui) — optional TUI dashboard (TUI=true)      │ │
+│  │  Web UI dashboard — active local dashboard on :5173        │ │
 │  └─────────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -137,11 +137,11 @@ cargo run -p engine
 # Connects to WebSocket, watches for RN1 orders, prints signals
 ```
 
-### 4. Run paper trading with TUI
+### 4. Run paper trading with the Web UI
 
 ```bash
-PAPER_TRADING=true TUI=true cargo run -p engine
-# Full terminal dashboard — no real funds used
+PAPER_TRADING=true WEB_UI=true cargo run -p engine
+# Web dashboard on http://localhost:5173 — no real funds used
 ```
 
 ### 5. Run in live mode (⚠️ real money)
@@ -169,7 +169,7 @@ Connects to the WebSocket feed, maintains order books, logs every RN1 signal det
 
 ```
 PAPER_TRADING=true
-TUI=true           # optional ratatui dashboard
+WEB_UI=true        # active dashboard
 ```
 
 Simulates mirror orders using $100 virtual USDC. The full pipeline runs (sizing, risk checks, fill window) but no HTTP requests are made to the CLOB. Closed trades, P&L, and position history are tracked in memory.
@@ -207,7 +207,7 @@ Copy `.env.example` to `.env` and fill in all required values.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PAPER_TRADING` | `false` | Enable paper trading simulation |
-| `TUI` | `false` | Enable ratatui terminal dashboard (requires `PAPER_TRADING=true`) |
+| `TUI` | `false` | Archived legacy flag; ignored at runtime |
 | `TUI_MODERN_THEME` | `false` | Start TUI in modern theme (toggle live with `t`) |
 | `LIVE_TRADING` | `false` | Enable real order submission |
 
@@ -301,9 +301,9 @@ Runtime log files are always persisted:
 | `order_executor` | CLOB REST API client (`POST/DELETE/GET /order`) with retry logic |
 | `clob_client` | Read-only CLOB REST client (prices, order books, markets) |
 | `risk_manager` | Pre-order risk checks: kill switch, circuit breaker, rate limit, daily loss |
-| `activity_log` | Thread-safe ring buffer of engine events (200 entries) for TUI display |
+| `activity_log` | Thread-safe ring buffer of engine events for the web dashboard and legacy tooling |
 | `latency_tracker` | Rolling-window latency stats (min/max/avg/p99 in µs) |
-| `tui_app` | ratatui terminal dashboard (activated via `TUI=true`) |
+| `tui_app` | archived ratatui terminal dashboard (no longer launched) |
 | `game_start_watcher` | Polls CLOB prices to detect in-play transitions; fires order wipe signals |
 
 ### `market-scanner` crate
@@ -342,13 +342,13 @@ LOG_LEVEL=debug cargo run -p engine
 
 RN1 poller now adapts between fast and idle polling, applies exponential backoff on repeated request failures, and activates a cooldown guard on sustained consecutive errors.
 
-### Run TUI paper mode
+### Legacy TUI status
 
 ```bash
-PAPER_TRADING=true TUI=true cargo run -p engine
+TUI=true
 ```
 
-Logs are written to rotated `logs/engine.log.*` files when TUI is active (to avoid corrupting the terminal output).
+The ratatui dashboard is archived. `TUI=true` is ignored and Blink stays on the web UI flow.
 
 ---
 

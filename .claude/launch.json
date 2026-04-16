@@ -2,28 +2,16 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "engine-tui",
+      "name": "Blink Engine (Rust Backend)",
       "runtimeExecutable": "cargo",
-      "runtimeArgs": ["run", "-p", "engine", "--manifest-path", "blink-engine/Cargo.toml"],
-      "port": null
+      "runtimeArgs": ["run", "--bin", "engine"],
+      "port": 3030
     },
     {
-      "name": "market-scanner",
-      "runtimeExecutable": "cargo",
-      "runtimeArgs": ["run", "-p", "market-scanner"],
-      "port": null
-    },
-    {
-      "name": "tee-vault",
-      "runtimeExecutable": "cargo",
-      "runtimeArgs": ["run", "-p", "tee-vault"],
-      "port": null
-    },
-    {
-      "name": "clickhouse",
-      "runtimeExecutable": "docker",
-      "runtimeArgs": ["compose", "-f", "blink-engine/docker-compose.yml", "up", "-d"],
-      "port": 8123
+      "name": "Blink Web UI (React/Vite Frontend)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5173
     }
   ]
 }

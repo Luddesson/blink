@@ -12,8 +12,8 @@ export function useKeyboard({ onTabSwitch, onPause, onKill }: KeyboardActions) {
     const tag = (e.target as HTMLElement)?.tagName
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
 
-    // Tab switching: 1-6
-    if (e.key >= '1' && e.key <= '6' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    // Tab switching: 1-8
+    if (e.key >= '1' && e.key <= '8' && !e.ctrlKey && !e.altKey && !e.metaKey) {
       e.preventDefault()
       onTabSwitch(parseInt(e.key) - 1)
       return

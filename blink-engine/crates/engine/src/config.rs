@@ -93,6 +93,14 @@ pub struct Config {
     pub live_canary_max_reject_streak: usize,
     /// Optional allowlist of token IDs allowed during canary stages.
     pub live_canary_allowed_markets: Vec<String>,
+
+    // ── Alpha / AI autonomous trading ──────────────────────────────────────
+    /// When `true`, the engine accepts alpha signals from the Python sidecar.
+    /// Default: `false`.
+    pub alpha_enabled: bool,
+    /// URL of the Python alpha sidecar (for health checks).
+    /// Default: `http://127.0.0.1:7879`.
+    pub alpha_sidecar_url: String,
 }
 
 impl fmt::Debug for Config {
@@ -123,6 +131,8 @@ impl fmt::Debug for Config {
             .field("live_canary_end_hour_utc", &self.live_canary_end_hour_utc)
             .field("live_canary_max_reject_streak", &self.live_canary_max_reject_streak)
             .field("live_canary_allowed_markets", &self.live_canary_allowed_markets)
+            .field("alpha_enabled", &self.alpha_enabled)
+            .field("alpha_sidecar_url", &self.alpha_sidecar_url)
             .finish()
     }
 }
@@ -185,11 +195,35 @@ impl Config {
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
 
-        let signer_private_key = std::env::var("SIGNER_PRIVATE_KEY").unwrap_or_default();
-        let funder_address = std::env::var("POLYMARKET_FUNDER_ADDRESS").unwrap_or_default();
-        let api_key = std::env::var("POLYMARKET_API_KEY").unwrap_or_default();
-        let api_secret = std::env::var("POLYMARKET_API_SECRET").unwrap_or_default();
-        let api_passphrase = std::env::var("POLYMARKET_API_PASSPHRASE").unwrap_or_default();
+        let signer_private_key;
+        let funder_address;
+        let api_key;
+        let api_secret;
+        let api_passphrase;
+
+        // Try encrypted keystore first, fall back to env vars
+        if let Ok(ks_path) = std::env::var("KEYSTORE_PATH") {
+            let passphrase = std::env::var("KEYSTORE_PASSPHRASE")
+                .context("KEYSTORE_PATH set but KEYSTORE_PASSPHRASE missing")?;
+            let secrets = tee_vault::keystore::decrypt_keystore(
+                std::path::Path::new(&ks_path),
+                &passphrase,
+            )
+            .with_context(|| format!("decrypt keystore: {ks_path}"))?;
+            tracing::info!(path = %ks_path, "loaded credentials from encrypted keystore");
+            signer_private_key = secrets.signer_private_key.clone();
+            funder_address     = secrets.funder_address.clone();
+            api_key            = secrets.api_key.clone();
+            api_secret         = secrets.api_secret.clone();
+            api_passphrase     = secrets.api_passphrase.clone();
+            // secrets is zeroized on drop here
+        } else {
+            signer_private_key = std::env::var("SIGNER_PRIVATE_KEY").unwrap_or_default();
+            funder_address     = std::env::var("POLYMARKET_FUNDER_ADDRESS").unwrap_or_default();
+            api_key            = std::env::var("POLYMARKET_API_KEY").unwrap_or_default();
+            api_secret         = std::env::var("POLYMARKET_API_SECRET").unwrap_or_default();
+            api_passphrase     = std::env::var("POLYMARKET_API_PASSPHRASE").unwrap_or_default();
+        }
         let polymarket_signature_type = std::env::var("POLYMARKET_SIGNATURE_TYPE")
             .ok()
             .and_then(|v| v.parse::<u8>().ok())
@@ -303,6 +337,12 @@ impl Config {
             live_canary_end_hour_utc,
             live_canary_max_reject_streak,
             live_canary_allowed_markets,
+
+            alpha_enabled: std::env::var("ALPHA_ENABLED")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false),
+            alpha_sidecar_url: std::env::var("ALPHA_SIDECAR_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:7879".to_string()),
         })
     }
 

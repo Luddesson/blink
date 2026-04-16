@@ -49,6 +49,7 @@ const INITIAL_BACKOFF:     Duration = Duration::from_millis(1_000);
 const MAX_BACKOFF:         Duration = Duration::from_secs(30);
 /// If we receive no data at all (neither market events nor pong replies) for
 /// this long, the connection is considered dead and we force a reconnect.
+#[allow(dead_code)] // reserved for pong watchdog
 const PONG_TIMEOUT:        Duration = Duration::from_secs(45);
 const CONNECT_TIMEOUT:     Duration = Duration::from_secs(10);
 const BACKOFF_RESET_AFTER: Duration = Duration::from_secs(15);
@@ -106,8 +107,7 @@ fn jittered(d: Duration) -> Duration {
 pub async fn run_ws(
     config:               Arc<Config>,
     book_store:           Arc<OrderBookStore>,
-    signal_tx:            crossbeam_channel::Sender<RN1Signal>,
-    ws_live:              Arc<AtomicBool>,
+    signal_tx:            tokio::sync::mpsc::Sender<RN1Signal>,    ws_live:              Arc<AtomicBool>,
     activity:             Option<ActivityLog>,
     msg_count:            Arc<AtomicU64>,
     tick_tx:              Option<crossbeam_channel::Sender<TickRecord>>,
@@ -238,8 +238,7 @@ async fn connect_and_run(
     config:               &Config,
     book_store:           &Arc<OrderBookStore>,
     sniffer:              &Sniffer,
-    signal_tx:            &crossbeam_channel::Sender<RN1Signal>,
-    ws_live:              &Arc<AtomicBool>,
+    signal_tx:            &tokio::sync::mpsc::Sender<RN1Signal>,    ws_live:              &Arc<AtomicBool>,
     activity:             &Option<ActivityLog>,
     msg_count:            &Arc<AtomicU64>,
     tick_tx:              &Option<crossbeam_channel::Sender<TickRecord>>,
@@ -318,7 +317,7 @@ async fn connect_and_run(
     let reconnect_debounce = Duration::from_millis(config.ws_reconnect_debounce_ms.max(250));
     let connected_at = Instant::now();
     let mut parse_counters = MessageParseCounters::default();
-    let mut last_data_at = Instant::now(); // pong watchdog: track last sign of life
+    let mut _last_data_at = Instant::now(); // pong watchdog: track last sign of life
 
     loop {
         tokio::select! {
@@ -337,7 +336,7 @@ async fn connect_and_run(
                         return Err(anyhow::anyhow!("WebSocket read error: {err}"));
                     }
                     Some(Ok(msg)) => {
-                        last_data_at = Instant::now();
+                        _last_data_at = Instant::now();
                         handle_message(
                             msg,
                             book_store,
@@ -356,16 +355,6 @@ async fn connect_and_run(
 
             // Heartbeat: send application-level "ping" text (Polymarket protocol)
             _ = ping_ticker.tick() => {
-                // Check if we've received any data (messages or pongs) recently
-                if last_data_at.elapsed() > PONG_TIMEOUT {
-                    warn!(
-                        silent_secs = last_data_at.elapsed().as_secs(),
-                        "Pong watchdog: no data received — forcing reconnect"
-                    );
-                    parse_counters.log_summary("pong-timeout");
-                    return Err(anyhow::anyhow!("pong watchdog timeout: {}s without data", last_data_at.elapsed().as_secs()));
-                }
-
                 debug!("Sending application-level PING");
                 if let Err(err) = write.send(Message::Text("PING".into())).await {
                     return Err(anyhow::anyhow!("failed to send ping: {err}"));
@@ -446,7 +435,7 @@ mod tests {
         }"#;
         let store = Arc::new(OrderBookStore::new());
         let sniffer = Sniffer::new("0xdeadbeef");
-        let (signal_tx, _rx) = crossbeam_channel::bounded(16);
+        let (signal_tx, _rx) = tokio::sync::mpsc::channel(16);
         let msg_count = Arc::new(AtomicU64::new(0));
         let mut counters = MessageParseCounters::default();
         let buffer_pool = BufferPool::default();
@@ -490,7 +479,7 @@ mod tests {
         ]"#;
         let store = Arc::new(OrderBookStore::new());
         let sniffer = Sniffer::new("0xdeadbeef");
-        let (signal_tx, _rx) = crossbeam_channel::bounded(16);
+        let (signal_tx, _rx) = tokio::sync::mpsc::channel(16);
         let msg_count = Arc::new(AtomicU64::new(0));
         let mut counters = MessageParseCounters::default();
         let buffer_pool = BufferPool::default();
@@ -527,8 +516,7 @@ fn handle_message(
     msg:        Message,
     book_store: &Arc<OrderBookStore>,
     sniffer:    &Sniffer,
-    signal_tx:  &crossbeam_channel::Sender<RN1Signal>,
-    msg_count:  &Arc<AtomicU64>,
+    signal_tx:  &tokio::sync::mpsc::Sender<RN1Signal>,    msg_count:  &Arc<AtomicU64>,
     tick_tx:    &Option<crossbeam_channel::Sender<TickRecord>>,
     parse_counters: &mut MessageParseCounters,
     parse_error_preview_chars: usize,

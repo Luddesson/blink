@@ -1,0 +1,46 @@
+[Unit]
+Description=Blink Trading Engine (Oracle ARM64)
+Documentation=https://github.com/ludviggaldworthy/blink
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=blink
+Group=blink
+WorkingDirectory=/opt/blink/blink/blink-engine
+
+# Load environment from .env file
+EnvironmentFile=/opt/blink/.env
+
+# Engine binary
+ExecStart=/opt/blink/blink/blink-engine/target/release/engine
+
+# Graceful shutdown: engine handles SIGTERM → cancel orders → persist state
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Auto-restart on any failure, 5s cooldown
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# Resource limits
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/blink
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=blink-engine
+
+[Install]
+WantedBy=multi-user.target

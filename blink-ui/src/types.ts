@@ -12,12 +12,21 @@ export interface ModeResponse {
 export interface WsSnapshot {
   type: 'snapshot'
   timestamp_ms: number
+  /** Monotonic sequence number — detect gaps or out-of-order delivery */
+  snapshot_seq?: number
+  /** Engine uptime in seconds (authoritative, from server clock) */
+  engine_uptime_secs?: number
+  /** How stale the portfolio cache is, in milliseconds */
+  portfolio_age_ms?: number
   ws_connected: boolean
   trading_paused: boolean
   messages_total: number
   portfolio?: PortfolioSummary
   risk?: RiskSummary
   recent_activity?: ActivityEntry[]
+  vol_bps?: number  // global rolling volatility (CoV × 10000)
+  /** Live order book summaries — keyed by token_id (from 6A) */
+  order_books?: Record<string, OrderBookSummary>
 }
 
 // ─── Portfolio ───────────────────────────────────────────────────────────────
@@ -60,6 +69,7 @@ export interface Position {
   opened_age_secs: number
   event_start_time?: number  // Unix timestamp — game/event kickoff
   event_end_time?: number    // Unix timestamp — market resolution deadline
+  secs_to_event?: number     // seconds until market resolution (pre-computed by engine, can be negative)
 }
 
 // /api/portfolio returns same shape as PortfolioSummary; alias for clarity
@@ -168,6 +178,7 @@ export interface StatusResponse {
   messages_total: number
   subscriptions: string[]
   risk_status: 'OK' | 'CIRCUIT_BREAKER' | 'KILL_SWITCH_OFF' | 'N/A'
+  uptime_secs?: number
 }
 
 // ─── Fill Window ─────────────────────────────────────────────────────────────
@@ -240,6 +251,25 @@ export interface OrderBookResponse {
   best_bid: number | null
   best_ask: number | null
   spread_bps: number | null
+}
+
+/** Lightweight order book summary sent in the WS snapshot (6A) */
+export interface OrderBookSummary {
+  bid_depth: number
+  ask_depth: number
+  best_bid: number | null
+  best_ask: number | null
+  spread_bps: number
+  imbalance: number  // -1 (all asks) to +1 (all bids)
+}
+
+/** Response from /api/pnl-attribution (6B) */
+export interface PnlAttributionResponse {
+  available: boolean
+  total_trades?: number
+  by_reason: Record<string, number>
+  by_category: Record<string, number>
+  by_side: Record<string, number>
 }
 
 export interface OrderBooksResponse {

@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import type { PortfolioSummary } from '../types'
 import { fmt } from '../lib/format'
 
@@ -21,6 +22,16 @@ function pnlColor(v: number) {
 }
 
 export default function PortfolioStats({ portfolio }: Props) {
+  // Client-side uptime ticker — syncs from WS, increments every second between updates
+  const [localUptime, setLocalUptime] = useState(portfolio?.uptime_secs ?? 0)
+  useEffect(() => {
+    if (portfolio?.uptime_secs != null) setLocalUptime(portfolio.uptime_secs)
+  }, [portfolio?.uptime_secs])
+  useEffect(() => {
+    const id = setInterval(() => setLocalUptime(u => u + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
+
   if (!portfolio) {
     return (
       <div className="card space-y-2">
@@ -34,10 +45,9 @@ export default function PortfolioStats({ portfolio }: Props) {
     )
   }
 
-  const uptime = portfolio.uptime_secs
-  const uptimeStr = uptime < 3600
-    ? `${Math.floor(uptime / 60)}m`
-    : `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m`
+  const uptimeStr = localUptime < 3600
+    ? `${Math.floor(localUptime / 60)}m ${localUptime % 60}s`
+    : `${Math.floor(localUptime / 3600)}h ${Math.floor((localUptime % 3600) / 60)}m`
 
   const cash = portfolio.cash_usdc ?? 0
   const invested = portfolio.invested_usdc ?? 0

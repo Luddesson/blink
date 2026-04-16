@@ -9,6 +9,9 @@ blink-ui/tsconfig.tsbuildinfo
 .claude/settings.local.json
 .claude/launch.json
 
+# Editor local config (may contain credentials)
+.cursor/mcp.json
+
 # Secrets & credentials
 *.pem
 *.key
@@ -28,3 +31,10 @@ secrets/
 Thumbs.db
 *.swp
 *.swo
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+

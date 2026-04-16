@@ -355,6 +355,8 @@ impl BacktestEngine {
                 scorecard: crate::paper_portfolio::ExecutionScorecard::default(),
                 event_start_time: pos.event_start_time,
                 event_end_time: pos.event_end_time,
+                signal_source: pos.signal_source.clone(),
+                analysis_id: pos.analysis_id.clone(),
             });
             if let Some(open_ts) = trade_open_times.remove(&pos.id) {
                 trade_durations_ms.push(final_ts - open_ts);
@@ -567,6 +569,271 @@ fn compute_max_drawdown(curve: &[(i64, f64)]) -> f64 {
         }
     }
     max_dd
+}
+
+// ─── Parameter Sweep (5C) ────────────────────────────────────────────────────
+
+/// One result row from a parameter sweep.
+#[derive(Debug, Clone, Serialize)]
+pub struct SweepRow {
+    pub size_multiplier: f64,
+    pub slippage_bps: u64,
+    pub drift_threshold: f64,
+    pub fill_window_ms: u64,
+    pub total_return_pct: f64,
+    pub sharpe_ratio: f64,
+    pub max_drawdown_pct: f64,
+    pub win_rate: f64,
+    pub profit_factor: f64,
+    pub total_trades: usize,
+}
+
+/// Axis values to sweep over; empty means "use the base config value".
+#[derive(Debug, Clone, Default)]
+pub struct SweepAxes {
+    pub size_multiplier: Vec<f64>,
+    pub slippage_bps: Vec<u64>,
+    pub drift_threshold: Vec<f64>,
+    pub fill_window_ms: Vec<u64>,
+}
+
+/// Run a Cartesian-product parameter sweep over the supplied axes.
+///
+/// The `base` config is used for any axis not specified in `axes`.
+/// Results are sorted descending by Sharpe ratio.
+/// Capped at `MAX_COMBINATIONS` to prevent runaway computation.
+pub fn run_parameter_sweep(
+    base: BacktestConfig,
+    ticks: Vec<TickRecord>,
+    axes: SweepAxes,
+) -> Vec<SweepRow> {
+    const MAX_COMBINATIONS: usize = 500;
+
+    let sm_vals: &[f64] = if axes.size_multiplier.is_empty() {
+        &[]
+    } else {
+        &axes.size_multiplier
+    };
+    let sb_vals: &[u64] = if axes.slippage_bps.is_empty() {
+        &[]
+    } else {
+        &axes.slippage_bps
+    };
+    let dt_vals: &[f64] = if axes.drift_threshold.is_empty() {
+        &[]
+    } else {
+        &axes.drift_threshold
+    };
+    let fw_vals: &[u64] = if axes.fill_window_ms.is_empty() {
+        &[]
+    } else {
+        &axes.fill_window_ms
+    };
+
+    // Build all parameter combinations.
+    let mut combos: Vec<(f64, u64, f64, u64)> = Vec::new();
+    let sm_iter: Box<dyn Iterator<Item = f64>> = if sm_vals.is_empty() {
+        Box::new(std::iter::once(base.size_multiplier))
+    } else {
+        Box::new(sm_vals.iter().copied())
+    };
+    for sm in sm_iter {
+        let sb_iter: Box<dyn Iterator<Item = u64>> = if sb_vals.is_empty() {
+            Box::new(std::iter::once(base.slippage_bps))
+        } else {
+            Box::new(sb_vals.iter().copied())
+        };
+        for sb in sb_iter {
+            let dt_iter: Box<dyn Iterator<Item = f64>> = if dt_vals.is_empty() {
+                Box::new(std::iter::once(base.drift_threshold))
+            } else {
+                Box::new(dt_vals.iter().copied())
+            };
+            for dt in dt_iter {
+                let fw_iter: Box<dyn Iterator<Item = u64>> = if fw_vals.is_empty() {
+                    Box::new(std::iter::once(base.fill_window_ms))
+                } else {
+                    Box::new(fw_vals.iter().copied())
+                };
+                for fw in fw_iter {
+                    combos.push((sm, sb, dt, fw));
+                    if combos.len() >= MAX_COMBINATIONS {
+                        break;
+                    }
+                }
+                if combos.len() >= MAX_COMBINATIONS {
+                    break;
+                }
+            }
+            if combos.len() >= MAX_COMBINATIONS {
+                break;
+            }
+        }
+        if combos.len() >= MAX_COMBINATIONS {
+            break;
+        }
+    }
+
+    let mut rows: Vec<SweepRow> = combos
+        .into_iter()
+        .map(|(sm, sb, dt, fw)| {
+            let cfg = BacktestConfig {
+                rn1_wallet: base.rn1_wallet.clone(),
+                starting_usdc: base.starting_usdc,
+                size_multiplier: sm,
+                slippage_bps: sb,
+                drift_threshold: dt,
+                fill_window_ms: fw,
+            };
+            let results = BacktestEngine::new(cfg, ticks.clone()).run();
+            SweepRow {
+                size_multiplier: sm,
+                slippage_bps: sb,
+                drift_threshold: dt,
+                fill_window_ms: fw,
+                total_return_pct: results.total_return_pct,
+                sharpe_ratio: results.sharpe_ratio,
+                max_drawdown_pct: results.max_drawdown_pct,
+                win_rate: results.win_rate,
+                profit_factor: results.profit_factor,
+                total_trades: results.total_trades,
+            }
+        })
+        .collect();
+
+    rows.sort_by(|a, b| {
+        b.sharpe_ratio
+            .partial_cmp(&a.sharpe_ratio)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    rows
+}
+
+// ─── Walk-Forward Validation (5D) ────────────────────────────────────────────
+
+/// Results for one time-slice window in a walk-forward test.
+#[derive(Debug, Clone, Serialize)]
+pub struct WalkWindowResult {
+    pub window: usize,
+    pub tick_count: usize,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub total_return_pct: f64,
+    pub sharpe_ratio: f64,
+    pub sortino_ratio: f64,
+    pub max_drawdown_pct: f64,
+    pub win_rate: f64,
+    pub profit_factor: f64,
+    pub total_trades: usize,
+}
+
+/// Aggregate across walk-forward windows.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct WalkForwardAggregate {
+    /// Mean total return across windows.
+    pub avg_return_pct: f64,
+    /// Mean Sharpe across windows.
+    pub avg_sharpe: f64,
+    /// Mean max-drawdown across windows.
+    pub avg_max_drawdown_pct: f64,
+    /// Mean win-rate across windows.
+    pub avg_win_rate: f64,
+    /// Fraction of windows with positive return (0..1).
+    pub pct_profitable_windows: f64,
+    /// Consistency: 1 − coefficient of variation of Sharpe ratios.
+    /// 1.0 = perfectly consistent, ≤0 = very noisy.
+    pub consistency_score: f64,
+}
+
+/// Run a walk-forward backtest: split ticks into `num_windows` equal-time
+/// slices, run a backtest on each, and return per-window + aggregate stats.
+pub fn run_walk_forward(
+    config: BacktestConfig,
+    ticks: Vec<TickRecord>,
+    num_windows: usize,
+) -> (Vec<WalkWindowResult>, WalkForwardAggregate) {
+    if ticks.is_empty() || num_windows == 0 {
+        return (
+            Vec::new(),
+            WalkForwardAggregate {
+                avg_return_pct: 0.0,
+                avg_sharpe: 0.0,
+                avg_max_drawdown_pct: 0.0,
+                avg_win_rate: 0.0,
+                pct_profitable_windows: 0.0,
+                consistency_score: 0.0,
+            },
+        );
+    }
+
+    let first_ts = ticks.first().map(|t| t.timestamp).unwrap_or(0);
+    let last_ts = ticks.last().map(|t| t.timestamp).unwrap_or(0);
+    let span = (last_ts - first_ts).max(1);
+    let window_size_ms = span / num_windows as i64;
+
+    let mut windows: Vec<WalkWindowResult> = Vec::with_capacity(num_windows);
+
+    for w in 0..num_windows {
+        let win_start = first_ts + w as i64 * window_size_ms;
+        let win_end = if w + 1 == num_windows {
+            last_ts + 1
+        } else {
+            win_start + window_size_ms
+        };
+
+        let slice: Vec<TickRecord> = ticks
+            .iter()
+            .filter(|t| t.timestamp >= win_start && t.timestamp < win_end)
+            .cloned()
+            .collect();
+
+        let tick_count = slice.len();
+        let results = BacktestEngine::new(config.clone(), slice).run();
+
+        windows.push(WalkWindowResult {
+            window: w + 1,
+            tick_count,
+            start_ms: win_start,
+            end_ms: win_end,
+            total_return_pct: results.total_return_pct,
+            sharpe_ratio: results.sharpe_ratio,
+            sortino_ratio: results.sortino_ratio,
+            max_drawdown_pct: results.max_drawdown_pct,
+            win_rate: results.win_rate,
+            profit_factor: results.profit_factor,
+            total_trades: results.total_trades,
+        });
+    }
+
+    let n = windows.len() as f64;
+    let avg_return = windows.iter().map(|w| w.total_return_pct).sum::<f64>() / n;
+    let avg_sharpe = windows.iter().map(|w| w.sharpe_ratio).sum::<f64>() / n;
+    let avg_dd = windows.iter().map(|w| w.max_drawdown_pct).sum::<f64>() / n;
+    let avg_wr = windows.iter().map(|w| w.win_rate).sum::<f64>() / n;
+    let pct_pos = windows.iter().filter(|w| w.total_return_pct > 0.0).count() as f64 / n;
+
+    let sharpe_variance = windows
+        .iter()
+        .map(|w| (w.sharpe_ratio - avg_sharpe).powi(2))
+        .sum::<f64>()
+        / n;
+    let sharpe_std = sharpe_variance.sqrt();
+    let consistency = if avg_sharpe.abs() > 0.001 {
+        (1.0 - sharpe_std / avg_sharpe.abs()).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    let agg = WalkForwardAggregate {
+        avg_return_pct: avg_return,
+        avg_sharpe,
+        avg_max_drawdown_pct: avg_dd,
+        avg_win_rate: avg_wr,
+        pct_profitable_windows: pct_pos,
+        consistency_score: consistency,
+    };
+
+    (windows, agg)
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

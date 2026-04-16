@@ -6,7 +6,8 @@ export default function StatusBar() {
   const { data: status } = usePoll(api.status, 5_000)
   const { data: bullpen } = usePoll(api.bullpenHealth, 10_000)
 
-  const uptime = status ? fmtDuration(Math.floor((Date.now() - status.timestamp_ms) / 1000 + (status.messages_total > 0 ? 1 : 0))) : '—'
+  const uptimeSecs = status?.uptime_secs ?? 0
+  const uptime = status ? fmtDuration(uptimeSecs) : '—'
   const wsOk = status?.ws_connected ?? false
   const bpOk = bullpen?.enabled && (bullpen?.consecutive_failures ?? 0) < 3
 

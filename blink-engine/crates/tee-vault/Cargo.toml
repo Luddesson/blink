@@ -13,6 +13,13 @@ zeroize  = { version = "1", features = ["derive"] }
 chrono   = { workspace = true }
 tokio    = { workspace = true }
 libc     = "0.2"
+rand     = { workspace = true }
+aes-gcm  = { workspace = true }
+hmac     = { workspace = true }
+sha2     = { workspace = true }
+serde    = { workspace = true }
+serde_json = { workspace = true }
+base64   = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["memoryapi", "errhandlingapi"] }

@@ -1,0 +1,35 @@
+---
+description: Rust engine conventions — applied when editing engine crate Rust files.
+globs: ["blink-engine/crates/**/*.rs"]
+alwaysApply: false
+---
+
+## Price and size
+- Hot path: `u64 × 1000`. Never `f64` in `order_book`, `sniffer`, `ws_client`.
+- Use `parse_price()` / `format_price()` from `types.rs` — never parse manually.
+
+## Error handling
+- `anyhow::Result` for app errors, `thiserror` for typed library errors.
+- Never `.unwrap()` in non-test code. Propagate with `?`. Log with `tracing::error!` before returning.
+
+## Concurrency — match primitive to context
+- `tokio::sync::Mutex` — held across `.await` points (portfolio, signal queue)
+- `std::sync::Mutex` — short sync-only critical sections (risk manager, drift cooldown)
+- `Arc<AtomicU64>` / `AtomicBool` — lock-free counters/flags
+- `crossbeam_channel` — hot-path signal passing (lock-free bounded MPSC)
+
+## Module structure
+- Every module: `//!` doc comment with purpose + hot/cold classification
+- Cold-path modules: add `//! **Latency class: COLD PATH. Never call from signal → order hot path.**`
+- `from_env()` on every config struct — `unwrap_or(safe_default)`, never panic
+- `main.rs` wires only. All business logic in modules.
+
+## Logging
+- `tracing::info!(field = %val, "msg")` — always structured. Never `println!`.
+
+## Testing
+- Test pass case AND rejection/error case for every new gate
+- `exit_strategy::evaluate_exits()` must remain pure — proptest it
+
+## Dependencies
+- Never add versions in crate `Cargo.toml` — always `{ workspace = true }`

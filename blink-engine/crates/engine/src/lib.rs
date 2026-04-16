@@ -42,6 +42,7 @@
 
 pub mod activity_log;
 pub mod agent_rpc;
+pub mod alpha_signal;
 pub mod backtest_engine;
 pub mod blink_twin;
 pub mod buffer_pool;
@@ -71,6 +72,7 @@ pub mod order_signer;
 pub mod paper_engine;
 pub mod paper_portfolio;
 pub mod position_tracker;
+pub mod r2_uploader;
 pub mod risk_manager;
 pub mod rn1_poller;
 pub mod sniffer;

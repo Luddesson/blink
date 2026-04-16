@@ -36,6 +36,7 @@ hmac               = "0.12"
 sha2               = "0.10"
 base64             = "0.22"
 zeroize            = { version = "1", features = ["derive"] }
+aes-gcm            = "0.10"
 proptest           = "1"
 tee-vault          = { path = "crates/tee-vault" }
 bpf-probes         = { path = "crates/bpf-probes" }

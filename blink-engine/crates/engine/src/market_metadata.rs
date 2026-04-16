@@ -123,18 +123,28 @@ impl MetadataFetcher {
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
         
-        // game_start_date = actual game kickoff (sports markets)
-        let event_start_time = market.get("game_start_date")
-            .or_else(|| market.get("start_date_iso"))
-            .and_then(|v| v.as_str())
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.timestamp());
+        // Flexible timestamp parser: RFC3339 → NaiveDateTime → date-only
+        let parse_ts = |s: &str| -> Option<i64> {
+            let s = s.trim();
+            chrono::DateTime::parse_from_rfc3339(s).ok()
+                .map(|dt| dt.timestamp())
+                .or_else(|| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
+                    .map(|ndt| ndt.and_utc().timestamp()))
+                .or_else(|| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").ok()
+                    .map(|ndt| ndt.and_utc().timestamp()))
+                .or_else(|| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+                    .map(|d| d.and_hms_opt(23, 59, 59).unwrap().and_utc().timestamp()))
+        };
 
-        // end_date_iso = market resolution deadline
-        let event_end_time = market.get("end_date_iso")
-            .and_then(|v| v.as_str())
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.timestamp());
+        // game_start_date / gameStartTime = actual game kickoff (sports markets)
+        let event_start_time = ["game_start_date", "gameStartDate", "gameStartTime", "game_start_time", "start_date_iso"]
+            .iter()
+            .find_map(|k| market.get(*k)?.as_str().and_then(|s| parse_ts(s)));
+
+        // endDate (full datetime) preferred over end_date_iso (date-only)
+        let event_end_time = ["endDate", "end_date", "end_date_iso", "endDateIso", "resolution_date"]
+            .iter()
+            .find_map(|k| market.get(*k)?.as_str().and_then(|s| parse_ts(s)));
         
         let closed = market.get("closed")
             .and_then(|v| v.as_bool())

@@ -27,6 +27,13 @@ pub enum ExitAction {
     MarketNotLive { held_secs: u64 },
     /// Max hold duration exceeded (absolute time limit).
     MaxHoldExpired { held_secs: u64 },
+    /// Exit a losing position when event resolution is imminent (4B).
+    PreResolutionStop { remaining_secs: i64, pnl_pct: f64 },
+    /// Force-close ALL positions within N seconds of event resolution (3C).
+    PreEventClose { secs_left: i64 },
+    /// Exit a profitable position due to adverse price momentum (4A).
+    /// Closes `fraction` of the position (default 0.5 = scale out, not dump).
+    AdverseMomentum { price_change_bps: i64, fraction: f64 },
 }
 
 impl ExitAction {
@@ -47,6 +54,12 @@ impl ExitAction {
                 "autoclaim@market_not_live".to_string(),
             Self::MaxHoldExpired { held_secs } =>
                 format!("max_hold@{}s", held_secs),
+            Self::PreResolutionStop { remaining_secs, .. } =>
+                format!("pre_resolution_stop@{}s_left", remaining_secs),
+            Self::PreEventClose { secs_left } =>
+                format!("pre_event_close@{}s_left", secs_left),
+            Self::AdverseMomentum { price_change_bps, fraction } =>
+                format!("adverse_momentum@{}bps[{:.0}%]", price_change_bps, fraction * 100.0),
         }
     }
 
@@ -54,6 +67,7 @@ impl ExitAction {
     pub fn fraction(&self) -> f64 {
         match self {
             Self::TakeProfit { fraction, .. } => *fraction,
+            Self::AdverseMomentum { fraction, .. } => *fraction,
             _ => 1.0,
         }
     }
@@ -85,11 +99,27 @@ pub struct ExitConfig {
     pub stagnant_exit_secs: u64,
     pub stagnant_threshold_pct: f64,
 
-    // Max hold time (absolute limit, default 5 days = 432000s)
+    // Max hold time (absolute limit, default 6h = 21600s)
     pub max_hold_secs: u64,
 
     // Stale market close
     pub stale_close_secs: u64,
+
+    // Event-aware confidence exit (4B): exit a losing position when resolution is near.
+    pub event_aware_exit_secs: u64,
+    pub event_aware_exit_loss_pct: f64,
+
+    // Force-close ALL positions within this many seconds of event resolution (3C).
+    pub pre_event_close_secs: u64,
+
+    // Adverse momentum exit (4A): exit profitable position if price moved this many bps against us.
+    pub momentum_exit_threshold_bps: u64,
+    /// Fraction of position to close on adverse momentum (default 0.5 = scale out).
+    pub momentum_exit_fraction: f64,
+    /// How often (secs) the momentum reference price is refreshed by autoclaim.
+    pub momentum_check_interval_secs: u64,
+    /// Grace period (secs): suppress adverse momentum exits for newly opened positions.
+    pub momentum_grace_secs: u64,
 }
 
 impl ExitConfig {
@@ -97,15 +127,23 @@ impl ExitConfig {
     pub fn from_env() -> Self {
         Self {
             autoclaim_tiers: parse_autoclaim_tiers_from_env(),
-            stop_loss_pct: env_f64("STOP_LOSS_PCT", 25.0).clamp(1.0, 99.0),
-            stop_loss_small_pct: env_f64("STOP_LOSS_SMALL_PCT", 20.0).clamp(1.0, 99.0),
-            stop_loss_small_notional_usdc: env_f64("STOP_LOSS_SMALL_NOTIONAL_USDC", 6.0),
-            trailing_stop_activate_pct: env_f64("TRAILING_STOP_ACTIVATE_PCT", 15.0),
-            trailing_stop_drop_pct: env_f64("TRAILING_STOP_DROP_PCT", 10.0),
-            stagnant_exit_secs: env_u64("STAGNANT_EXIT_SECS", 1800),
+            // Data-driven: -50% stop reduces bleed by 70% vs -25%
+            stop_loss_pct: env_f64("STOP_LOSS_PCT", 50.0).clamp(1.0, 99.0),
+            stop_loss_small_pct: env_f64("STOP_LOSS_SMALL_PCT", 50.0).clamp(1.0, 99.0),
+            stop_loss_small_notional_usdc: env_f64("STOP_LOSS_SMALL_NOTIONAL_USDC", 8.0),
+            trailing_stop_activate_pct: env_f64("TRAILING_STOP_ACTIVATE_PCT", 25.0),
+            trailing_stop_drop_pct: env_f64("TRAILING_STOP_DROP_PCT", 15.0),
+            stagnant_exit_secs: env_u64("STAGNANT_EXIT_SECS", 7200),
             stagnant_threshold_pct: env_f64("STAGNANT_THRESHOLD_PCT", 5.0),
-            max_hold_secs: env_u64("MAX_HOLD_SECS", 432_000), // 5 days
-            stale_close_secs: env_u64("STALE_CLOSE_SECS", 300),
+            max_hold_secs: env_u64("MAX_HOLD_SECS", 21_600), // 6h — 24h+ trades have 17% WR
+            stale_close_secs: env_u64("STALE_CLOSE_SECS", 60),
+            event_aware_exit_secs: env_u64("EVENT_AWARE_EXIT_SECS", 3600),
+            event_aware_exit_loss_pct: env_f64("EVENT_AWARE_EXIT_LOSS_PCT", 5.0),
+            pre_event_close_secs: env_u64("PRE_EVENT_CLOSE_SECS", 60),
+            momentum_exit_threshold_bps: env_u64("MOMENTUM_EXIT_THRESHOLD_BPS", 300),
+            momentum_exit_fraction: env_f64("MOMENTUM_EXIT_FRACTION", 0.3).clamp(0.1, 1.0),
+            momentum_check_interval_secs: env_u64("MOMENTUM_CHECK_INTERVAL_SECS", 60),
+            momentum_grace_secs: env_u64("MOMENTUM_GRACE_SECS", 60),
         }
     }
 }
@@ -113,16 +151,24 @@ impl ExitConfig {
 impl Default for ExitConfig {
     fn default() -> Self {
         Self {
-            autoclaim_tiers: vec![(40.0, 0.30), (70.0, 0.30), (100.0, 1.0)],
-            stop_loss_pct: 25.0,
-            stop_loss_small_pct: 20.0,
-            stop_loss_small_notional_usdc: 6.0,
-            trailing_stop_activate_pct: 15.0,
-            trailing_stop_drop_pct: 10.0,
-            stagnant_exit_secs: 1800,
+            // Data-driven: -50% stop, 6h max hold
+            autoclaim_tiers: vec![(100.0, 0.25), (200.0, 0.50), (300.0, 1.0)],
+            stop_loss_pct: 50.0,
+            stop_loss_small_pct: 50.0,
+            stop_loss_small_notional_usdc: 8.0,
+            trailing_stop_activate_pct: 25.0,
+            trailing_stop_drop_pct: 15.0,
+            stagnant_exit_secs: 7200,
             stagnant_threshold_pct: 5.0,
-            max_hold_secs: 432_000,
-            stale_close_secs: 300,
+            max_hold_secs: 21_600,
+            stale_close_secs: 60,
+            event_aware_exit_secs: 3600,
+            event_aware_exit_loss_pct: 5.0,
+            pre_event_close_secs: 60,
+            momentum_exit_threshold_bps: 300,
+            momentum_exit_fraction: 0.3,
+            momentum_check_interval_secs: 60,
+            momentum_grace_secs: 60,
         }
     }
 }
@@ -170,6 +216,21 @@ where
             continue;
         }
 
+        // 1.5. Time-decay force-close (3C): close ALL positions within N secs of event end.
+        if config.pre_event_close_secs > 0 {
+            if let Some(end_ts) = pos.event_end_time {
+                let now_ts = chrono::Utc::now().timestamp();
+                let remaining = end_ts - now_ts;
+                if remaining > 0 && remaining <= config.pre_event_close_secs as i64 {
+                    decisions.push(ExitDecision {
+                        position_idx: idx,
+                        action: ExitAction::PreEventClose { secs_left: remaining },
+                    });
+                    continue;
+                }
+            }
+        }
+
         // 2. Stop-loss
         let sl_threshold = if pos.usdc_spent < config.stop_loss_small_notional_usdc {
             config.stop_loss_small_pct
@@ -182,6 +243,50 @@ where
                 action: ExitAction::StopLoss { threshold_pct: sl_threshold },
             });
             continue;
+        }
+
+        // 2.5. Pre-resolution stop (4B): exit a losing position before event resolves.
+        if config.event_aware_exit_secs > 0 {
+            if let Some(end_ts) = pos.event_end_time {
+                let now_ts = chrono::Utc::now().timestamp();
+                let remaining = end_ts - now_ts;
+                if remaining > 0 && remaining < config.event_aware_exit_secs as i64
+                    && pnl_pct <= -config.event_aware_exit_loss_pct
+                {
+                    decisions.push(ExitDecision {
+                        position_idx: idx,
+                        action: ExitAction::PreResolutionStop { remaining_secs: remaining, pnl_pct },
+                    });
+                    continue;
+                }
+            }
+        }
+
+        // 2.7. Adverse momentum exit (4A): exit profitable position if price moved adversely.
+        //      Grace period: skip if position is younger than momentum_grace_secs.
+        if config.momentum_exit_threshold_bps > 0 && pnl_pct > 0.0
+            && held_secs >= config.momentum_grace_secs
+        {
+            let now_ts = chrono::Utc::now().timestamp();
+            if now_ts - pos.momentum_ref_ts >= config.momentum_check_interval_secs as i64 {
+                let price_change_bps = ((pos.current_price - pos.momentum_ref_price)
+                    / pos.momentum_ref_price.max(0.001)
+                    * 10_000.0) as i64;
+                let adverse = match pos.side {
+                    OrderSide::Buy => price_change_bps < -(config.momentum_exit_threshold_bps as i64),
+                    OrderSide::Sell => price_change_bps > (config.momentum_exit_threshold_bps as i64),
+                };
+                if adverse {
+                    decisions.push(ExitDecision {
+                        position_idx: idx,
+                        action: ExitAction::AdverseMomentum {
+                            price_change_bps: price_change_bps.abs(),
+                            fraction: config.momentum_exit_fraction,
+                        },
+                    });
+                    continue;
+                }
+            }
         }
 
         // 3. Trailing stop
@@ -202,10 +307,10 @@ where
             }
         }
 
-        // 4. Take-profit (tiered — picks highest matching tier)
+        // 4. Take-profit (tiered — picks highest matching tier NOT already claimed)
         let mut best_tier: Option<(f64, f64)> = None;
         for &(threshold, fraction) in &config.autoclaim_tiers {
-            if pnl_pct >= threshold {
+            if pnl_pct >= threshold && threshold > pos.last_claimed_tier_pct {
                 best_tier = Some((threshold, fraction));
             }
         }
@@ -238,11 +343,10 @@ where
             }
         }
 
-        // 7. Market not live (stale data)
+        // 7. Market not live (stale data) — close if no fresh order book price
+        //    exists AND position has been held long enough.
         if config.stale_close_secs > 0 && held_secs >= config.stale_close_secs {
-            let has_fresh = has_live_price(&pos.token_id)
-                || (pos.current_price - pos.entry_price).abs() > 0.001;
-            if !has_fresh {
+            if !has_live_price(&pos.token_id) {
                 decisions.push(ExitDecision {
                     position_idx: idx,
                     action: ExitAction::MarketNotLive { held_secs },
@@ -269,9 +373,12 @@ pub fn conviction_multiplier(
 ) -> f64 {
     let mut mult = config.base_multiplier;
 
-    // Whale bonus: RN1 bet exceeds threshold → high conviction
-    if rn1_bet_usdc >= config.whale_bet_threshold_usdc {
-        mult += config.whale_bonus_multiplier;
+    // Phase 6: RN1 bet-size proportional conviction (logarithmic).
+    // Bigger RN1 bets signal higher conviction. Scale smoothly from 1× at $10
+    // to ~2× at $100k using log2. This replaces the binary whale threshold.
+    if rn1_bet_usdc > 10.0 {
+        let log_boost = (rn1_bet_usdc / 10.0).log2() / 14.0; // log2(100k/10)≈13.3 → ~1.0
+        mult += config.whale_bonus_multiplier * log_boost.clamp(0.0, 1.0);
     }
 
     // High liquidity bonus: market is very liquid → lower slippage risk
@@ -312,7 +419,7 @@ fn env_u64(key: &str, default: u64) -> u64 {
 
 fn parse_autoclaim_tiers_from_env() -> Vec<(f64, f64)> {
     let raw = std::env::var("AUTOCLAIM_TIERS")
-        .unwrap_or_else(|_| "40:0.30,70:0.30,100:1.0".to_string());
+        .unwrap_or_else(|_| "100:0.25,200:0.50,300:1.0".to_string());
     let mut out: Vec<(f64, f64)> = raw
         .split(',')
         .filter_map(|item| {
@@ -339,22 +446,25 @@ mod tests {
     #[test]
     fn conviction_base_only() {
         let config = FilterConfig::default();
-        // Small bet, unknown category, low liquidity → base multiplier only
+        // Very small bet ($5), unknown category, low liquidity → only log-scale boost
+        // $5k > $10, so log_boost = log2(500)/14 ≈ 0.64 → partial whale bonus
         let mult = conviction_multiplier(5_000.0, "entertainment", None, 50_000.0, &config);
-        assert!((mult - config.base_multiplier).abs() < f64::EPSILON);
+        assert!(mult >= config.base_multiplier, "should be at or above base");
+        assert!(mult < config.base_multiplier + config.whale_bonus_multiplier + 0.001,
+            "should not have full whale bonus");
     }
 
     #[test]
     fn conviction_all_bonuses() {
         let config = FilterConfig::default();
         // Whale bet + sports + NFL + high liquidity → all bonuses
+        // $60k → log_boost = log2(6000)/14 ≈ 0.89 → near-full whale bonus
         let mult = conviction_multiplier(60_000.0, "sports", Some("NFL"), 250_000.0, &config);
-        let expected = config.base_multiplier
-            + config.whale_bonus_multiplier
-            + config.high_liquidity_bonus
-            + config.sports_bonus
-            + config.preferred_sport_bonus;
-        assert!((mult - expected.min(config.max_multiplier)).abs() < f64::EPSILON);
+        // Should be close to max but not necessarily exact due to log scaling
+        assert!(mult > config.base_multiplier + config.sports_bonus,
+            "should include sports bonus + substantial whale bonus");
+        assert!(mult <= config.max_multiplier + f64::EPSILON,
+            "must not exceed max");
     }
 
     #[test]
@@ -376,7 +486,7 @@ mod tests {
 
     #[test]
     fn exit_stop_loss_small() {
-        let mut pos = make_position(0.50, 0.30, 5.0); // $5 position, -40% loss
+        let mut pos = make_position(0.50, 0.20, 5.0); // $5 position, -60% loss (exceeds -50% stop)
         let config = ExitConfig::default();
         let decisions = evaluate_exits(&[pos], &config, |_| true);
         assert_eq!(decisions.len(), 1);
@@ -414,6 +524,11 @@ mod tests {
             experiment_variant: "A".to_string(),
             event_start_time: None,
             event_end_time: None,
+            momentum_ref_price: entry,
+            momentum_ref_ts: 0,
+            last_claimed_tier_pct: 0.0,
+            signal_source: "rn1".to_string(),
+            analysis_id: None,
         }
     }
 }

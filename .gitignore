@@ -1,9 +1,11 @@
 blink-engine/target/
 blink-engine/target-*/
 blink-engine/.env
+blink-engine/.env.live.template
+blink-engine/data/
 *.log
 node_modules
-logs/*.pid
+logs/
 blink-ui/tsconfig.tsbuildinfo
 *.tsbuildinfo
 .claude/settings.local.json
@@ -11,10 +13,12 @@ blink-ui/tsconfig.tsbuildinfo
 
 # Editor local config (may contain credentials)
 .cursor/mcp.json
+.vscode/mcp.json
 
 # Secrets & credentials
 *.pem
 *.key
+*.key.pub
 *.p12
 *.pfx
 secrets/
@@ -23,6 +27,7 @@ secrets/
 .env.staging
 .env.*.local
 .bullpen/
+ssh-key-*.key.pub
 
 # Editor & OS
 .vscode/settings.json

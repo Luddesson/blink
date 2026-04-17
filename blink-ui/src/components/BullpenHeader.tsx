@@ -6,7 +6,7 @@ interface Props {
   discovery: BullpenDiscoveryResponse | null
 }
 
-export default function IntelligenceHeader({ health, discovery }: Props) {
+export default function BullpenHeader({ health, discovery }: Props) {
   if (!health || !health.enabled) {
     return (
       <div className="bg-slate-900/80 border-b border-slate-800 px-4 py-2">
@@ -26,7 +26,7 @@ export default function IntelligenceHeader({ health, discovery }: Props) {
       <div className="flex items-center gap-2">
         <span className={`w-2 h-2 rounded-full ${dotColor} shrink-0`} />
         <span className="text-xs font-semibold uppercase tracking-widest text-slate-300">
-          Bullpen Intelligence
+          Bullpen Live
         </span>
       </div>
 

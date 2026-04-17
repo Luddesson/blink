@@ -14,7 +14,7 @@ export default function ConvergenceMonitor({ convergence }: Props) {
     )
   }
 
-  const signals = convergence.active_signals ?? []
+  const signals = convergence.signals ?? []
   const hasSignals = signals.length > 0
 
   return (

@@ -888,6 +888,7 @@ impl PaperEngine {
                 let exit_price = pos.current_price.clamp(0.001, 0.999);
                 let exit_fee = polymarket_taker_fee_with_rate(pos.shares, exit_price, pos.fee_rate);
                 let pnl = (exit_price - pos.entry_price) * pos.shares;
+                let net_realized_pnl = pnl - pos.entry_fee_paid_usdc - exit_fee;
                 p.total_fees_paid_usdc += exit_fee;
                 p.cash_usdc += pos.usdc_spent + pnl - exit_fee;
                 let dur = pos.opened_at.elapsed().as_secs();
@@ -898,7 +899,7 @@ impl PaperEngine {
                     entry_price: pos.entry_price,
                     exit_price,
                     shares: pos.shares,
-                    realized_pnl: pnl - exit_fee,
+                    realized_pnl: net_realized_pnl,
                     fees_paid_usdc: pos.entry_fee_paid_usdc + exit_fee,
                     reason: "rn1_mirror_exit".to_string(),
                     opened_at_wall: pos.opened_at_wall,
@@ -914,14 +915,14 @@ impl PaperEngine {
                     signal_source: pos.signal_source.clone(),
                     analysis_id: pos.analysis_id.clone(),
                 });
-                self.risk.lock().unwrap().record_close(pnl - exit_fee);
+                self.risk.lock().unwrap().record_close(net_realized_pnl);
                 if let Some(ref log) = self.activity {
                     log_push(log, EntryKind::Fill, format!(
                         "RN1 EXIT: closed BUY @{:.3} (entry={:.3})  pnl={:+.3}  fee={:.4}  dur={}s",
-                        exit_price, pos.entry_price, pnl - exit_fee, exit_fee, dur,
+                        exit_price, pos.entry_price, net_realized_pnl, exit_fee, dur,
                     ));
                 }
-                info!(token_id = %pos.token_id, exit_price, pnl = pnl - exit_fee, exit_fee, "🔴 RN1 mirror-exit: closed BUY position");
+                info!(token_id = %pos.token_id, exit_price, pnl = net_realized_pnl, exit_fee, "🔴 RN1 mirror-exit: closed BUY position");
             } else {
                 // RN1 selling a token we don't hold — skip rather than open a short.
                 p.skipped_orders += 1;

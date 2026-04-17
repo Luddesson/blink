@@ -28,6 +28,7 @@ secrets/
 .env.*.local
 .bullpen/
 ssh-key-*.key.pub
+deploy/keys/
 
 # SSH private keys (defense-in-depth — catches names without extensions)
 laptop-ssh-key

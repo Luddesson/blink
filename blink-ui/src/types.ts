@@ -91,6 +91,8 @@ export interface ClosedTrade {
   slippage_bps: number
   event_start_time?: number  // Unix timestamp — game/event kickoff
   event_end_time?: number    // Unix timestamp — market resolution deadline
+  signal_source?: string
+  analysis_id?: string
 }
 
 export interface HistoryResponse {
@@ -223,7 +225,9 @@ export interface BullpenDiscoveredMarket {
 
 export interface BullpenConvergenceResponse {
   enabled: boolean
-  active_signals?: BullpenConvergenceSignal[]
+  active_signals?: number
+  tracked_markets?: number
+  signals?: BullpenConvergenceSignal[]
 }
 
 export interface BullpenConvergenceSignal {

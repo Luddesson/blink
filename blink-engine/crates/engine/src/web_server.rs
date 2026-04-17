@@ -1227,7 +1227,7 @@ async fn get_bullpen_convergence(State(state): State<AppState>) -> impl IntoResp
                 "convergence_score": sig.convergence_score,
                 "net_direction": sig.net_direction,
                 "total_usd": sig.total_usd,
-                "wallets": sig.wallets.len(),
+                "wallet_count": sig.wallets.len(),
             })
         }).collect();
         Json(json!({

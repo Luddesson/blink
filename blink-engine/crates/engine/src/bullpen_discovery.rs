@@ -278,7 +278,16 @@ impl DiscoveryScheduler {
                 let token_ids: Vec<String> = event
                     .markets
                     .iter()
-                    .filter_map(|m| m.token_id.clone())
+                    .flat_map(|m| {
+                        // Prefer token_ids array (v0.1.63+), fall back to singular token_id
+                        if let Some(ref ids) = m.token_ids {
+                            ids.clone()
+                        } else if let Some(ref id) = m.token_id {
+                            vec![id.clone()]
+                        } else {
+                            vec![]
+                        }
+                    })
                     .collect();
 
                 if let Some(ref s) = slug {

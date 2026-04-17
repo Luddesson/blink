@@ -1,11 +1,11 @@
 import { usePoll } from '../hooks/usePoll'
 import { api } from '../lib/api'
 import ErrorBoundary from '../components/ErrorBoundary'
-import IntelligenceHeader from '../components/IntelligenceHeader'
+import BullpenHeader from '../components/BullpenHeader'
 import DiscoveryTable from '../components/DiscoveryTable'
 import ConvergenceMonitor from '../components/ConvergenceMonitor'
 
-export default function IntelligencePage() {
+export default function BullpenPage() {
   const { data: health } = usePoll(api.bullpenHealth, 10_000)
   const { data: discovery } = usePoll(api.bullpenDiscovery, 15_000)
   const { data: convergence } = usePoll(api.bullpenConvergence, 5_000)
@@ -21,7 +21,7 @@ export default function IntelligencePage() {
           <div className="text-4xl mb-4">🔌</div>
           <h2 className="text-lg font-semibold text-slate-200 mb-2">Bullpen Not Connected</h2>
           <p className="text-sm text-slate-500 mb-4">
-            Intelligence requires Bullpen to be enabled. Make sure your <code className="text-cyan-400">.env</code> contains:
+            Bullpen requires BULLPEN_ENABLED. Make sure your <code className="text-cyan-400">.env</code> contains:
           </p>
           <div className="bg-slate-900 rounded p-3 text-left text-xs font-mono text-slate-400 space-y-1">
             <div><span className="text-cyan-400">BULLPEN_CLI_PATH</span>=wsl -d Ubuntu -- bullpen</div>
@@ -44,8 +44,8 @@ export default function IntelligencePage() {
           <span>Bullpen CLI has {health?.consecutive_failures} consecutive failures — check WSL2 is running and bullpen is installed.</span>
         </div>
       )}
-      <ErrorBoundary label="IntelligenceHeader">
-        <IntelligenceHeader health={health} discovery={discovery} />
+      <ErrorBoundary label="BullpenHeader">
+        <BullpenHeader health={health} discovery={discovery} />
       </ErrorBoundary>
 
       <div className="flex-1 grid grid-cols-[1fr_380px] gap-2 overflow-hidden min-h-0">

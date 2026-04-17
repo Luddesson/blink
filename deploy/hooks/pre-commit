@@ -1,0 +1,48 @@
+#!/bin/sh
+# Pre-commit hook: block commits containing secret patterns.
+
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+BLOCKED=0
+DIFF=$(git diff --cached -U0 | grep "^+" | grep -v "^+++")
+
+check() {
+  LABEL="$1"
+  PATTERN="$2"
+  MATCH=$(echo "$DIFF" | grep -E "$PATTERN" 2>/dev/null)
+  if [ -n "$MATCH" ]; then
+    printf "${RED}BLOCKED:${NC} Possible secret — ${YELLOW}${LABEL}${NC}\n"
+    echo "$MATCH" | head -3
+    printf "\n"
+    BLOCKED=1
+  fi
+}
+
+# ── Secret patterns ───────────────────────────────────────────────────────────
+check "PRIVATE_KEY (hex)"        'PRIVATE_KEY\s*=\s*(0x)?[0-9a-fA-F]{32,}'
+check "API_SECRET"               'API_SECRET\s*=\s*[A-Za-z0-9+/=]{20,}'
+check "API_KEY (uuid/token)"     'API_KEY\s*=\s*[0-9a-f\-]{30,}'
+check "PASSPHRASE"               'PASSPHRASE\s*=\s*.{8,}'
+check "MNEMONIC"                 'MNEMONIC\s*=\s*\w+(\s+\w+){11,}'
+check "PEM private key header"   'BEGIN (EC |RSA |OPENSSH )?PRIVATE KEY'
+check "GitHub personal token"    'ghp_[0-9a-zA-Z]{36,}'
+check "Stripe secret key"        'sk_live_[0-9a-zA-Z]{24,}'
+
+# ── Block .env files (except .env.example) ────────────────────────────────────
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+ENV_FILES=$(echo "$STAGED" | grep -E "(^|/)\.env$" | grep -v "\.env\.example")
+if [ -n "$ENV_FILES" ]; then
+  printf "${RED}BLOCKED:${NC} Attempt to commit .env file:\n"
+  echo "$ENV_FILES"
+  printf "Remove with: ${YELLOW}git reset HEAD <file>${NC}\n\n"
+  BLOCKED=1
+fi
+
+if [ "$BLOCKED" -eq 1 ]; then
+  printf "To bypass (false positive only): ${YELLOW}git commit --no-verify${NC}\n"
+  exit 1
+fi
+
+exit 0

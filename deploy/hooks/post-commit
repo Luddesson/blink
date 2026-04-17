@@ -1,0 +1,22 @@
+#!/bin/sh
+# Post-commit hook: auto-deploy UI when blink-ui/src/ files were committed.
+
+CHANGED=$(git diff-tree --no-commit-id -r --name-only HEAD | grep "^blink-ui/src/")
+
+if [ -z "$CHANGED" ]; then
+  exit 0
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/../.." && pwd)/deploy"
+DEPLOY_SCRIPT="$SCRIPT_DIR/deploy-ui.sh"
+
+echo "[post-commit] blink-ui/src changes detected — deploying UI..."
+echo "$CHANGED" | sed 's/^/  /'
+
+if bash "$DEPLOY_SCRIPT"; then
+  echo "[post-commit] UI deployed successfully."
+else
+  echo "[post-commit] WARNING: deploy-ui.sh failed (exit $?). Push manually with: bash deploy/deploy-ui.sh"
+fi
+
+exit 0

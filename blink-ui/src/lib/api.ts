@@ -53,6 +53,8 @@ export const api = {
   portfolio: () => get<FullPortfolio>('/api/portfolio'),
   history: (page = 1, perPage = 50) =>
     get<HistoryResponse>(`/api/history?page=${page}&per_page=${perPage}`),
+  historyAll: () =>
+    get<HistoryResponse>('/api/history?page=1&per_page=10000').then(r => r.trades),
   risk: () => get<RiskSummary>('/api/risk'),
   latency: () => get<LatencyResponse>('/api/latency'),
   failsafe: () => get<FailsafeSnapshot>('/api/failsafe'),

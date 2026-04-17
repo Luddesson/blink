@@ -107,6 +107,8 @@ pub struct BullpenHealth {
     pub total_calls: u64,
     pub total_failures: u64,
     pub avg_latency_ms: f64,
+    /// Circuit breaker: if set, skip commands until this instant.
+    pub circuit_open_until: Option<Instant>,
 }
 
 impl Default for BullpenHealth {
@@ -120,6 +122,7 @@ impl Default for BullpenHealth {
             total_calls: 0,
             total_failures: 0,
             avg_latency_ms: 0.0,
+            circuit_open_until: None,
         }
     }
 }
@@ -184,6 +187,8 @@ pub struct DiscoverEvent {
 pub struct DiscoverEventMarket {
     #[serde(alias = "tokenId", alias = "token_id")]
     pub token_id: Option<String>,
+    #[serde(default)]
+    pub token_ids: Option<Vec<String>>,
     pub outcome: Option<String>,
     pub price: Option<f64>,
     pub volume: Option<f64>,
@@ -405,6 +410,20 @@ impl BullpenBridge {
             return Err(anyhow!("Bullpen bridge disabled (BULLPEN_ENABLED=false)"));
         }
 
+        // Circuit breaker: skip commands while open
+        {
+            let h = self.health.read().await;
+            if let Some(until) = h.circuit_open_until {
+                if Instant::now() < until {
+                    return Err(anyhow!(
+                        "Bullpen circuit breaker open ({} consecutive failures, retry in {}s)",
+                        h.consecutive_failures,
+                        until.duration_since(Instant::now()).as_secs()
+                    ));
+                }
+            }
+        }
+
         let _permit = self.semaphore.acquire().await
             .map_err(|_| anyhow!("Bullpen semaphore closed"))?;
 
@@ -423,6 +442,16 @@ impl BullpenBridge {
                     return Ok(result);
                 }
                 Err(e) => {
+                    // Auth errors are not retryable
+                    if Self::is_auth_error(&e) {
+                        tracing::warn!(
+                            command = command_name,
+                            error = %e,
+                            "Bullpen auth error — skipping retries (run `bullpen login`)"
+                        );
+                        self.record_failure(command_name, &e).await;
+                        return Err(e);
+                    }
                     tracing::debug!(
                         command = command_name,
                         attempt = attempt + 1,
@@ -437,6 +466,16 @@ impl BullpenBridge {
         let err = last_err.unwrap();
         self.record_failure(command_name, &err).await;
         Err(err)
+    }
+
+    /// Check if an error is an authentication/authorization issue (not retryable).
+    fn is_auth_error(err: &anyhow::Error) -> bool {
+        let msg = err.to_string().to_lowercase();
+        msg.contains("not logged in")
+            || msg.contains("token refresh failed")
+            || msg.contains("re-authenticate")
+            || msg.contains("401")
+            || msg.contains("unauthorized")
     }
 
     /// Execute with `--output json` and deserialise.
@@ -531,6 +570,7 @@ impl BullpenBridge {
         let mut h = self.health.write().await;
         h.total_calls += 1;
         h.consecutive_failures = 0;
+        h.circuit_open_until = None; // reset circuit breaker on success
         // Exponential moving average of latency
         h.avg_latency_ms = h.avg_latency_ms * 0.9 + ms * 0.1;
     }
@@ -546,6 +586,23 @@ impl BullpenBridge {
         h.total_failures += 1;
         h.consecutive_failures += 1;
         h.last_error = Some(format!("{err:#}"));
+
+        // Trip circuit breaker after 5 consecutive failures (60s cooldown)
+        const CIRCUIT_BREAKER_THRESHOLD: u32 = 5;
+        const CIRCUIT_BREAKER_COOLDOWN_SECS: u64 = 60;
+        if h.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD && h.circuit_open_until.is_none() {
+            h.circuit_open_until = Some(Instant::now() + Duration::from_secs(CIRCUIT_BREAKER_COOLDOWN_SECS));
+            tracing::error!(
+                consecutive_failures = h.consecutive_failures,
+                cooldown_secs = CIRCUIT_BREAKER_COOLDOWN_SECS,
+                "Bullpen circuit breaker OPEN — pausing all commands"
+            );
+        }
+
+        // Mark unauthenticated on auth errors
+        if Self::is_auth_error(err) {
+            h.authenticated = false;
+        }
 
         tracing::warn!(
             command,
@@ -570,7 +627,7 @@ impl BullpenBridge {
 impl BullpenBridge {
     /// Get smart money signals (top_traders | new_wallet | aggregated).
     pub async fn smart_money(&self, signal_type: &str) -> Result<GenericJson> {
-        self.execute(&["polymarket", "data", "smart-money", signal_type], "smart_money").await
+        self.execute(&["polymarket", "data", "smart-money", "--type", signal_type], "smart_money").await
     }
 
     /// Profile a specific trader by wallet address.

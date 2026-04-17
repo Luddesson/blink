@@ -5,10 +5,10 @@ const TAB_META: { id: TabId; label: string; key: string; accent?: boolean }[] = 
   { id: 'dashboard',    label: 'Dashboard',    key: '1' },
   { id: 'markets',      label: 'Markets',      key: '2' },
   { id: 'history',      label: 'History',      key: '3' },
-  { id: 'intelligence', label: 'Intel',        key: '4' },
+  { id: 'intelligence', label: 'Bullpen',      key: '4' },
   { id: 'performance',  label: 'Perf',         key: '5' },
   { id: 'config',       label: 'Config',       key: '6' },
-  { id: 'signal',       label: '◈ Signal',     key: '7', accent: true },
+  { id: 'alpha',       label: '◈ Alpha AI',   key: '7', accent: true },
 ]
 
 interface Props {

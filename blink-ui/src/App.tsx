@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+  import { useState, useCallback } from 'react'
 import { useEngineSocket } from './hooks/useEngineSocket'
 import { usePoll } from './hooks/usePoll'
 import { useMode } from './hooks/useMode'
@@ -26,10 +26,10 @@ import { ToastProvider } from './components/ui'
 
 import MarketsPage from './pages/MarketsPage'
 import HistoryPage from './pages/HistoryPage'
-import IntelligencePage from './pages/IntelligencePage'
+import BullpenPage from './pages/BullpenPage'
 import PerformancePage from './pages/PerformancePage'
 import ConfigPage from './pages/ConfigPage'
-import SignalPage from './pages/SignalPage'
+import AlphaPage from './pages/AlphaPage'
 
 import type { RiskSummary } from './types'
 
@@ -184,10 +184,10 @@ export default function App() {
 
       {activeTab === 'markets' && <MarketsPage />}
       {activeTab === 'history' && <HistoryPage />}
-      {activeTab === 'intelligence' && <IntelligencePage />}
+      {activeTab === 'intelligence' && <BullpenPage />}
       {activeTab === 'performance' && <PerformancePage portfolio={portfolio} positions={positions} />}
       {activeTab === 'config' && <ConfigPage risk={risk} />}
-      {activeTab === 'signal' && <SignalPage />}
+      {activeTab === 'alpha' && <AlphaPage />}
 
       <StatusBar />
     </div>

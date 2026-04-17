@@ -155,16 +155,6 @@ export default function App() {
                 </aside>
 
                 <section className="flex flex-col gap-2.5 overflow-y-auto min-h-0">
-                  <ErrorBoundary label="AuroraMetricStrip">
-                    <AuroraMetricStrip
-                      nav={nav}
-                      realized={realizedPnl}
-                      unrealized={unrealizedPnl}
-                      fees={feesPaid}
-                      winRate={portfolio?.win_rate_pct ?? 0}
-                      closedTrades={portfolio?.closed_trades_count ?? 0}
-                    />
-                  </ErrorBoundary>
                   <ErrorBoundary label="NavCard">
                     <NavCard
                       nav={nav}
@@ -175,6 +165,16 @@ export default function App() {
                       equityCurve={equityCurve}
                       equityTimestamps={equityTimestamps}
                       portfolio={portfolio}
+                    />
+                  </ErrorBoundary>
+                  <ErrorBoundary label="AuroraMetricStrip">
+                    <AuroraMetricStrip
+                      nav={nav}
+                      realized={realizedPnl}
+                      unrealized={unrealizedPnl}
+                      fees={feesPaid}
+                      winRate={portfolio?.win_rate_pct ?? 0}
+                      closedTrades={portfolio?.closed_trades_count ?? 0}
                     />
                   </ErrorBoundary>
                   <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5 min-h-0">

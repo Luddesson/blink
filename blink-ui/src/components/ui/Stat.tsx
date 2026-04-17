@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { cn } from '../../lib/cn'
 
 type StatDelta = 'bull' | 'bear' | 'neutral'
 
@@ -10,34 +11,32 @@ interface StatProps {
   className?: string
 }
 
-function deltaClass(d: number): StatDelta {
+function deltaDir(d: number): StatDelta {
   if (d > 0) return 'bull'
   if (d < 0) return 'bear'
   return 'neutral'
 }
 
 const DELTA_COLOR: Record<StatDelta, string> = {
-  bull:    'text-emerald-400',
-  bear:    'text-red-400',
-  neutral: 'text-slate-500',
+  bull:    'text-[color:var(--color-bull-400)]',
+  bear:    'text-[color:var(--color-bear-400)]',
+  neutral: 'text-[color:var(--color-text-muted)]',
 }
 
-/**
- * Compact label + value cell with optional delta indicator.
- * Used in stat grids throughout the app.
- */
-export function Stat({ label, value, delta, deltaFormat, className = '' }: StatProps) {
-  const dir = delta !== undefined ? deltaClass(delta) : undefined
+export function Stat({ label, value, delta, deltaFormat, className }: StatProps) {
+  const dir = delta !== undefined ? deltaDir(delta) : undefined
 
   return (
-    <div className={`flex flex-col gap-0.5 ${className}`}>
-      <span className="text-[10px] uppercase tracking-wider text-slate-500">{label}</span>
+    <div className={cn('flex flex-col gap-0.5', className)}>
+      <span className="text-[10px] uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
+        {label}
+      </span>
       <div className="flex items-baseline gap-1.5">
-        <span className="text-sm font-semibold tabular-nums font-mono text-slate-100">
+        <span className="text-sm font-semibold tabular font-mono text-[color:var(--color-text-primary)]">
           {value}
         </span>
         {delta !== undefined && dir && (
-          <span className={`text-[11px] tabular-nums font-mono ${DELTA_COLOR[dir]}`}>
+          <span className={cn('text-[11px] tabular font-mono', DELTA_COLOR[dir])}>
             {delta > 0 ? '+' : ''}{deltaFormat ? deltaFormat(delta) : delta.toFixed(2)}
           </span>
         )}

@@ -1,3 +1,5 @@
+import { cn } from '../../lib/cn'
+
 type ChipVariant = 'default' | 'bull' | 'bear' | 'signal' | 'whale' | 'dim'
 
 interface ChipProps {
@@ -9,43 +11,37 @@ interface ChipProps {
   className?: string
 }
 
-const VARIANT_ACTIVE: Record<ChipVariant, string> = {
-  default: 'bg-slate-700 text-slate-100 border-slate-500',
-  bull:    'bg-emerald-900/60 text-emerald-300 border-emerald-600/60',
-  bear:    'bg-red-900/60 text-red-300 border-red-600/60',
-  signal:  'bg-blue-900/60 text-blue-300 border-blue-600/60',
-  whale:   'bg-amber-900/60 text-amber-300 border-amber-600/60',
-  dim:     'bg-slate-800 text-slate-400 border-slate-700',
+const ACTIVE: Record<ChipVariant, string> = {
+  default: 'bg-[color:oklch(0.26_0.022_260/0.8)] text-[color:var(--color-text-primary)] border-[color:var(--color-border-strong)]',
+  bull:    'bg-[color:oklch(0.72_0.19_155/0.18)] text-[color:var(--color-bull-300)] border-[color:oklch(0.72_0.19_155/0.45)]',
+  bear:    'bg-[color:oklch(0.65_0.24_25/0.18)] text-[color:var(--color-bear-300)] border-[color:oklch(0.65_0.24_25/0.5)]',
+  signal:  'bg-[color:oklch(0.68_0.18_230/0.18)] text-[color:var(--color-signal-400)] border-[color:oklch(0.68_0.18_230/0.45)]',
+  whale:   'bg-[color:oklch(0.72_0.18_85/0.18)] text-[color:var(--color-whale-400)] border-[color:oklch(0.72_0.18_85/0.45)]',
+  dim:     'bg-[color:oklch(0.22_0.018_260/0.5)] text-[color:var(--color-text-muted)] border-[color:var(--color-border-subtle)]',
 }
 
-const VARIANT_INACTIVE: Record<ChipVariant, string> = {
-  default: 'text-slate-500 border-transparent hover:text-slate-300 hover:bg-slate-800/50',
-  bull:    'text-slate-500 border-transparent hover:text-emerald-400 hover:bg-emerald-900/20',
-  bear:    'text-slate-500 border-transparent hover:text-red-400 hover:bg-red-900/20',
-  signal:  'text-slate-500 border-transparent hover:text-blue-400 hover:bg-blue-900/20',
-  whale:   'text-slate-500 border-transparent hover:text-amber-400 hover:bg-amber-900/20',
-  dim:     'text-slate-600 border-transparent hover:text-slate-400',
+const INACTIVE: Record<ChipVariant, string> = {
+  default: 'text-[color:var(--color-text-muted)] border-transparent hover:text-[color:var(--color-text-primary)] hover:bg-[color:oklch(0.22_0.018_260/0.5)]',
+  bull:    'text-[color:var(--color-text-muted)] border-transparent hover:text-[color:var(--color-bull-400)] hover:bg-[color:oklch(0.72_0.19_155/0.1)]',
+  bear:    'text-[color:var(--color-text-muted)] border-transparent hover:text-[color:var(--color-bear-400)] hover:bg-[color:oklch(0.65_0.24_25/0.1)]',
+  signal:  'text-[color:var(--color-text-muted)] border-transparent hover:text-[color:var(--color-signal-400)] hover:bg-[color:oklch(0.68_0.18_230/0.1)]',
+  whale:   'text-[color:var(--color-text-muted)] border-transparent hover:text-[color:var(--color-whale-400)] hover:bg-[color:oklch(0.72_0.18_85/0.1)]',
+  dim:     'text-[color:var(--color-text-dim)] border-transparent hover:text-[color:var(--color-text-muted)]',
 }
 
-/**
- * Filter pill / tag chip. Used in SubFilterBar and inline filter rows.
- */
-export function Chip({ label, count, active = false, onClick, variant = 'default', className = '' }: ChipProps) {
-  const style = active ? VARIANT_ACTIVE[variant] : VARIANT_INACTIVE[variant]
-
+export function Chip({ label, count, active = false, onClick, variant = 'default', className }: ChipProps) {
   return (
     <button
       onClick={onClick}
-      className={`
-        inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] font-medium
-        transition-all whitespace-nowrap
-        ${style}
-        ${className}
-      `}
+      className={cn(
+        'inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-medium whitespace-nowrap transition-all',
+        active ? ACTIVE[variant] : INACTIVE[variant],
+        className,
+      )}
     >
       {label}
       {count !== undefined && (
-        <span className={`text-[10px] ${active ? 'opacity-80' : 'opacity-50'}`}>
+        <span className={cn('text-[10px] font-mono tabular', active ? 'opacity-85' : 'opacity-55')}>
           {count}
         </span>
       )}

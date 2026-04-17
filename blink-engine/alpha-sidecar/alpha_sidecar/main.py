@@ -144,7 +144,7 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_sto
     raw_markets = await fetch_active_markets(
         gamma_url=cfg.gamma_api_url,
         min_volume=cfg.scanner_min_volume_usdc,
-        limit=100,
+        limit=cfg.gamma_market_limit,
     )
 
     if not raw_markets:

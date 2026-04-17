@@ -1,4 +1,5 @@
 import { Chip } from './Chip'
+import { cn } from '../../lib/cn'
 
 export interface FilterOption {
   id: string
@@ -13,19 +14,15 @@ interface SubFilterBarProps {
   className?: string
 }
 
-/**
- * Horizontal scrollable row of filter chips.
- * Used as a per-tab second navigation layer.
- */
-export function SubFilterBar({ options, active, onChange, className = '' }: SubFilterBarProps) {
+export function SubFilterBar({ options, active, onChange, className }: SubFilterBarProps) {
   return (
     <div
-      className={`
-        flex items-center gap-1.5 px-3 py-1.5
-        bg-surface-950 border-b border-slate-800/60
-        overflow-x-auto scrollbar-none shrink-0
-        ${className}
-      `}
+      className={cn(
+        'flex items-center gap-1.5 px-3 py-1.5 shrink-0 overflow-x-auto',
+        'border-b border-[color:var(--color-border-subtle)]',
+        'bg-[color:oklch(0.14_0.013_260/0.5)] backdrop-blur-sm',
+        className,
+      )}
     >
       {options.map((opt) => (
         <Chip

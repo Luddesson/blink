@@ -1,5 +1,7 @@
 import { createContext, useContext, useState, useCallback, type ReactNode } from 'react'
-import { X, CheckCircle, AlertTriangle, Info } from 'lucide-react'
+import { X, CheckCircle2, AlertTriangle, Info } from 'lucide-react'
+import { motion, AnimatePresence } from 'motion/react'
+import { cn } from '../../lib/cn'
 
 type ToastType = 'success' | 'error' | 'info'
 
@@ -33,10 +35,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
-        {toasts.map((t) => (
-          <ToastItem key={t.id} toast={t} onDismiss={dismiss} />
-        ))}
+      <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none">
+        <AnimatePresence initial={false}>
+          {toasts.map((t) => (
+            <ToastItem key={t.id} toast={t} onDismiss={dismiss} />
+          ))}
+        </AnimatePresence>
       </div>
     </ToastContext.Provider>
   )
@@ -44,31 +48,39 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number) => void }) {
   const icon = {
-    success: <CheckCircle size={14} className="text-emerald-400 shrink-0" />,
-    error:   <AlertTriangle size={14} className="text-red-400 shrink-0" />,
-    info:    <Info size={14} className="text-blue-400 shrink-0" />,
+    success: <CheckCircle2 size={14} className="text-[color:var(--color-bull-400)] shrink-0" />,
+    error:   <AlertTriangle size={14} className="text-[color:var(--color-bear-400)] shrink-0" />,
+    info:    <Info size={14} className="text-[color:var(--color-aurora-3)] shrink-0" />,
   }[toast.type]
 
-  const border = {
-    success: 'border-emerald-800',
-    error:   'border-red-800',
-    info:    'border-blue-800',
+  const ring = {
+    success: 'shadow-[0_0_0_1px_oklch(0.72_0.19_155/0.3),0_18px_40px_-12px_oklch(0.72_0.19_155/0.3)]',
+    error:   'shadow-[0_0_0_1px_oklch(0.65_0.24_25/0.3),0_18px_40px_-12px_oklch(0.65_0.24_25/0.3)]',
+    info:    'shadow-[0_0_0_1px_oklch(0.75_0.18_170/0.25),0_18px_40px_-12px_oklch(0.70_0.22_290/0.3)]',
   }[toast.type]
 
   return (
-    <div
-      className={`
-        pointer-events-auto flex items-center gap-2 fade-in-up
-        bg-surface-700 border ${border} rounded-lg px-3 py-2 shadow-lg
-        text-xs text-slate-200 max-w-xs
-      `}
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 16, scale: 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, x: 24, transition: { duration: 0.15 } }}
+      transition={{ type: 'spring', stiffness: 380, damping: 26 }}
+      className={cn(
+        'pointer-events-auto flex items-start gap-2.5 glass rounded-lg px-3.5 py-2.5 text-xs max-w-sm',
+        ring,
+      )}
     >
       {icon}
-      <span className="flex-1">{toast.message}</span>
-      <button onClick={() => onDismiss(toast.id)} className="text-slate-500 hover:text-slate-300">
+      <span className="flex-1 text-[color:var(--color-text-primary)] leading-snug">{toast.message}</span>
+      <button
+        onClick={() => onDismiss(toast.id)}
+        className="text-[color:var(--color-text-muted)] hover:text-[color:var(--color-text-primary)] transition-colors -mr-1 -mt-0.5"
+        aria-label="Dismiss"
+      >
         <X size={12} />
       </button>
-    </div>
+    </motion.div>
   )
 }
 

@@ -6,7 +6,7 @@ interface Props { convergence: BullpenConvergenceResponse | null }
 export default function ConvergenceAlert({ convergence }: Props) {
   if (!convergence || !convergence.enabled) return null
 
-  const signals = convergence.active_signals ?? []
+  const signals = convergence.signals ?? []
   if (signals.length === 0) return null
 
   return (
@@ -17,7 +17,7 @@ export default function ConvergenceAlert({ convergence }: Props) {
           Convergence
         </span>
         <span className="text-[10px] text-amber-500 ml-auto">
-          {signals.length} active
+          {convergence.active_signals ?? signals.length} active
         </span>
       </div>
 

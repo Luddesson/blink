@@ -1,17 +1,16 @@
 import { useState } from 'react'
 import { Copy, Check } from 'lucide-react'
+import { cn } from '../../lib/cn'
 
 interface WalletTagProps {
   address: string
-  /** Optional human label shown before the address */
   label?: string
-  /** Shorten to 0x1234…5678 format (default: true) */
   shorten?: boolean
   copyable?: boolean
   className?: string
 }
 
-function shorten(addr: string) {
+function shortenAddr(addr: string) {
   if (addr.length < 12) return addr
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`
 }
@@ -21,7 +20,7 @@ export function WalletTag({
   label,
   shorten: doShorten = true,
   copyable = true,
-  className = '',
+  className,
 }: WalletTagProps) {
   const [copied, setCopied] = useState(false)
 
@@ -32,22 +31,20 @@ export function WalletTag({
     })
   }
 
-  const display = doShorten ? shorten(address) : address
+  const display = doShorten ? shortenAddr(address) : address
 
   return (
-    <span
-      className={`inline-flex items-center gap-1 font-mono text-[11px] text-slate-400 ${className}`}
-    >
-      {label && <span className="text-slate-500 mr-0.5">{label}</span>}
-      <span className="text-slate-300">{display}</span>
+    <span className={cn('inline-flex items-center gap-1 font-mono text-[11px] text-[color:var(--color-text-secondary)]', className)}>
+      {label && <span className="text-[color:var(--color-text-muted)] mr-0.5">{label}</span>}
+      <span className="text-[color:var(--color-text-primary)]">{display}</span>
       {copyable && (
         <button
           onClick={handleCopy}
-          className="text-slate-600 hover:text-slate-400 transition-colors"
+          className="text-[color:var(--color-text-dim)] hover:text-[color:var(--color-aurora-1)] transition-colors"
           title="Copy address"
           aria-label="Copy wallet address"
         >
-          {copied ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
+          {copied ? <Check size={10} className="text-[color:var(--color-bull-400)]" /> : <Copy size={10} />}
         </button>
       )}
     </span>

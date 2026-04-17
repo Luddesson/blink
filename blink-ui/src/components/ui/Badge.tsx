@@ -1,42 +1,45 @@
 import type { ReactNode } from 'react'
+import { cva, type VariantProps } from 'class-variance-authority'
+import { cn } from '../../lib/cn'
 
-type BadgeVariant = 'bull' | 'bear' | 'signal' | 'whale' | 'neutral' | 'paper' | 'live' | 'warn' | 'ok' | 'dim'
+const badgeVariants = cva(
+  'inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10px] font-semibold uppercase tracking-[0.1em]',
+  {
+    variants: {
+      variant: {
+        bull:    'bg-[color:oklch(0.72_0.19_155/0.15)] text-[color:var(--color-bull-300)] border-[color:oklch(0.72_0.19_155/0.35)]',
+        bear:    'bg-[color:oklch(0.65_0.24_25/0.15)] text-[color:var(--color-bear-300)] border-[color:oklch(0.65_0.24_25/0.4)]',
+        signal:  'bg-[color:oklch(0.68_0.18_230/0.15)] text-[color:var(--color-signal-400)] border-[color:oklch(0.68_0.18_230/0.35)]',
+        whale:   'bg-[color:oklch(0.72_0.18_85/0.15)] text-[color:var(--color-whale-400)] border-[color:oklch(0.72_0.18_85/0.35)]',
+        neutral: 'bg-[color:oklch(0.26_0.022_260/0.5)] text-[color:var(--color-text-secondary)] border-[color:var(--color-border-subtle)]',
+        paper:   'bg-[color:oklch(0.65_0.22_285/0.15)] text-[color:var(--color-paper-300)] border-[color:oklch(0.65_0.22_285/0.35)]',
+        live:    'bg-[color:oklch(0.65_0.24_25/0.18)] text-[color:var(--color-live-300)] border-[color:oklch(0.65_0.24_25/0.45)]',
+        warn:    'bg-[color:oklch(0.72_0.18_85/0.15)] text-[color:var(--color-whale-400)] border-[color:oklch(0.72_0.18_85/0.35)]',
+        ok:      'bg-[color:oklch(0.72_0.19_155/0.15)] text-[color:var(--color-bull-300)] border-[color:oklch(0.72_0.19_155/0.35)]',
+        dim:     'bg-[color:oklch(0.17_0.015_260/0.6)] text-[color:var(--color-text-dim)] border-[color:var(--color-border-subtle)]',
+        aurora:  'bg-[color:oklch(0.75_0.18_170/0.12)] text-[color:var(--color-aurora-1)] border-[color:oklch(0.75_0.18_170/0.4)]',
+      },
+    },
+    defaultVariants: { variant: 'neutral' },
+  }
+)
 
-interface BadgeProps {
+interface BadgeProps extends VariantProps<typeof badgeVariants> {
   children: ReactNode
-  variant?: BadgeVariant
   dot?: boolean
   className?: string
 }
 
-const STYLES: Record<BadgeVariant, string> = {
-  bull:    'bg-emerald-900/60 text-emerald-300 border-emerald-700/40',
-  bear:    'bg-red-900/60 text-red-300 border-red-700/40',
-  signal:  'bg-blue-900/60 text-blue-300 border-blue-700/40',
-  whale:   'bg-amber-900/60 text-amber-300 border-amber-700/40',
-  neutral: 'bg-slate-800 text-slate-400 border-slate-700',
-  paper:   'bg-indigo-900/60 text-indigo-300 border-indigo-700/40',
-  live:    'bg-red-900/60 text-red-300 border-red-700/40',
-  warn:    'bg-amber-900/60 text-amber-300 border-amber-700/40',
-  ok:      'bg-emerald-900/60 text-emerald-300 border-emerald-700/40',
-  dim:     'bg-slate-900 text-slate-500 border-slate-800',
-}
-
-/**
- * Inline badge/tag with semantic color variants.
- */
-export function Badge({ children, variant = 'neutral', dot = false, className = '' }: BadgeProps) {
+export function Badge({ children, variant, dot = false, className }: BadgeProps) {
   return (
-    <span
-      className={`
-        inline-flex items-center gap-1 px-1.5 py-0.5 rounded
-        border text-[10px] font-semibold uppercase tracking-wide
-        ${STYLES[variant]}
-        ${className}
-      `}
-    >
+    <span className={cn(badgeVariants({ variant }), className)}>
       {dot && (
-        <span className={`w-1.5 h-1.5 rounded-full bg-current ${variant === 'live' ? 'live-dot' : ''}`} />
+        <span
+          className={cn(
+            'w-1.5 h-1.5 rounded-full bg-current',
+            variant === 'live' && 'live-dot',
+          )}
+        />
       )}
       {children}
     </span>

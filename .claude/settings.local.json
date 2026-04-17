@@ -21,7 +21,9 @@
       "Bash(tasklist //FI \"IMAGENAME eq engine.exe\")",
       "WebFetch(domain:api.github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(npx tsc *)",
+      "Bash(npx vite *)"
     ]
   }
 }

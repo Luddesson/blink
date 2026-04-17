@@ -1,8 +1,4 @@
-<<<<<<<< HEAD:blink-engine/static/ui/assets/react-CwjictZw.js
-import{r as O}from"./icons-ITrwQtir.js";var y={exports:{}},n={};/**
-========
-import{r as O}from"./icons-M_EKC18x.js";var y={exports:{}},n={};/**
->>>>>>>> 5fc51a9dd8a657730036c98cab8f8bfba08c3520:blink-engine/static/ui/assets/react-D1dFNW0k.js
+import{r as O}from"./icons-D5enk8aG.js";var y={exports:{}},n={};/**
  * @license React
  * react-dom.production.js
  *

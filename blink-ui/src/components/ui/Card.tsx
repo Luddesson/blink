@@ -1,40 +1,49 @@
 import type { ReactNode } from 'react'
+import { cva, type VariantProps } from 'class-variance-authority'
+import { cn } from '../../lib/cn'
 
-type CardVariant = 'default' | 'signal' | 'alert' | 'whale' | 'bear'
+const cardVariants = cva(
+  'relative rounded-xl p-3 transition-all glass',
+  {
+    variants: {
+      variant: {
+        default: '',
+        signal:  'shadow-[0_0_0_1px_oklch(0.68_0.18_230/0.28),0_18px_48px_-14px_oklch(0.68_0.18_230/0.25)]',
+        alert:   'shadow-[0_0_0_1px_oklch(0.80_0.17_85/0.3),0_18px_48px_-14px_oklch(0.80_0.17_85/0.25)]',
+        whale:   'shadow-[0_0_0_1px_oklch(0.80_0.17_85/0.3),0_18px_48px_-14px_oklch(0.80_0.17_85/0.25)]',
+        bear:    'shadow-[0_0_0_1px_oklch(0.65_0.24_25/0.3),0_18px_48px_-14px_oklch(0.65_0.24_25/0.3)]',
+        bull:    'shadow-[0_0_0_1px_oklch(0.72_0.19_155/0.28),0_18px_48px_-14px_oklch(0.72_0.19_155/0.25)]',
+      },
+      accent: {
+        none: '',
+        top:  'before:absolute before:top-0 before:left-4 before:right-4 before:h-px before:bg-gradient-to-r before:from-transparent before:via-[color:var(--color-aurora-1)] before:to-transparent before:opacity-60',
+      },
+      interactive: {
+        none: '',
+        hover: 'cursor-pointer hover:scale-[1.004] hover:shadow-[0_0_0_1px_oklch(0.75_0.18_170/0.25),0_22px_52px_-14px_oklch(0.75_0.18_170/0.35)]',
+      },
+    },
+    defaultVariants: {
+      variant: 'default',
+      accent: 'none',
+      interactive: 'none',
+    },
+  }
+)
 
-interface CardProps {
+interface CardProps extends VariantProps<typeof cardVariants> {
   children: ReactNode
-  variant?: CardVariant
   className?: string
   onClick?: () => void
-  /** Show subtle top accent border */
-  accent?: boolean
 }
 
-const VARIANT_TOP: Record<CardVariant, string> = {
-  default: '',
-  signal:  'border-t-blue-500/50',
-  alert:   'border-t-amber-500/50',
-  whale:   'border-t-amber-400/60',
-  bear:    'border-t-red-500/50',
-}
-
-/**
- * Base card with optional accent top border and click interaction.
- */
-export function Card({ children, variant = 'default', className = '', onClick, accent }: CardProps) {
-  const accentClass = accent && variant !== 'default' ? `border-t-2 ${VARIANT_TOP[variant]}` : ''
-  const cursor = onClick ? 'cursor-pointer hover:bg-slate-800/70' : ''
-
+export function Card({ children, variant, className, onClick, accent }: CardProps) {
   return (
     <div
-      className={`
-        bg-surface-800 ring-1 ring-slate-800/60 rounded-lg p-3
-        transition-colors
-        ${accentClass}
-        ${cursor}
-        ${className}
-      `}
+      className={cn(
+        cardVariants({ variant, accent, interactive: onClick ? 'hover' : 'none' }),
+        className,
+      )}
       onClick={onClick}
     >
       {children}
@@ -42,10 +51,14 @@ export function Card({ children, variant = 'default', className = '', onClick, a
   )
 }
 
-/** Compact section header used inside cards */
-export function CardHeader({ children, className = '' }: { children: ReactNode; className?: string }) {
+export function CardHeader({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-2 ${className}`}>
+    <div
+      className={cn(
+        'text-[10px] font-semibold uppercase tracking-[0.14em] text-[color:var(--color-text-muted)] mb-2',
+        className,
+      )}
+    >
       {children}
     </div>
   )

@@ -1,21 +1,21 @@
 import { useState, useEffect } from 'react'
-import { Activity, AlertTriangle, Zap, TrendingDown } from 'lucide-react'
+import { Activity, AlertTriangle, TrendingDown } from 'lucide-react'
+import { motion, AnimatePresence } from 'motion/react'
 import { useMode } from '../hooks/useMode'
 import { usePoll } from '../hooks/usePoll'
 import { api } from '../lib/api'
 import LiveConfirmModal from './LiveConfirmModal'
 import { PriceFlash } from './ui'
+import StatusDot from './aurora/StatusDot'
+import { cn } from '../lib/cn'
 import type { EngineMode } from '../types'
 
 interface HeaderProps {
   wsConnected: boolean
   tradingPaused: boolean
-  /** NAV in USDC — shown always in header */
   nav?: number
-  /** Unrealized + realized delta for current session */
   navDelta?: number
   navDeltaPct?: number
-  /** Number of open positions */
   positionCount?: number
 }
 
@@ -29,6 +29,8 @@ export default function Header({
 }: HeaderProps) {
   const { viewMode, setViewMode, liveAvailable } = useMode()
   const [showConfirm, setShowConfirm] = useState(false)
+  const isLive = viewMode === 'live'
+
   const fmtSE = () =>
     new Date().toLocaleTimeString('sv-SE', {
       timeZone: 'Europe/Stockholm',
@@ -58,77 +60,106 @@ export default function Header({
   const hasDelta = navDelta !== undefined && navDelta !== 0
   const deltaPositive = (navDelta ?? 0) >= 0
 
-  // WS health: pulsing dot changes color based on connection state
-  const wsDotClass = wsConnected ? 'ws-dot-live text-emerald-400' : 'text-red-400'
-  const wsLabel = wsConnected ? 'LIVE' : 'DOWN'
-
   return (
     <>
-      <header className="flex items-center gap-3 px-4 py-2 bg-surface-900 border-b border-slate-800/80 sticky top-0 z-40">
-
-        {/* Logo + Mode toggle */}
-        <div className="flex items-center gap-3 shrink-0">
-          <div className="flex items-center gap-1.5">
-            <Zap size={15} className="text-indigo-400" />
-            <span className="text-xs font-bold tracking-widest uppercase text-slate-100">Blink</span>
+      <header
+        className={cn(
+          'relative flex items-center gap-4 px-5 py-2.5 shrink-0 z-40',
+          'border-b border-[color:var(--color-border-subtle)]',
+          'backdrop-blur-xl',
+          isLive
+            ? 'bg-[color:oklch(0.17_0.015_260/0.75)] shadow-[inset_0_-1px_0_0_oklch(0.65_0.24_25/0.15)]'
+            : 'bg-[color:oklch(0.17_0.015_260/0.7)] shadow-[inset_0_-1px_0_0_oklch(0.65_0.22_285/0.12)]',
+        )}
+      >
+        {/* Left: Brand + Mode */}
+        <div className="flex items-center gap-4 shrink-0">
+          <div className="flex items-center gap-2">
+            <motion.div
+              initial={{ rotate: -90, opacity: 0 }}
+              animate={{ rotate: 0, opacity: 1 }}
+              transition={{ type: 'spring', stiffness: 200, damping: 18 }}
+              className="relative w-6 h-6 flex items-center justify-center"
+            >
+              <div
+                className="absolute inset-0 rounded-md blur-md opacity-80"
+                style={{
+                  background:
+                    'conic-gradient(from 180deg, var(--color-aurora-2), var(--color-aurora-1), var(--color-aurora-3), var(--color-aurora-2))',
+                }}
+              />
+              <svg
+                viewBox="0 0 24 24"
+                className="relative w-[18px] h-[18px] text-white"
+                fill="currentColor"
+              >
+                <path d="M13 2 L3 14 h8 l-1 8 l10-12 h-8 z" />
+              </svg>
+            </motion.div>
+            <span className="serif-accent text-[17px] text-[color:var(--color-text-primary)] tracking-tight">
+              Blink
+            </span>
           </div>
 
-          <div className="flex items-center gap-0.5 bg-surface-800 rounded-md p-0.5 border border-slate-800">
-            <button
+          <div className="relative flex items-center rounded-lg p-0.5 border border-[color:var(--color-border-subtle)] bg-[color:oklch(0.17_0.015_260/0.6)]">
+            <ModeToggleBtn
+              active={!isLive}
               onClick={() => handleModeClick('paper')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold transition-all ${
-                viewMode === 'paper'
-                  ? 'bg-indigo-600 text-white shadow'
-                  : 'text-slate-500 hover:text-slate-300'
-              }`}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-current" />
-              PAPER
-            </button>
-            <button
+              tone="paper"
+              label="Paper"
+            />
+            <ModeToggleBtn
+              active={isLive}
               onClick={() => handleModeClick('live')}
+              tone="live"
+              label="Live"
               disabled={!liveAvailable}
-              title={!liveAvailable ? 'Start engine with LIVE_TRADING=true to enable' : undefined}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold transition-all ${
-                viewMode === 'live'
-                  ? 'bg-red-700 text-white shadow'
-                  : liveAvailable
-                  ? 'text-slate-500 hover:text-red-300'
-                  : 'text-slate-700 cursor-not-allowed'
-              }`}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full bg-current ${viewMode === 'live' ? 'live-dot' : ''}`} />
-              LIVE
-            </button>
+              disabledHint="Set LIVE_TRADING=true in engine to enable"
+            />
           </div>
         </div>
 
-        {/* ── Center: NAV always visible ─────────────────────────── */}
+        {/* Center: NAV */}
         {nav !== undefined && (
-          <div className="flex items-center gap-4 flex-1 justify-center">
-            <div className="flex items-baseline gap-2">
-              <span className="text-[10px] uppercase tracking-wider text-slate-500">NAV</span>
+          <div className="flex items-center gap-6 flex-1 justify-center min-w-0">
+            <div className="flex items-baseline gap-3">
+              <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-muted)]">
+                NAV
+              </span>
               <PriceFlash
                 value={nav}
                 format={(v) => `$${v.toFixed(2)}`}
-                className="text-base font-bold text-slate-100"
+                className="text-lg font-bold tabular font-mono text-[color:var(--color-text-primary)]"
               />
-              {hasDelta && (
-                <span className={`text-xs font-mono tabular-nums ${deltaPositive ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {deltaPositive ? '+' : ''}${(navDelta ?? 0).toFixed(2)}
-                  {navDeltaPct !== undefined && (
-                    <span className="ml-1 opacity-70">
-                      ({deltaPositive ? '+' : ''}{navDeltaPct.toFixed(2)}%)
-                    </span>
-                  )}
-                </span>
-              )}
+              <AnimatePresence>
+                {hasDelta && (
+                  <motion.span
+                    key={deltaPositive ? 'up' : 'down'}
+                    initial={{ opacity: 0, y: -3 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 3 }}
+                    className={cn(
+                      'text-xs tabular font-mono font-semibold',
+                      deltaPositive ? 'text-[color:var(--color-bull-400)]' : 'text-[color:var(--color-bear-400)]',
+                    )}
+                  >
+                    {deltaPositive ? '▲' : '▼'}
+                    {'\u00A0'}
+                    {deltaPositive ? '+' : ''}${(navDelta ?? 0).toFixed(2)}
+                    {navDeltaPct !== undefined && (
+                      <span className="ml-1 opacity-70">
+                        ({deltaPositive ? '+' : ''}{navDeltaPct.toFixed(2)}%)
+                      </span>
+                    )}
+                  </motion.span>
+                )}
+              </AnimatePresence>
             </div>
 
             {positionCount !== undefined && positionCount > 0 && (
-              <div className="flex items-center gap-1 text-[10px]">
-                <span className="text-slate-500">Positions</span>
-                <span className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 font-mono font-semibold text-slate-300">
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em]">
+                <span className="text-[color:var(--color-text-muted)]">Positions</span>
+                <span className="px-2 py-0.5 rounded-md font-mono font-semibold text-[11px] bg-[color:oklch(0.26_0.022_260/0.5)] border border-[color:var(--color-border-subtle)] text-[color:var(--color-text-primary)]">
                   {positionCount}
                 </span>
               </div>
@@ -136,29 +167,44 @@ export default function Header({
           </div>
         )}
 
-        {/* ── Right: status indicators ───────────────────────────── */}
-        <div className="flex items-center gap-3 text-[10px] text-slate-500 shrink-0 ml-auto">
-          {tradingPaused && (
-            <span className="flex items-center gap-1 text-amber-400 font-semibold">
-              <AlertTriangle size={10} /> PAUSED
-            </span>
-          )}
+        {/* Right: status */}
+        <div className="flex items-center gap-4 text-[11px] shrink-0">
+          <AnimatePresence>
+            {tradingPaused && (
+              <motion.span
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                className="flex items-center gap-1 font-semibold text-[color:var(--color-whale-400)]"
+              >
+                <AlertTriangle size={11} /> PAUSED
+              </motion.span>
+            )}
+          </AnimatePresence>
           {metrics?.available && rejections > 0 && (
             <span
-              className={`flex items-center gap-1 font-mono ${rejections > 10 ? 'text-amber-400' : 'text-slate-500'}`}
+              className={cn(
+                'flex items-center gap-1 font-mono',
+                rejections > 10
+                  ? 'text-[color:var(--color-whale-400)]'
+                  : 'text-[color:var(--color-text-muted)]',
+              )}
               title={`Signals rejected last 60s: ${rejections}`}
             >
-              <TrendingDown size={10} />
+              <TrendingDown size={11} />
               {rejections}/min
             </span>
           )}
           <span className="flex items-center gap-1.5">
-            <Activity size={10} className={`${wsDotClass}`} />
-            <span className={wsConnected ? 'text-emerald-400' : 'text-red-400'}>
-              WS {wsLabel}
+            <StatusDot tone={wsConnected ? 'ok' : 'bad'} size="sm" pulse={wsConnected ? 'slow' : 'fast'} />
+            <Activity size={11} className={wsConnected ? 'text-[color:var(--color-bull-400)]' : 'text-[color:var(--color-bear-400)]'} />
+            <span className={wsConnected ? 'text-[color:var(--color-bull-400)]' : 'text-[color:var(--color-bear-400)]'}>
+              {wsConnected ? 'LIVE' : 'DOWN'}
             </span>
           </span>
-          <span className="text-slate-600 font-mono tabular-nums">{seTime} SE</span>
+          <span className="text-[color:var(--color-text-dim)] font-mono tabular">
+            {seTime}
+          </span>
         </div>
       </header>
 
@@ -172,5 +218,65 @@ export default function Header({
         />
       )}
     </>
+  )
+}
+
+function ModeToggleBtn({
+  active,
+  onClick,
+  tone,
+  label,
+  disabled,
+  disabledHint,
+}: {
+  active: boolean
+  onClick: () => void
+  tone: 'paper' | 'live'
+  label: string
+  disabled?: boolean
+  disabledHint?: string
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={disabled ? disabledHint : undefined}
+      className={cn(
+        'relative flex items-center gap-1.5 px-3 py-1 rounded-md text-[10px] font-bold uppercase tracking-[0.1em] transition-colors',
+        active && tone === 'paper' && 'text-white',
+        active && tone === 'live' && 'text-white',
+        !active && !disabled && 'text-[color:var(--color-text-muted)] hover:text-[color:var(--color-text-primary)]',
+        disabled && 'text-[color:var(--color-text-dim)] cursor-not-allowed',
+      )}
+    >
+      {active && (
+        <motion.span
+          layoutId="mode-pill"
+          transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+          className={cn(
+            'absolute inset-0 rounded-md',
+            tone === 'paper'
+              ? 'bg-gradient-to-br from-[color:var(--color-paper-500)] to-[color:var(--color-paper-600)]'
+              : 'bg-gradient-to-br from-[color:var(--color-live-500)] to-[color:var(--color-live-danger)]',
+          )}
+          style={{
+            boxShadow:
+              tone === 'paper'
+                ? '0 4px 14px -2px oklch(0.65 0.22 285 / 0.5), inset 0 1px 0 oklch(1 0 0 / 0.15)'
+                : '0 4px 14px -2px oklch(0.65 0.24 25 / 0.5), inset 0 1px 0 oklch(1 0 0 / 0.15)',
+          }}
+        />
+      )}
+      <span className="relative flex items-center gap-1.5">
+        <span
+          className={cn(
+            'w-1.5 h-1.5 rounded-full',
+            active ? 'bg-white' : tone === 'live' ? 'bg-[color:var(--color-live-danger)]' : 'bg-[color:var(--color-paper-400)]',
+            active && tone === 'live' && 'live-dot',
+          )}
+        />
+        {label}
+      </span>
+    </button>
   )
 }

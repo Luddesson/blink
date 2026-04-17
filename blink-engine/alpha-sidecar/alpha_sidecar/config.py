@@ -22,6 +22,7 @@ class AlphaConfig:
     discovery_interval_secs: int = 300
     min_edge_bps: int = 150  # 1.5% minimum edge to generate signal
     max_llm_calls_per_cycle: int = 20
+    gamma_market_limit: int = 300  # How many markets to fetch from Gamma API per cycle
 
     # Scanner: volume sweet-spot for alpha opportunities
     scanner_min_volume_usdc: float = 5_000.0
@@ -61,6 +62,7 @@ class AlphaConfig:
             discovery_interval_secs=int(os.getenv("ALPHA_DISCOVERY_INTERVAL_SECS", str(cls.discovery_interval_secs))),
             min_edge_bps=int(os.getenv("ALPHA_MIN_EDGE_BPS", str(cls.min_edge_bps))),
             max_llm_calls_per_cycle=int(os.getenv("ALPHA_MAX_LLM_CALLS_PER_CYCLE", str(cls.max_llm_calls_per_cycle))),
+            gamma_market_limit=int(os.getenv("ALPHA_GAMMA_LIMIT", str(cls.gamma_market_limit))),
             scanner_min_volume_usdc=float(os.getenv("ALPHA_SCANNER_MIN_VOL", str(cls.scanner_min_volume_usdc))),
             scanner_max_volume_usdc=float(os.getenv("ALPHA_SCANNER_MAX_VOL", str(cls.scanner_max_volume_usdc))),
             chroma_persist_dir=os.getenv("ALPHA_CHROMA_DIR", cls.chroma_persist_dir),

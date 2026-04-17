@@ -1032,6 +1032,13 @@ impl PaperEngine {
             .unwrap_or(5.0) // Phase 6: $5 min (filter dust)
             .max(1.0);
         if size_usdc < min_trade_usdc {
+            warn!(
+                token_id      = %signal.token_id,
+                size_usdc     = %format!("${:.2}", size_usdc),
+                min_trade_usd = %format!("${:.2}", min_trade_usdc),
+                source        = %signal.signal_source,
+                "⏭️  Signal skipped — size after throttle below minimum"
+            );
             let mut p = self.portfolio.lock().await;
             p.skipped_orders += 1;
             self.record_rejection("size_after_throttle").await;
@@ -1039,13 +1046,34 @@ impl PaperEngine {
         }
 
         // Pre-trade liquidity guard.
-        let (possibly_downsized, liq_status) = self.check_liquidity_guard(&signal.token_id, signal.side, size_usdc);
+        // Alpha signals may target markets not yet in the WS feed → no book data.
+        // For those, use the thin-book fallback size rather than hard-rejecting.
+        let (possibly_downsized, liq_status) = {
+            let result = self.check_liquidity_guard(&signal.token_id, signal.side, size_usdc);
+            if result.0.is_none() && signal.signal_source == "alpha" {
+                let thin_book_fallback = std::env::var("PAPER_THIN_BOOK_FALLBACK_USDC")
+                    .ok()
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(6.0)
+                    .max(1.0);
+                let alpha_size = thin_book_fallback.min(size_usdc);
+                tracing::info!(
+                    token_id = %signal.token_id,
+                    alpha_size = %format!("${:.2}", alpha_size),
+                    "📊 Alpha signal: no book data, using thin-book fallback size"
+                );
+                (Some(alpha_size), "downsized")
+            } else {
+                result
+            }
+        };
         let size_usdc = match possibly_downsized {
             Some(s) => s,
             None => {
                 if let Some(ref log) = self.activity {
                     log_push(log, EntryKind::Skip, "Skipped — liquidity guard reject".to_string());
                 }
+                tracing::warn!(token_id = %signal.token_id, "⏭️  Liquidity guard hard-rejected signal");
                 self.record_rejection("liquidity_reject").await;
                 return;
             }
@@ -1092,7 +1120,10 @@ impl PaperEngine {
         }
 
         // 1D: Signal confidence composite score gate.
-        {
+        // Alpha signals bypass the market-based score — they've already passed two quality
+        // gates (sidecar pre-filter + agent_rpc confidence check). The market-based score
+        // penalises prediction markets with thin books even for valid AI signals.
+        if signal.signal_source != "alpha" {
             let floor = std::env::var("ALPHA_CONFIDENCE_FLOOR")
                 .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.55).clamp(0.0, 1.0);
             if floor > 0.0 {
@@ -1660,9 +1691,10 @@ impl PaperEngine {
             .unwrap_or(realism_mode);
 
         let Some((price, level_size)) = self.book_store.top_of_book(token_id, side) else {
-            if hard_reject_enabled {
-                return (None, "reject");
-            }
+            // No book data at all — use thin-book fallback regardless of hard_reject setting.
+            // Hard reject only makes sense when we have a book but it's too thin.
+            // Markets not yet in WS feed may still be valid; the depth gate provides
+            // an additional check if book data arrives later.
             return (Some(thin_book_fallback.min(size_usdc)), "downsized");
         };
         let px = price as f64 / 1_000.0;

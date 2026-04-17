@@ -14,6 +14,21 @@ use tracing::{info, warn};
 
 use crate::bullpen_bridge::{BullpenBridge, DiscoverEvent, DiscoverResponse};
 
+/// Parse an ISO-8601 end_date string into a Unix timestamp.
+fn parse_end_date(s: &str) -> Option<i64> {
+    // Try RFC-3339 / ISO-8601 (e.g. "2025-06-01T18:00:00Z")
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.timestamp());
+    }
+    // Fallback: date-only (e.g. "2025-06-01")
+    if let Ok(naive) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        use chrono::TimeZone;
+        let dt = chrono::Utc.from_utc_datetime(&naive.and_hms_opt(0, 0, 0)?);
+        return Some(dt.timestamp());
+    }
+    None
+}
+
 // ─── Configuration ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -39,7 +54,7 @@ impl DiscoverySchedulerConfig {
                 .unwrap_or(300),
             lenses: std::env::var("BULLPEN_DISCOVER_LENSES")
                 .map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
-                .unwrap_or_else(|_| vec!["sports".into(), "crypto".into(), "traders".into()]),
+                .unwrap_or_else(|_| vec!["sports".into(), "crypto".into(), "traders".into(), "all".into()]),
             limit_per_lens: std::env::var("BULLPEN_DISCOVER_LIMIT")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -66,6 +81,10 @@ pub struct EnrichedMarket {
     pub category: Option<String>,
     pub volume: Option<f64>,
     pub liquidity: Option<f64>,
+
+    /// Unix timestamp — when this market resolves (from Bullpen `end_date` field).
+    /// `None` if Bullpen did not provide an end_date for this event.
+    pub ends_at_ts: Option<i64>,
 
     /// Which Bullpen lenses found this market (e.g., ["sports", "traders"])
     pub discovery_lenses: Vec<String>,
@@ -127,6 +146,16 @@ impl DiscoveryStore {
     /// All enriched markets for serialization.
     pub fn all_markets(&self) -> Vec<&EnrichedMarket> {
         self.markets.values().collect()
+    }
+
+    /// Markets resolving within `max_hours` hours from now (based on `ends_at_ts`).
+    /// Markets without an `ends_at_ts` are excluded (we can't confirm the time window).
+    pub fn short_term_markets(&self, max_hours: u64) -> Vec<&EnrichedMarket> {
+        let cutoff = chrono::Utc::now().timestamp() + max_hours as i64 * 3600;
+        self.markets
+            .values()
+            .filter(|m| m.ends_at_ts.map(|ts| ts <= cutoff).unwrap_or(false))
+            .collect()
     }
 
     /// Number of tracked markets.
@@ -274,6 +303,12 @@ impl DiscoveryScheduler {
                 let title = event.title.clone();
                 let category = event.category.clone();
 
+                // Parse resolution deadline from the event-level end_date field.
+                let ends_at_ts: Option<i64> = event
+                    .end_date
+                    .as_deref()
+                    .and_then(parse_end_date);
+
                 // Collect token_ids from event markets
                 let token_ids: Vec<String> = event
                     .markets
@@ -305,6 +340,7 @@ impl DiscoveryScheduler {
                             category: category.clone(),
                             volume: Self::event_total_volume(event),
                             liquidity: Self::event_total_liquidity(event),
+                            ends_at_ts,
                             discovery_lenses: vec![],
                             best_volume_rank: None,
                             smart_money_interest: false,
@@ -315,6 +351,11 @@ impl DiscoveryScheduler {
                             last_seen: now,
                             seen_count: 0,
                         });
+
+                    // Update ends_at_ts if we now have it and didn't before.
+                    if entry.ends_at_ts.is_none() {
+                        entry.ends_at_ts = ends_at_ts;
+                    }
 
                     // Merge lens data
                     if !entry.discovery_lenses.contains(lens) {
@@ -448,6 +489,7 @@ mod tests {
             flow_detected: flow,
             viability_score: 0.0,
             conviction_boost: 0.0,
+            ends_at_ts: None,
             first_seen: Instant::now(),
             last_seen: Instant::now(),
             seen_count: 1,
@@ -515,6 +557,6 @@ mod tests {
         assert!(!config.enabled);
         assert_eq!(config.interval_secs, 300);
         assert_eq!(config.limit_per_lens, 50);
-        assert_eq!(config.lenses.len(), 3);
+        assert_eq!(config.lenses.len(), 4);
     }
 }

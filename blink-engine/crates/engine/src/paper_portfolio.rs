@@ -1040,11 +1040,23 @@ impl From<PersistedPaperPortfolio> for PaperPortfolio {
                 .unwrap_or_else(Local::now);
             let opened_at = {
                 // Compute actual age from wall clock — survives engine restarts.
+                // opened_at_wall is the authoritative source; Instant is best-effort.
+                // exit_strategy uses opened_at_wall directly, so Instant only matters for
+                // display / in-session tracking — a clamped age is acceptable there.
                 let wall_ms = opened_at_wall.timestamp_millis();
                 let now_ms = chrono::Local::now().timestamp_millis();
                 let real_age_secs = ((now_ms - wall_ms) / 1000).max(0) as u64;
                 now.checked_sub(Duration::from_secs(real_age_secs))
-                    .unwrap_or(now)
+                    .unwrap_or_else(|| {
+                        // Position is older than system uptime — Instant can't represent
+                        // the true age.  Exit strategy uses opened_at_wall so exits still
+                        // fire correctly; clamp to process-start for display purposes.
+                        tracing::warn!(
+                            age_secs = real_age_secs,
+                            "Position age exceeds system uptime; Instant clamped to process start"
+                        );
+                        now
+                    })
             };
             PaperPosition {
                 id: p.id,

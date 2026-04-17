@@ -179,6 +179,10 @@ pub struct DiscoverEvent {
     pub title: Option<String>,
     pub description: Option<String>,
     pub category: Option<String>,
+    /// ISO-8601 resolution deadline for this event (e.g. "2025-06-01T18:00:00Z").
+    /// Used by the signal generator to filter on markets resolving within a time window.
+    #[serde(alias = "endDate", alias = "end_date")]
+    pub end_date: Option<String>,
     #[serde(default)]
     pub markets: Vec<DiscoverEventMarket>,
 }

@@ -308,6 +308,43 @@ async def run_cycle(cfg: AlphaConfig, openai_client: AsyncOpenAI, prediction_sto
         if calibrated_confidence != llm_signal.confidence:
             llm_signal.confidence = calibrated_confidence
 
+        # Step 5b: Confidence floor check (after calibration, before edge/submission)
+        if llm_signal.confidence < cfg.confidence_floor:
+            skipped_edge += 1
+            logger.info(
+                "⏭️  Skipped %s — confidence %.2f below floor %.2f",
+                market.question[:60], llm_signal.confidence, cfg.confidence_floor,
+            )
+            top_markets.append(_build_market_entry(
+                market, llm_signal, clob, price_change_1h, None, "LOW_CONFIDENCE",
+                reasoning_chain_json=reasoning_chain_json,
+            ))
+            if prediction_store:
+                await prediction_store.record_prediction(PredictionRecord(
+                    analysis_id=llm_signal.analysis_id,
+                    condition_id=market.condition_id,
+                    token_id=market.token_id,
+                    question=market.question[:200],
+                    market_price=market.yes_price,
+                    model_action=llm_signal.recommended_action,
+                    filter_status="low_confidence",
+                    category=market.extra.get("category"),
+                    end_date=market.end_date_iso,
+                    predicted_prob=llm_signal.yes_probability,
+                    confidence=llm_signal.confidence,
+                    reasoning=llm_signal.reasoning[:500],
+                    model_used=cfg.openai_model,
+                    side=llm_signal.recommended_action,
+                    reasoning_chain_json=reasoning_chain_json,
+                    clob_best_bid=clob.best_bid if clob else None,
+                    clob_best_ask=clob.best_ask if clob else None,
+                    clob_spread_pct=clob.spread_pct if clob else None,
+                    clob_bid_depth=clob.bid_depth_usdc if clob else None,
+                    clob_ask_depth=clob.ask_depth_usdc if clob else None,
+                    price_change_1h=price_change_1h,
+                ))
+            continue
+
         # Step 6: Edge check (after calibration)
         edge_bps = compute_edge(llm_signal)
 

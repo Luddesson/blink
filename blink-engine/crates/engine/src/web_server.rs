@@ -168,6 +168,7 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/bullpen/health", get(get_bullpen_health))
         .route("/api/bullpen/discovery", get(get_bullpen_discovery))
         .route("/api/bullpen/convergence", get(get_bullpen_convergence))
+        .route("/api/bullpen/short_markets", get(get_bullpen_short_markets))
         .route("/api/market-url/{token_id}", get(get_market_url))
         .route("/api/pnl-attribution", get(get_pnl_attribution))
         .route("/api/backtest", post(post_backtest))
@@ -1238,6 +1239,79 @@ async fn get_bullpen_convergence(State(state): State<AppState>) -> impl IntoResp
         }))
     } else {
         Json(json!({ "enabled": false }))
+    }
+}
+
+async fn get_bullpen_short_markets(State(state): State<AppState>) -> impl IntoResponse {
+    let max_hours: u64 = std::env::var("BULLPEN_DISCOVER_MAX_RESOLVE_HOURS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(6);
+
+    if let Some(ref store) = state.discovery_store {
+        let s = store.read().await;
+        let now_unix = chrono::Utc::now().timestamp();
+        let cutoff = now_unix + max_hours as i64 * 3600;
+
+        // Get convergence signals for direction enrichment (if available).
+        let convergence: Vec<crate::bullpen_smart_money::ConvergenceSignal> =
+            if let Some(ref conv) = state.convergence_store {
+                conv.read().await.active_signals.clone()
+            } else {
+                vec![]
+            };
+
+        let markets: Vec<serde_json::Value> = s
+            .short_term_markets(max_hours)
+            .iter()
+            .map(|m| {
+                let secs_to_close = m.ends_at_ts.map(|ts| ts - now_unix);
+
+                // Look up any SM convergence signal for this market.
+                let conv = m.title.as_deref().and_then(|t| {
+                    let tl = t.to_lowercase();
+                    convergence.iter().find(|c| {
+                        let sl = c.market.to_lowercase();
+                        sl.contains(&tl) || tl.contains(&sl)
+                    })
+                });
+
+                json!({
+                    "token_id": m.token_id,
+                    "title": m.title,
+                    "category": m.category,
+                    "ends_at_ts": m.ends_at_ts,
+                    "secs_to_close": secs_to_close,
+                    "viability_score": m.viability_score,
+                    "smart_money_interest": m.smart_money_interest,
+                    "lenses": m.discovery_lenses,
+                    // SM enrichment — None if no convergence signal found.
+                    "sm_direction": conv.map(|c| &c.net_direction),
+                    "sm_convergence_score": conv.map(|c| c.convergence_score),
+                    "sm_total_usd": conv.map(|c| c.total_usd),
+                })
+            })
+            .collect();
+
+        // Sort by time-to-close ascending (most urgent first).
+        let mut markets = markets;
+        markets.sort_by(|a, b| {
+            let ta = a["secs_to_close"].as_i64().unwrap_or(i64::MAX);
+            let tb = b["secs_to_close"].as_i64().unwrap_or(i64::MAX);
+            ta.cmp(&tb)
+        });
+
+        Json(json!({
+            "enabled": true,
+            "max_hours": max_hours,
+            "cutoff_unix": cutoff,
+            "count": markets.len(),
+            "markets": markets,
+        }))
+        .into_response()
+    } else {
+        Json(json!({ "enabled": false, "reason": "Bullpen discovery not running" }))
+            .into_response()
     }
 }
 

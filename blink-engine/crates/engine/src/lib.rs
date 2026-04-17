@@ -49,6 +49,7 @@ pub mod buffer_pool;
 pub mod bullpen_bridge;
 pub mod bullpen_discovery;
 pub mod bullpen_reconciler;
+pub mod bullpen_signal_generator;
 pub mod bullpen_smart_money;
 pub mod clickhouse_logger;
 pub mod tick_recorder;

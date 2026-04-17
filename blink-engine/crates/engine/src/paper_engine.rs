@@ -891,7 +891,9 @@ impl PaperEngine {
                 let net_realized_pnl = pnl - pos.entry_fee_paid_usdc - exit_fee;
                 p.total_fees_paid_usdc += exit_fee;
                 p.cash_usdc += pos.usdc_spent + pnl - exit_fee;
-                let dur = pos.opened_at.elapsed().as_secs();
+                let dur = (chrono::Local::now() - pos.opened_at_wall)
+                    .num_seconds()
+                    .max(0) as u64;
                 p.closed_trades.push(crate::paper_portfolio::ClosedTrade {
                     token_id: pos.token_id.clone(),
                     market_title: pos.market_title.clone(),
@@ -1255,13 +1257,15 @@ impl PaperEngine {
                 .insert(signal.token_id.clone(), Instant::now());
             let mut p = self.portfolio.lock().await;
             p.aborted_orders += 1;
+            let drift_pct = crate::paper_portfolio::drift_threshold() * 100.0;
             warn!(
                 token_id = %signal.token_id,
-                "🛑 Paper order ABORTED — price drift exceeded 1.5% during fill window"
+                drift_threshold_pct = drift_pct,
+                "🛑 Paper order ABORTED — price drift exceeded {drift_pct:.1}% during fill window"
             );
             if let Some(ref log) = self.activity {
                 log_push(log, EntryKind::Abort, format!(
-                    "ABORTED — price moved >1.5% during 3s fill window  token={:.12}…",
+                    "ABORTED — price moved >{drift_pct:.1}% during fill window  token={:.12}…",
                     &signal.token_id
                 ));
             }

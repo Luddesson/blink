@@ -201,7 +201,12 @@ where
     let mut decisions = Vec::new();
 
     for (idx, pos) in positions.iter().enumerate() {
-        let held_secs = pos.opened_at.elapsed().as_secs();
+        // Use wall-clock time for held_secs — Instant::elapsed() silently wraps to 0
+        // when positions are older than system uptime (e.g. after a Windows reboot),
+        // causing MaxHoldExpired / StagnantExit to never fire after a restart.
+        let held_secs = (chrono::Local::now() - pos.opened_at_wall)
+            .num_seconds()
+            .max(0) as u64;
         let pnl_pct = pos.unrealized_pnl_pct();
 
         // 1. Resolved market (highest priority)

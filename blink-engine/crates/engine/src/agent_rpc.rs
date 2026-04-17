@@ -408,6 +408,12 @@ async fn submit_alpha_signal(params: Value, state: &AgentRpcState) -> std::resul
     if signal.confidence < risk_cfg.confidence_floor {
         let mut rec = record;
         rec.status = format!("rejected:low_confidence({:.2})", signal.confidence);
+        tracing::warn!(
+            analysis_id = %signal.analysis_id,
+            confidence = signal.confidence,
+            floor = risk_cfg.confidence_floor,
+            "Alpha signal rejected — confidence below floor"
+        );
         let mut a = analytics.lock().unwrap();
         a.record_reject("low_confidence");
         a.record_signal(rec);
@@ -438,6 +444,7 @@ async fn submit_alpha_signal(params: Value, state: &AgentRpcState) -> std::resul
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             let mut rec = record;
             rec.status = "rejected:queue_full".to_string();
+            tracing::warn!(analysis_id = %rec.analysis_id, "Alpha signal rejected — queue full");
             let mut a = analytics.lock().unwrap();
             a.record_reject("queue_full");
             a.record_signal(rec);

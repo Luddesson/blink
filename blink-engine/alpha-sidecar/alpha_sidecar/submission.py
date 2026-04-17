@@ -126,6 +126,14 @@ async def submit_signal(llm: LLMSignal, cfg: AlphaConfig) -> SubmitResult:
         logger.info("Engine rejected signal %s: %s", llm.analysis_id, err_msg)
         return SubmitResult(success=False, analysis_id=llm.analysis_id, error=err_msg)
 
+    result = data.get("result", {})
+    if not result.get("accepted", True):
+        reason = result.get("reason", "unknown")
+        logger.warning(
+            "⚠️  Engine rejected signal %s: %s", llm.analysis_id, reason
+        )
+        return SubmitResult(success=False, analysis_id=llm.analysis_id, error=reason)
+
     spread_info = (
         f" spread={llm.clob.spread_pct * 10_000:.0f}bps" if llm.clob else ""
     )

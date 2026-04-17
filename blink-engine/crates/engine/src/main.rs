@@ -446,6 +446,30 @@ async fn main() -> Result<()> {
         }
     };
 
+    // ── Bullpen Signal Generator (SM → 6h markets → RN1Signal) ──────────
+    if let Some(ref conv_store) = convergence_store {
+        let sg_config = engine::bullpen_signal_generator::SignalGenConfig::from_env();
+        if sg_config.enabled {
+            let generator = engine::bullpen_signal_generator::BullpenSignalGenerator::new(
+                Arc::clone(&discovery_store),
+                Arc::clone(conv_store),
+                Arc::clone(&book_store),
+                signal_tx.clone(),
+                Arc::clone(&market_subscriptions),
+                Arc::clone(&ws_force_reconnect),
+                sg_config,
+            );
+            let sg_shutdown = Arc::clone(&shutdown);
+            tokio::spawn(async move { generator.run(sg_shutdown).await });
+            log_push(
+                &activity,
+                EntryKind::Engine,
+                "Bullpen signal generator started".to_string(),
+            );
+            info!("Bullpen signal generator started");
+        }
+    }
+
     let rpc_enabled = env_flag("AGENT_RPC_ENABLED");
     let rpc_bind_addr = std::env::var("AGENT_RPC_BIND")
         .unwrap_or_else(|_| "127.0.0.1:7878".to_string());

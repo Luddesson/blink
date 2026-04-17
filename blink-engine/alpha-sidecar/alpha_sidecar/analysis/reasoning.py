@@ -104,6 +104,7 @@ async def run_reasoning_chain(
     client: AsyncOpenAI,
     clob: OrderbookSnapshot | None = None,
     price_change_1h: float | None = None,
+    news_context: str | None = None,
 ) -> ReasoningChain | None:
     """Execute the 2-call reasoning chain.
 
@@ -133,6 +134,7 @@ async def run_reasoning_chain(
         clob_bid_depth=clob.bid_depth_usdc if clob else None,
         clob_ask_depth=clob.ask_depth_usdc if clob else None,
         price_change_1h=price_change_str,
+        news_context=news_context,
     )
 
     try:

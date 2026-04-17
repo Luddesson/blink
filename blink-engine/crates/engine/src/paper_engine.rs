@@ -481,9 +481,11 @@ impl PaperEngine {
         }
 
         // ── Per-token dedup: skip if we already hold a position on this token ──
+        // Alpha signals bypass this gate — different signal source = independent edge thesis.
         {
+            let is_alpha_signal = signal.signal_source == "alpha";
             let mut p = self.portfolio.lock().await;
-            if p.positions.iter().any(|pos| pos.token_id == signal.token_id) {
+            if !is_alpha_signal && p.positions.iter().any(|pos| pos.token_id == signal.token_id) {
                 warn!(token_id = %signal.token_id, "⏭️  Already holding position — skipping");
                 p.skipped_orders += 1;
                 drop(p);
@@ -492,7 +494,7 @@ impl PaperEngine {
             }
             // ── Per-match concentration limit: max 2 positions on same event ──
             let max_per_match: usize = std::env::var("MAX_POSITIONS_PER_MATCH")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(4);
             if let Some(title) = signal.market_title.as_deref() {
                 let match_key = title.split(':').next().unwrap_or(title).trim().to_lowercase();
                 if match_key.len() > 5 {
@@ -523,7 +525,7 @@ impl PaperEngine {
         // 2C: Soft dedup window — skip if we filled this (token, side) recently.
         {
             let dedup_window_ms = std::env::var("DEDUP_WINDOW_MS")
-                .ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(30_000);
+                .ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(10_000);
             let dedup_key = format!("{}:{}", signal.token_id, signal.side);
             let blocked = {
                 let mut rf = self.recent_fills.lock().unwrap();
@@ -587,7 +589,7 @@ impl PaperEngine {
         // Skip signals where the event starts more than N hours from now.
         // We only skip when we actually know the start time — unknown timing passes through.
         let max_event_horizon_secs: i64 = std::env::var("EVENT_HORIZON_HOURS")
-            .ok().and_then(|v| v.parse::<i64>().ok()).unwrap_or(6) * 3600;
+            .ok().and_then(|v| v.parse::<i64>().ok()).unwrap_or(24) * 3600;
         if let Some(start_ts) = signal.event_start_time {
             let now_secs = chrono::Utc::now().timestamp();
             if start_ts > now_secs + max_event_horizon_secs {
@@ -1060,7 +1062,7 @@ impl PaperEngine {
             let imbalance_gate = std::env::var("IMBALANCE_GATE")
                 .ok().map(|v| v != "false" && v != "0").unwrap_or(true);
             let imbalance_threshold = std::env::var("IMBALANCE_THRESHOLD")
-                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.50).clamp(0.05, 0.95);
+                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.70).clamp(0.05, 0.95);
             if imbalance_gate {
                 if let Some(book) = self.book_store.get_book_snapshot(&signal.token_id) {
                     let bid_depth: f64 = book.bids.values().map(|&s| s as f64).sum::<f64>() / 1_000.0;

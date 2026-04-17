@@ -370,7 +370,7 @@ export default function BacktestPage() {
                         tick={{ fontSize: 10, fill: '#64748b' }} width={48} />
                       <Tooltip contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 6 }}
                         labelStyle={{ color: '#94a3b8', fontSize: 10 }}
-                        formatter={(v: number) => [`$${v.toFixed(2)}`, 'NAV']}
+                        formatter={(v) => [`$${Number(v ?? 0).toFixed(2)}`, 'NAV']}
                         labelFormatter={() => ''} />
                       <ReferenceLine y={config.starting_usdc} stroke="#475569" strokeDasharray="3 3" />
                       <Line type="monotone" dataKey="nav" stroke="#818cf8" strokeWidth={1.5}

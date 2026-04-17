@@ -177,6 +177,7 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/analytics/equity", get(get_analytics_equity))
         .route("/api/alpha", get(get_alpha_status))
         .route("/api/alpha/calibration", get(get_alpha_calibration))
+        .route("/api/gates", get(get_gates))
         .route("/ws", get(ws_handler))
         .with_state(state)
         .layer(cors);
@@ -1923,4 +1924,54 @@ async fn get_alpha_calibration(State(state): State<AppState>) -> impl IntoRespon
             "reason": "No calibration data yet — waiting for predictions to resolve"
         })).into_response(),
     }
+}
+
+/// Per-gate rejection analytics — shows which gates are blocking signals
+/// and how often, enabling remote diagnosis of overly aggressive filters.
+async fn get_gates(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let Some(ref paper) = state.paper else {
+        return Json(json!({"error": "Paper engine not available"}));
+    };
+
+    let analytics = paper.rejection_analytics_handle();
+    let ra = analytics.lock().await;
+
+    let now_secs = chrono::Utc::now().timestamp();
+    let one_hour_ago = now_secs - 3600;
+    let twenty_four_hours_ago = now_secs - 86400;
+
+    let mut gates: Vec<serde_json::Value> = Vec::new();
+    let mut total_1h: usize = 0;
+    let mut total_24h: usize = 0;
+
+    for (reason, timestamps) in &ra.reasons {
+        let count_1h = timestamps.iter().filter(|&&t| t >= one_hour_ago).count();
+        let count_24h = timestamps.iter().filter(|&&t| t >= twenty_four_hours_ago).count();
+        let count_all = timestamps.len();
+        let last_triggered = timestamps.iter().max().copied();
+
+        total_1h += count_1h;
+        total_24h += count_24h;
+
+        gates.push(json!({
+            "gate": reason,
+            "rejections_1h": count_1h,
+            "rejections_24h": count_24h,
+            "rejections_total": count_all,
+            "last_triggered_epoch": last_triggered,
+        }));
+    }
+
+    // Sort by 1h count descending — most active blockers first
+    gates.sort_by(|a, b| {
+        let a_count = a["rejections_1h"].as_u64().unwrap_or(0);
+        let b_count = b["rejections_1h"].as_u64().unwrap_or(0);
+        b_count.cmp(&a_count)
+    });
+
+    Json(json!({
+        "total_rejections_1h": total_1h,
+        "total_rejections_24h": total_24h,
+        "gates": gates,
+    }))
 }

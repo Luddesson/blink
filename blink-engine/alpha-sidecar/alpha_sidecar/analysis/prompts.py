@@ -124,6 +124,7 @@ def get_deep_analysis_prompt(
     clob_bid_depth: float | None = None,
     clob_ask_depth: float | None = None,
     price_change_1h: str | None = None,
+    news_context: str | None = None,
 ) -> str:
     """Build the deep analysis prompt (Call 1 of the reasoning chain)."""
     guidance = _CATEGORY_GUIDANCE.get(category, _CATEGORY_GUIDANCE["default"])
@@ -152,6 +153,12 @@ Live Orderbook (CLOB data):
   Bid Depth:    ${clob_bid_depth:,.0f} USDC (top 5 levels)
   Ask Depth:    ${clob_ask_depth:,.0f} USDC (top 5 levels)
   1h Price chg: {price_change_1h or 'n/a'}
+"""
+
+    if news_context:
+        prompt += f"""
+{news_context}
+USE THIS NEWS to inform your analysis — it contains information the market may not have priced in yet.
 """
 
     prompt += """

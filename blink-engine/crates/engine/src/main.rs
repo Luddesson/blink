@@ -1035,7 +1035,13 @@ async fn main() -> Result<()> {
                         market_outcome: None,
                         side: signal.side,
                         price: (signal.recommended_price * 1000.0) as u64,
-                        size: (signal.recommended_size_usdc * 1000.0) as u64,
+                        // size must be shares×1000 so that notional = price×size/1_000_000 = usdc.
+                        // recommended_size_usdc is already in USD, so convert to shares first.
+                        size: if signal.recommended_price > 0.001 {
+                            (signal.recommended_size_usdc / signal.recommended_price * 1000.0) as u64
+                        } else {
+                            (signal.recommended_size_usdc * 1000.0) as u64
+                        },
                         order_id: format!("alpha-{}", signal.analysis_id),
                         detected_at: signal.received_at.unwrap_or_else(std::time::Instant::now),
                         event_start_time: None,

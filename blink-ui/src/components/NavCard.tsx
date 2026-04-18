@@ -161,7 +161,7 @@ export default function NavCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.32, ease: [0.2, 0, 0, 1] }}
       className={cn(
-        'relative rounded-xl p-5 overflow-hidden glass',
+        'relative rounded-xl p-5 overflow-visible glass',
         isLive
           ? 'shadow-[0_0_0_1px_oklch(0.65_0.24_25/0.25),0_24px_64px_-20px_oklch(0.65_0.24_25/0.4)]'
           : 'shadow-[0_0_0_1px_oklch(0.75_0.18_170/0.22),0_24px_64px_-20px_oklch(0.70_0.22_290/0.35)]',
@@ -181,7 +181,7 @@ export default function NavCard({
       <div className="relative">
         {/* Top row */}
         <div className="flex items-center justify-between mb-3">
-          <span className="serif-accent text-[15px] text-[color:var(--color-text-primary)]">
+          <span className="font-sans text-[10px] text-[color:var(--color-text-muted)] uppercase tracking-[0.12em]">
             PnL since start
           </span>
           <div className="flex items-center gap-2">

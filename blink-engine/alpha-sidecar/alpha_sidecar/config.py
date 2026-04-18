@@ -20,7 +20,7 @@ class AlphaConfig:
     gamma_api_url: str = "https://gamma-api.polymarket.com/markets"
     clob_api_url: str = "https://clob.polymarket.com"
     discovery_interval_secs: int = 300
-    min_edge_bps: int = 150  # 1.5% minimum edge to generate signal
+    min_edge_bps: int = 80  # 0.8% minimum edge to generate signal
     max_llm_calls_per_cycle: int = 20
     gamma_market_limit: int = 300  # How many markets to fetch from Gamma API per cycle
 
@@ -35,7 +35,7 @@ class AlphaConfig:
     # Risk (sidecar-side pre-filter, engine has final say)
     confidence_floor: float = 0.50
     max_recommended_size_usdc: float = 25.0
-    max_expiry_hours: float = 6.0  # Only bet on markets expiring within this window
+    max_expiry_hours: float = 168.0  # Only bet on markets expiring within this window (1 week)
 
     # Reasoning chain (Phase 2)
     reasoning_chain_enabled: bool = True

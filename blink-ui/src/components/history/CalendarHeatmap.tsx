@@ -93,41 +93,43 @@ export default function CalendarHeatmap({ dailyPnl, dailyTrades }: Props) {
         </div>
       </div>
 
-      <div className="grid grid-cols-7 gap-1">
-        {DAY_LABELS.map(d => (
-          <div key={d} className="text-[9px] text-slate-600 text-center font-medium py-0.5">{d}</div>
-        ))}
-        {cells.map(cell => (
-          <div
-            key={cell.key}
-            className={`
-              relative aspect-square rounded-sm flex flex-col items-center justify-center
-              ${cell.day === 0 ? '' : pnlColor(cell.pnl, maxAbs)}
-              ${cell.key === todayKey ? 'ring-1 ring-cyan-400/60' : ''}
-              group
-            `}
-          >
-            {cell.day > 0 && (
-              <>
-                <span className="text-[10px] text-slate-400 font-mono">{cell.day}</span>
-                {cell.trades > 0 && (
-                  <span className={`text-[8px] font-mono font-semibold ${cell.pnl >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
-                    {cell.pnl >= 0 ? '+' : ''}{fmt(cell.pnl, 2)}
-                  </span>
-                )}
-                {cell.trades > 0 && (
-                  <div className="absolute z-20 bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block
-                    bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[10px] text-slate-300 whitespace-nowrap shadow-lg">
-                    <div className={cell.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}>
-                      P&L: {cell.pnl >= 0 ? '+' : ''}${fmt(cell.pnl)}
+      <div style={{ transform: 'scale(0.5)', transformOrigin: 'top left' }}>
+        <div className="grid grid-cols-7 gap-1">
+          {DAY_LABELS.map(d => (
+            <div key={d} className="text-[9px] text-slate-600 text-center font-medium py-0.5">{d}</div>
+          ))}
+          {cells.map(cell => (
+            <div
+              key={cell.key}
+              className={`
+                relative aspect-square rounded-sm flex flex-col items-center justify-center
+                ${cell.day === 0 ? '' : pnlColor(cell.pnl, maxAbs)}
+                ${cell.key === todayKey ? 'ring-1 ring-cyan-400/60' : ''}
+                group
+              `}
+            >
+              {cell.day > 0 && (
+                <>
+                  <span className="text-[10px] text-slate-400 font-mono">{cell.day}</span>
+                  {cell.trades > 0 && (
+                    <span className={`text-[8px] font-mono font-semibold ${cell.pnl >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                      {cell.pnl >= 0 ? '+' : ''}{fmt(cell.pnl, 2)}
+                    </span>
+                  )}
+                  {cell.trades > 0 && (
+                    <div className="absolute z-20 bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block
+                      bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[10px] text-slate-300 whitespace-nowrap shadow-lg">
+                      <div className={cell.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}>
+                        P&L: {cell.pnl >= 0 ? '+' : ''}${fmt(cell.pnl)}
+                      </div>
+                      <div className="text-slate-500">{cell.trades} trade{cell.trades > 1 ? 's' : ''}</div>
                     </div>
-                    <div className="text-slate-500">{cell.trades} trade{cell.trades > 1 ? 's' : ''}</div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        ))}
+                  )}
+                </>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="flex items-center justify-center gap-2 mt-2">

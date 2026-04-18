@@ -58,17 +58,23 @@ export async function resolveMarketUrl(tokenId: string): Promise<string | null> 
 
 /**
  * Fetch Polymarket metadata from Gamma API (public, no auth required)
+/**
+ * Fetch Polymarket metadata from Gamma API (public, no auth required)
  * Returns market image, question, 24h volume, and category.
  */
 export async function fetchPolymarketMeta(tokenId: string): Promise<PolymarketMeta | null> {
   try {
-    const res = await fetch(
-      `https://gamma-api.polymarket.com/markets?clob_token_ids=${tokenId}`,
-      { signal: AbortSignal.timeout(8_000) }
-    )
-    if (!res.ok) return null
+    const url = `https://gamma-api.polymarket.com/markets?token_id=${tokenId}`
+    const res = await fetch(url, { signal: AbortSignal.timeout(8_000) })
+    if (!res.ok) {
+      console.warn(`[fetchPolymarketMeta] API returned ${res.status} for ${tokenId}`)
+      return null
+    }
     const data = await res.json() as any
-    if (!Array.isArray(data) || data.length === 0) return null
+    if (!Array.isArray(data) || data.length === 0) {
+      console.warn(`[fetchPolymarketMeta] Empty or non-array response for ${tokenId}:`, data)
+      return null
+    }
     const market = data[0]
     return {
       image: market.image ?? '',
@@ -76,10 +82,12 @@ export async function fetchPolymarketMeta(tokenId: string): Promise<PolymarketMe
       volume: market.volume_24h ?? '0',
       category: market.category ?? '',
     }
-  } catch {
+  } catch (err) {
+    console.error(`[fetchPolymarketMeta] Error fetching metadata for ${tokenId}:`, err)
     return null
   }
 }
+
 
 /**
  * Hook to fetch Polymarket metadata for multiple token IDs

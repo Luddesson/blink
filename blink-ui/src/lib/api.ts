@@ -16,6 +16,15 @@ import type {
   StatusResponse,
   TwinSnapshot,
 } from '../types'
+import { useEffect, useState } from 'react'
+
+// Polymarket Gamma API types
+export interface PolymarketMeta {
+  image: string
+  question: string
+  volume: string
+  category: string
+}
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path, { signal: AbortSignal.timeout(10_000) })
@@ -45,6 +54,76 @@ export async function resolveMarketUrl(tokenId: string): Promise<string | null> 
   } catch {
     return null
   }
+}
+
+/**
+ * Fetch Polymarket metadata from Gamma API (public, no auth required)
+ * Returns market image, question, 24h volume, and category.
+ */
+export async function fetchPolymarketMeta(tokenId: string): Promise<PolymarketMeta | null> {
+  try {
+    const res = await fetch(
+      `https://gamma-api.polymarket.com/markets?clob_token_ids=${tokenId}`,
+      { signal: AbortSignal.timeout(8_000) }
+    )
+    if (!res.ok) return null
+    const data = await res.json() as any
+    if (!Array.isArray(data) || data.length === 0) return null
+    const market = data[0]
+    return {
+      image: market.image ?? '',
+      question: market.question ?? '',
+      volume: market.volume_24h ?? '0',
+      category: market.category ?? '',
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Hook to fetch Polymarket metadata for multiple token IDs
+ * Dedupes requests and caches results per session
+ */
+const metaCache = new Map<string, Promise<PolymarketMeta | null>>()
+
+export function useMarketMeta(tokenIds: string[]) {
+  const [metadata, setMetadata] = useState<Map<string, PolymarketMeta>>(new Map())
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (tokenIds.length === 0) {
+      setMetadata(new Map())
+      setLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setLoading(true)
+
+    Promise.all(
+      tokenIds.map((id) => {
+        if (!metaCache.has(id)) {
+          metaCache.set(id, fetchPolymarketMeta(id))
+        }
+        return metaCache.get(id)!.then((m) => ({ id, meta: m }))
+      })
+    ).then((results) => {
+      if (cancelled) return
+      const map = new Map<string, PolymarketMeta>()
+      results.forEach(({ id, meta }) => {
+        if (meta) map.set(id, meta)
+      })
+      setMetadata(map)
+      setLoading(false)
+    }).catch(() => {
+      if (!cancelled) setLoading(false)
+    })
+
+    return () => { cancelled = true }
+  }, [tokenIds])
+
+  return { metadata, loading }
 }
 
 export const api = {

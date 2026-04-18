@@ -23,7 +23,9 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(ls:*)",
       "Bash(npx tsc *)",
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "Bash(grep -E \"\\\\.tsx$\")",
+      "Bash(xargs grep *)"
     ]
   }
 }

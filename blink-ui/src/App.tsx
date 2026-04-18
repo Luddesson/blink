@@ -201,7 +201,7 @@ export default function App() {
             {activeTab === 'history' && <HistoryPage />}
             {activeTab === 'intelligence' && <BullpenPage />}
             {activeTab === 'performance' && <PerformancePage portfolio={portfolio} positions={positions} />}
-            {activeTab === 'config' && <ConfigPage risk={risk} />}
+            {activeTab === 'config' && <ConfigPage risk={risk} connected={connected} />}
             {activeTab === 'alpha' && <AlphaPage />}
           </motion.div>
         </AnimatePresence>

@@ -10,7 +10,7 @@ export default function EquityCurveChart({ equityCurve }: Props) {
     return (
       <div className="card">
         <span className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-3 block">
-          Equity Curve
+          Cumulative Realized PnL
         </span>
         <p className="text-xs text-slate-500">Insufficient data</p>
       </div>
@@ -29,7 +29,7 @@ export default function EquityCurveChart({ equityCurve }: Props) {
     <div className="card">
       <div className="flex items-center justify-between mb-3">
         <span className="text-xs font-semibold uppercase tracking-widest text-slate-500">
-          Equity Curve
+          Cumulative Realized PnL
         </span>
         <span className={`text-xs font-mono font-semibold ${lastEquity >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
           {lastEquity >= 0 ? '+' : ''}${lastEquity.toFixed(2)}
@@ -60,7 +60,7 @@ export default function EquityCurveChart({ equityCurve }: Props) {
           <Tooltip
             contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 6, fontSize: 11 }}
             labelFormatter={(v) => fmtChartTime(Number(v))}
-            formatter={(v) => [`$${Number(v).toFixed(4)}`, 'Equity']}
+            formatter={(v) => [`$${Number(v).toFixed(4)}`, 'PnL']}
           />
           <ReferenceLine y={0} stroke="#475569" strokeDasharray="3 3" />
           <Area

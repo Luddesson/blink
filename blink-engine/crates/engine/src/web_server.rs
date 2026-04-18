@@ -496,7 +496,7 @@ async fn get_history(
     let Ok(p) = paper.portfolio.try_lock() else {
         return Json(json!({"error": "Portfolio busy", "retry": true}));
     };
-    let per_page = params.per_page.unwrap_or(50).clamp(1, 500);
+    let per_page = params.per_page.unwrap_or(50).clamp(1, 5000);
     let total = p.closed_trades.len();
     let total_pages = total.div_ceil(per_page).max(1);
     let page = params.page.unwrap_or(1).clamp(1, total_pages);

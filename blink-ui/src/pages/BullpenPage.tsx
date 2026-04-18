@@ -12,7 +12,7 @@ export default function BullpenPage() {
 
   // health is null while loading; health.enabled=false means BULLPEN_ENABLED not set
   const notEnabled = health !== null && !health.enabled
-  const failingHard = !!(health?.enabled && (health?.consecutive_failures ?? 0) >= 5)
+  const failingCritical = !!(health?.enabled && (health?.consecutive_failures ?? 0) >= 3)
 
   if (notEnabled) {
     return (
@@ -38,29 +38,54 @@ export default function BullpenPage() {
 
   return (
     <div className="flex-1 flex flex-col gap-2 p-2 overflow-hidden min-h-0">
-      {failingHard && (
-        <div className="bg-red-900/40 border border-red-700/50 rounded px-3 py-2 text-xs text-red-300 flex items-center gap-2 shrink-0">
-          <span>⚠</span>
-          <span>Bullpen CLI has {health?.consecutive_failures} consecutive failures — check WSL2 is running and bullpen is installed.</span>
+      {failingCritical && (
+        <div className="bg-gradient-to-r from-red-950/80 to-red-900/60 border border-red-700/60 rounded-lg px-4 py-3 shrink-0 backdrop-blur-sm">
+          <div className="flex items-start gap-3">
+            <span className="text-lg mt-0.5">⚠️</span>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-semibold text-red-200 mb-1">Bullpen Offline</h3>
+              <p className="text-xs text-red-300/90 mb-2">
+                {health?.consecutive_failures} consecutive failures — sidecar may have crashed
+              </p>
+              <p className="text-xs text-red-400 font-mono bg-red-950/40 rounded px-2 py-1.5 inline-block">
+                Check alpha sidecar logs / restart sidecar
+              </p>
+              {health?.last_error && (
+                <p className="text-xs text-red-300/70 mt-2 italic truncate" title={health.last_error}>
+                  Last error: {health.last_error}
+                </p>
+              )}
+            </div>
+          </div>
         </div>
       )}
+
       <ErrorBoundary label="BullpenHeader">
         <BullpenHeader health={health} discovery={discovery} />
       </ErrorBoundary>
 
-      <div className="flex-1 grid grid-cols-[1fr_380px] gap-2 overflow-hidden min-h-0">
-        <ErrorBoundary label="DiscoveryTable">
-          <div className="overflow-y-auto min-h-0">
-            <DiscoveryTable discovery={discovery} />
+      {failingCritical ? (
+        <div className="flex-1 flex items-center justify-center text-center text-slate-500 p-4">
+          <div>
+            <p className="text-sm mb-2">Discovery and convergence data unavailable</p>
+            <p className="text-xs text-slate-600">Waiting for sidecar recovery...</p>
           </div>
-        </ErrorBoundary>
+        </div>
+      ) : (
+        <div className="flex-1 grid grid-cols-[1fr_380px] gap-2 overflow-hidden min-h-0">
+          <ErrorBoundary label="DiscoveryTable">
+            <div className="overflow-y-auto min-h-0">
+              <DiscoveryTable discovery={discovery} />
+            </div>
+          </ErrorBoundary>
 
-        <ErrorBoundary label="ConvergenceMonitor">
-          <div className="overflow-y-auto min-h-0">
-            <ConvergenceMonitor convergence={convergence} />
-          </div>
-        </ErrorBoundary>
-      </div>
+          <ErrorBoundary label="ConvergenceMonitor">
+            <div className="overflow-y-auto min-h-0">
+              <ConvergenceMonitor convergence={convergence} />
+            </div>
+          </ErrorBoundary>
+        </div>
+      )}
     </div>
   )
 }

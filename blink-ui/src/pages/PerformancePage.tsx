@@ -1,3 +1,5 @@
+import { useMemo } from 'react'
+import { motion } from 'motion/react'
 import { usePoll } from '../hooks/usePoll'
 import { api } from '../lib/api'
 import ErrorBoundary from '../components/ErrorBoundary'
@@ -31,11 +33,31 @@ export default function PerformancePage({ portfolio, positions = [] }: Props) {
   const openCount = positions.length
   const uptime = portfolio?.uptime_secs ?? 0
 
+  const isWarmingUp = useMemo(() => {
+    return !latency?.signal_age || (latency.signal_age.count ?? 0) < 10
+  }, [latency?.signal_age])
+
+  const sampleCount = useMemo(() => {
+    return latency?.signal_age?.count ?? 0
+  }, [latency?.signal_age?.count])
+
   return (
     <div className="flex-1 flex flex-col gap-2 p-2 overflow-y-auto min-h-0">
       {/* Quality badge row */}
       <ErrorBoundary label="QualityBadge">
-        <QualityBadge latency={latency} />
+        <div className="flex flex-col gap-2">
+          <QualityBadge latency={latency} />
+          {isWarmingUp && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.3 }}
+              className="text-xs text-slate-400 font-mono pl-1"
+            >
+              Collecting signal samples… ({sampleCount} / 10)
+            </motion.div>
+          )}
+        </div>
       </ErrorBoundary>
 
       {/* Latency + KPI row */}

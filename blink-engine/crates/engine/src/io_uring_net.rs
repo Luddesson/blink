@@ -87,9 +87,9 @@ impl AsyncNetworkIo for TokioNet {
         Box::pin(async move {
             use tokio::io::AsyncReadExt;
             let mut guard = self.stream.lock().await;
-            let stream = guard
-                .as_mut()
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected"))?;
+            let stream = guard.as_mut().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")
+            })?;
             stream.read(buf).await
         })
     }
@@ -98,9 +98,9 @@ impl AsyncNetworkIo for TokioNet {
         Box::pin(async move {
             use tokio::io::AsyncWriteExt;
             let mut guard = self.stream.lock().await;
-            let stream = guard
-                .as_mut()
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected"))?;
+            let stream = guard.as_mut().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")
+            })?;
             stream.write_all(buf).await
         })
     }
@@ -109,9 +109,9 @@ impl AsyncNetworkIo for TokioNet {
         Box::pin(async move {
             use tokio::io::AsyncWriteExt;
             let mut guard = self.stream.lock().await;
-            let stream = guard
-                .as_mut()
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected"))?;
+            let stream = guard.as_mut().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")
+            })?;
             stream.flush().await
         })
     }
@@ -192,15 +192,12 @@ impl AsyncNetworkIo for IoUringNet {
         Box::pin(async move {
             use std::net::ToSocketAddrs;
 
-            let sock_addr = addr
-                .to_socket_addrs()?
-                .next()
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("could not resolve address: {addr}"),
-                    )
-                })?;
+            let sock_addr = addr.to_socket_addrs()?.next().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("could not resolve address: {addr}"),
+                )
+            })?;
 
             let tcp = tokio_uring::net::TcpStream::connect(sock_addr).await?;
 
@@ -232,11 +229,9 @@ impl AsyncNetworkIo for IoUringNet {
     fn read<'a>(&'a self, buf: &'a mut [u8]) -> BoxFuture<'a, IoResult<usize>> {
         Box::pin(async move {
             // SAFETY: single-threaded tokio-uring runtime.
-            let stream = unsafe { self.stream_mut() }
-                .as_ref()
-                .ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")
-                })?;
+            let stream = unsafe { self.stream_mut() }.as_ref().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")
+            })?;
 
             // tokio-uring uses owned buffers. Allocate a Vec, read into it,
             // then copy to the caller's slice. For typical WebSocket frames
@@ -252,11 +247,9 @@ impl AsyncNetworkIo for IoUringNet {
     fn write_all<'a>(&'a self, buf: &'a [u8]) -> BoxFuture<'a, IoResult<()>> {
         Box::pin(async move {
             // SAFETY: single-threaded tokio-uring runtime.
-            let stream = unsafe { self.stream_mut() }
-                .as_ref()
-                .ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")
-                })?;
+            let stream = unsafe { self.stream_mut() }.as_ref().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")
+            })?;
 
             // tokio-uring write_all takes ownership of the buffer.
             // Copy the caller's slice into an owned Vec.

@@ -15,20 +15,20 @@ pub const MAX_ENTRIES: usize = 200;
 /// Severity / colour hint for the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
-    Engine,  // grey  — startup, connection events
-    Signal,  // cyan  — RN1 order detected
-    Fill,    // green — paper order filled
-    Abort,   // red   — drift failsafe triggered
-    Skip,    // yellow — signal skipped (size too small)
-    Warn,    // yellow — generic warning
+    Engine, // grey  — startup, connection events
+    Signal, // cyan  — RN1 order detected
+    Fill,   // green — paper order filled
+    Abort,  // red   — drift failsafe triggered
+    Skip,   // yellow — signal skipped (size too small)
+    Warn,   // yellow — generic warning
 }
 
 #[derive(Debug, Clone)]
 pub struct ActivityEntry {
     /// Wall-clock time, formatted as `HH:MM:SS`.
     pub timestamp: String,
-    pub kind:      EntryKind,
-    pub message:   String,
+    pub kind: EntryKind,
+    pub message: String,
 }
 
 /// Shared activity log handle.

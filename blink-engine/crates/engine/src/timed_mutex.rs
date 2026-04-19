@@ -27,12 +27,15 @@ const WARN_THRESHOLD: Duration = Duration::from_millis(100);
 /// A `std::sync::Mutex<T>` wrapper that warns when its guard is held too long.
 pub struct TimedMutex<T> {
     inner: Mutex<T>,
-    name:  &'static str,
+    name: &'static str,
 }
 
 impl<T> TimedMutex<T> {
     pub fn new(name: &'static str, value: T) -> Self {
-        Self { inner: Mutex::new(value), name }
+        Self {
+            inner: Mutex::new(value),
+            name,
+        }
     }
 
     /// Acquire the lock, recovering from poison.
@@ -43,9 +46,9 @@ impl<T> TimedMutex<T> {
     pub fn lock_or_recover(&self) -> TimedMutexGuard<'_, T> {
         let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         TimedMutexGuard {
-            inner:       guard,
+            inner: guard,
             acquired_at: Instant::now(),
-            name:        self.name,
+            name: self.name,
         }
     }
 
@@ -54,9 +57,9 @@ impl<T> TimedMutex<T> {
         &self,
     ) -> Result<TimedMutexGuard<'_, T>, std::sync::PoisonError<MutexGuard<'_, T>>> {
         self.inner.lock().map(|guard| TimedMutexGuard {
-            inner:       guard,
+            inner: guard,
             acquired_at: Instant::now(),
-            name:        self.name,
+            name: self.name,
         })
     }
 
@@ -78,20 +81,24 @@ impl<T: std::fmt::Debug> std::fmt::Debug for TimedMutex<T> {
 /// Dereferences transparently to `T`. On drop, emits `tracing::warn!` if the
 /// guard was held longer than [`WARN_THRESHOLD`].
 pub struct TimedMutexGuard<'a, T> {
-    inner:       MutexGuard<'a, T>,
+    inner: MutexGuard<'a, T>,
     acquired_at: Instant,
-    name:        &'static str,
+    name: &'static str,
 }
 
 impl<T> Deref for TimedMutexGuard<'_, T> {
     type Target = T;
     #[inline]
-    fn deref(&self) -> &T { &self.inner }
+    fn deref(&self) -> &T {
+        &self.inner
+    }
 }
 
 impl<T> DerefMut for TimedMutexGuard<'_, T> {
     #[inline]
-    fn deref_mut(&mut self) -> &mut T { &mut self.inner }
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.inner
+    }
 }
 
 impl<T> Drop for TimedMutexGuard<'_, T> {
@@ -99,7 +106,7 @@ impl<T> Drop for TimedMutexGuard<'_, T> {
         let held = self.acquired_at.elapsed();
         if held > WARN_THRESHOLD {
             tracing::warn!(
-                mutex   = self.name,
+                mutex = self.name,
                 held_ms = held.as_millis(),
                 "Sync mutex held >{}ms — potential executor stall or deadlock risk",
                 WARN_THRESHOLD.as_millis(),

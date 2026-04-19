@@ -5,8 +5,8 @@
 //! [`std::sync::Arc`] for cheap sharing across tasks.
 
 use anyhow::{Context, Result};
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const CANONICAL_LIVE_PROFILE: &str = "canonical-v1";
 
@@ -112,7 +112,10 @@ impl fmt::Debug for Config {
             .field("markets", &self.markets)
             .field("log_level", &self.log_level)
             .field("ws_reconnect_debounce_ms", &self.ws_reconnect_debounce_ms)
-            .field("ws_parse_error_preview_chars", &self.ws_parse_error_preview_chars)
+            .field(
+                "ws_parse_error_preview_chars",
+                &self.ws_parse_error_preview_chars,
+            )
             .field("live_trading", &self.live_trading)
             .field("signer_private_key", &"[REDACTED]")
             .field("funder_address", &self.funder_address)
@@ -121,16 +124,34 @@ impl fmt::Debug for Config {
             .field("api_passphrase", &"[REDACTED]")
             .field("polymarket_signature_type", &self.polymarket_signature_type)
             .field("polymarket_order_nonce", &self.polymarket_order_nonce)
-            .field("polymarket_order_expiration", &self.polymarket_order_expiration)
+            .field(
+                "polymarket_order_expiration",
+                &self.polymarket_order_expiration,
+            )
             .field("live_profile", &self.live_profile)
             .field("live_rollout_stage", &self.live_rollout_stage)
-            .field("live_canary_max_order_usdc", &self.live_canary_max_order_usdc)
-            .field("live_canary_max_orders_per_session", &self.live_canary_max_orders_per_session)
+            .field(
+                "live_canary_max_order_usdc",
+                &self.live_canary_max_order_usdc,
+            )
+            .field(
+                "live_canary_max_orders_per_session",
+                &self.live_canary_max_orders_per_session,
+            )
             .field("live_canary_daytime_only", &self.live_canary_daytime_only)
-            .field("live_canary_start_hour_utc", &self.live_canary_start_hour_utc)
+            .field(
+                "live_canary_start_hour_utc",
+                &self.live_canary_start_hour_utc,
+            )
             .field("live_canary_end_hour_utc", &self.live_canary_end_hour_utc)
-            .field("live_canary_max_reject_streak", &self.live_canary_max_reject_streak)
-            .field("live_canary_allowed_markets", &self.live_canary_allowed_markets)
+            .field(
+                "live_canary_max_reject_streak",
+                &self.live_canary_max_reject_streak,
+            )
+            .field(
+                "live_canary_allowed_markets",
+                &self.live_canary_allowed_markets,
+            )
             .field("alpha_enabled", &self.alpha_enabled)
             .field("alpha_sidecar_url", &self.alpha_sidecar_url)
             .finish()
@@ -157,20 +178,17 @@ impl Config {
     /// Returns an error if any required variable is missing or empty.
     #[tracing::instrument(name = "config::from_env")]
     pub fn from_env() -> Result<Self> {
-        let clob_host = std::env::var("CLOB_HOST")
-            .context("CLOB_HOST environment variable not set")?;
+        let clob_host =
+            std::env::var("CLOB_HOST").context("CLOB_HOST environment variable not set")?;
 
-        let ws_url = std::env::var("WS_URL")
-            .context("WS_URL environment variable not set")?;
+        let ws_url = std::env::var("WS_URL").context("WS_URL environment variable not set")?;
 
-        let rn1_wallet_raw = std::env::var("RN1_WALLET")
-            .context("RN1_WALLET environment variable not set")?;
+        let rn1_wallet_raw =
+            std::env::var("RN1_WALLET").context("RN1_WALLET environment variable not set")?;
 
-        let markets_str = std::env::var("MARKETS")
-            .unwrap_or_default();
+        let markets_str = std::env::var("MARKETS").unwrap_or_default();
 
-        let log_level = std::env::var("LOG_LEVEL")
-            .unwrap_or_else(|_| "info".to_string());
+        let log_level = std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
         let ws_reconnect_debounce_ms = std::env::var("WS_RECONNECT_DEBOUNCE_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -205,24 +223,22 @@ impl Config {
         if let Ok(ks_path) = std::env::var("KEYSTORE_PATH") {
             let passphrase = std::env::var("KEYSTORE_PASSPHRASE")
                 .context("KEYSTORE_PATH set but KEYSTORE_PASSPHRASE missing")?;
-            let secrets = tee_vault::keystore::decrypt_keystore(
-                std::path::Path::new(&ks_path),
-                &passphrase,
-            )
-            .with_context(|| format!("decrypt keystore: {ks_path}"))?;
+            let secrets =
+                tee_vault::keystore::decrypt_keystore(std::path::Path::new(&ks_path), &passphrase)
+                    .with_context(|| format!("decrypt keystore: {ks_path}"))?;
             tracing::info!(path = %ks_path, "loaded credentials from encrypted keystore");
             signer_private_key = secrets.signer_private_key.clone();
-            funder_address     = secrets.funder_address.clone();
-            api_key            = secrets.api_key.clone();
-            api_secret         = secrets.api_secret.clone();
-            api_passphrase     = secrets.api_passphrase.clone();
+            funder_address = secrets.funder_address.clone();
+            api_key = secrets.api_key.clone();
+            api_secret = secrets.api_secret.clone();
+            api_passphrase = secrets.api_passphrase.clone();
             // secrets is zeroized on drop here
         } else {
             signer_private_key = std::env::var("SIGNER_PRIVATE_KEY").unwrap_or_default();
-            funder_address     = std::env::var("POLYMARKET_FUNDER_ADDRESS").unwrap_or_default();
-            api_key            = std::env::var("POLYMARKET_API_KEY").unwrap_or_default();
-            api_secret         = std::env::var("POLYMARKET_API_SECRET").unwrap_or_default();
-            api_passphrase     = std::env::var("POLYMARKET_API_PASSPHRASE").unwrap_or_default();
+            funder_address = std::env::var("POLYMARKET_FUNDER_ADDRESS").unwrap_or_default();
+            api_key = std::env::var("POLYMARKET_API_KEY").unwrap_or_default();
+            api_secret = std::env::var("POLYMARKET_API_SECRET").unwrap_or_default();
+            api_passphrase = std::env::var("POLYMARKET_API_PASSPHRASE").unwrap_or_default();
         }
         let polymarket_signature_type = std::env::var("POLYMARKET_SIGNATURE_TYPE")
             .ok()
@@ -246,10 +262,11 @@ impl Config {
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(20.0);
-        let live_canary_max_orders_per_session = std::env::var("LIVE_CANARY_MAX_ORDERS_PER_SESSION")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(0);
+        let live_canary_max_orders_per_session =
+            std::env::var("LIVE_CANARY_MAX_ORDERS_PER_SESSION")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0);
         let live_canary_daytime_only = std::env::var("LIVE_CANARY_DAYTIME_ONLY")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
@@ -441,7 +458,11 @@ impl Config {
         if !errors.is_empty() {
             anyhow::bail!(
                 "Paper-trading configuration errors:\n{}",
-                errors.iter().map(|e| format!("  • {e}")).collect::<Vec<_>>().join("\n")
+                errors
+                    .iter()
+                    .map(|e| format!("  • {e}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             );
         }
         Ok(())

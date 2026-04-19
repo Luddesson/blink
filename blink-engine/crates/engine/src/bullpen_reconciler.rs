@@ -198,8 +198,7 @@ impl BullpenReconciler {
 
                     if let Some(bp_price) = bp_price {
                         if bp_price > 0.0 {
-                            let divergence_pct =
-                                ((ws_price - bp_price) / bp_price * 100.0).abs();
+                            let divergence_pct = ((ws_price - bp_price) / bp_price * 100.0).abs();
                             let alert = divergence_pct > self.config.price_divergence_pct;
 
                             if alert {
@@ -242,10 +241,8 @@ impl BullpenReconciler {
                 max_divergence
             ));
         } else if has_alert {
-            report.overall_status = ReconciliationStatus::MinorDrift(format!(
-                "Max divergence {:.2}%",
-                max_divergence
-            ));
+            report.overall_status =
+                ReconciliationStatus::MinorDrift(format!("Max divergence {:.2}%", max_divergence));
         }
 
         Ok(report)

@@ -34,9 +34,9 @@ pub struct GameStartSignal {
 /// Polls CLOB prices for each watched market and fires a [`GameStartSignal`]
 /// the first time a market looks in-play.
 pub struct GameStartWatcher {
-    token_ids:   Vec<String>,
+    token_ids: Vec<String>,
     clob_client: Arc<ClobClient>,
-    tx:          broadcast::Sender<GameStartSignal>,
+    tx: broadcast::Sender<GameStartSignal>,
     interval_ms: u64,
 }
 
@@ -45,9 +45,9 @@ impl GameStartWatcher {
     ///
     /// `tx` is the broadcast sender — callers subscribe to it to receive signals.
     pub fn new(
-        config:      &Config,
+        config: &Config,
         clob_client: Arc<ClobClient>,
-        tx:          broadcast::Sender<GameStartSignal>,
+        tx: broadcast::Sender<GameStartSignal>,
     ) -> Self {
         let interval_ms = std::env::var("GAME_WATCHER_INTERVAL_MS")
             .ok()
@@ -77,8 +77,8 @@ impl GameStartWatcher {
         let interval = Duration::from_millis(self.interval_ms);
 
         info!(
-            markets      = self.token_ids.len(),
-            interval_ms  = self.interval_ms,
+            markets = self.token_ids.len(),
+            interval_ms = self.interval_ms,
             "GameStartWatcher started"
         );
 
@@ -97,7 +97,7 @@ impl GameStartWatcher {
                     continue;
                 }
 
-                let buy_result  = self.clob_client.get_price(token_id, OrderSide::Buy).await;
+                let buy_result = self.clob_client.get_price(token_id, OrderSide::Buy).await;
                 let sell_result = self.clob_client.get_price(token_id, OrderSide::Sell).await;
 
                 let game_started = match (&buy_result, &sell_result) {
@@ -105,7 +105,7 @@ impl GameStartWatcher {
                     (Err(_), _) | (_, Err(_)) => true,
                     // Both sides returned successfully; check if prices are zero.
                     (Ok(buy_str), Ok(sell_str)) => {
-                        let buy:  f64 = buy_str.parse().unwrap_or(0.0);
+                        let buy: f64 = buy_str.parse().unwrap_or(0.0);
                         let sell: f64 = sell_str.parse().unwrap_or(0.0);
                         buy == 0.0 && sell == 0.0
                     }
@@ -118,7 +118,7 @@ impl GameStartWatcher {
                     );
                     fired.insert(token_id.clone());
                     let signal = GameStartSignal {
-                        token_id:    token_id.clone(),
+                        token_id: token_id.clone(),
                         detected_at: Instant::now(),
                     };
                     // A send error just means no active receivers; log and move on.

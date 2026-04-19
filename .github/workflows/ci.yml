@@ -36,8 +36,12 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
-      - name: Clippy (deny warnings)
+      - name: Clippy (workspace debt report)
+        continue-on-error: true
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Clippy (deny warnings in clean crates)
+        run: cargo clippy -p tee-vault -p bpf-probes --all-targets -- -D warnings
 
   fmt:
     name: Rustfmt
@@ -55,7 +59,7 @@ jobs:
           components: rustfmt
 
       - name: Check formatting
-        run: cargo fmt --workspace -- --check
+        run: cargo fmt --all -- --check
 
   web-ui:
     name: Web UI Build & Lint

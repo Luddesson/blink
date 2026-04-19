@@ -13,7 +13,7 @@ use crate::types::OrderSide;
 /// HTTP client for the Polymarket CLOB REST API.
 #[allow(dead_code)]
 pub struct ClobClient {
-    client:   reqwest::Client,
+    client: reqwest::Client,
     base_url: String,
 }
 
@@ -57,7 +57,10 @@ impl ClobClient {
     /// Returns the price as the raw decimal string from the API.
     #[instrument(skip(self), fields(token_id, side = %side, latency_ms))]
     pub async fn get_price(&self, token_id: &str, side: OrderSide) -> Result<String> {
-        let url = format!("{}/price?token_id={}&side={}", self.base_url, token_id, side);
+        let url = format!(
+            "{}/price?token_id={}&side={}",
+            self.base_url, token_id, side
+        );
         let value = self.get_json(&url).await?;
         let price = value
             .get("price")

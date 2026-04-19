@@ -28,7 +28,10 @@ pub struct LocalStub {
 
 impl LocalStub {
     pub fn new(starting_balance: f64) -> Self {
-        Self { balance: Mutex::new(starting_balance), name: "local_stub".to_string() }
+        Self {
+            balance: Mutex::new(starting_balance),
+            name: "local_stub".to_string(),
+        }
     }
 }
 
@@ -63,7 +66,10 @@ pub fn create_provider_from_env() -> Option<Arc<dyn ExecutionProvider>> {
     let prov = std::env::var("CUSTODIAL_PROVIDER").unwrap_or_else(|_| "none".to_string());
     match prov.as_str() {
         "local_stub" | "stub" => Some(Arc::new(LocalStub::new(
-            std::env::var("STARTING_USDC").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(100.0),
+            std::env::var("STARTING_USDC")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(100.0),
         ))),
         _ => None,
     }

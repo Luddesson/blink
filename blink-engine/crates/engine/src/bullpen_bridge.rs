@@ -20,7 +20,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, Semaphore};
@@ -139,7 +139,11 @@ pub struct CommandStats {
 
 impl CommandStats {
     pub fn avg_latency_ms(&self) -> f64 {
-        if self.total_calls == 0 { 0.0 } else { self.total_latency_ms / self.total_calls as f64 }
+        if self.total_calls == 0 {
+            0.0
+        } else {
+            self.total_latency_ms / self.total_calls as f64
+        }
     }
 }
 
@@ -428,7 +432,10 @@ impl BullpenBridge {
             }
         }
 
-        let _permit = self.semaphore.acquire().await
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
             .map_err(|_| anyhow!("Bullpen semaphore closed"))?;
 
         let start = Instant::now();
@@ -512,7 +519,11 @@ impl BullpenBridge {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("Bullpen exited {}: {}", output.status, stderr.trim()));
+            return Err(anyhow!(
+                "Bullpen exited {}: {}",
+                output.status,
+                stderr.trim()
+            ));
         }
 
         String::from_utf8(output.stdout).context("Invalid UTF-8 in bullpen output")
@@ -540,7 +551,11 @@ impl BullpenBridge {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("Bullpen exited {}: {}", output.status, stderr.trim()));
+            return Err(anyhow!(
+                "Bullpen exited {}: {}",
+                output.status,
+                stderr.trim()
+            ));
         }
 
         String::from_utf8(output.stdout).context("Invalid UTF-8 in bullpen output")
@@ -563,7 +578,10 @@ impl BullpenBridge {
     async fn record_success(&self, command: &str, elapsed: Duration) {
         let ms = elapsed.as_millis() as f64;
         let mut diag = self.diagnostics.write().await;
-        let stats = diag.calls_by_command.entry(command.to_string()).or_default();
+        let stats = diag
+            .calls_by_command
+            .entry(command.to_string())
+            .or_default();
         stats.total_calls += 1;
         stats.successes += 1;
         stats.total_latency_ms += ms;
@@ -575,13 +593,16 @@ impl BullpenBridge {
         h.total_calls += 1;
         h.consecutive_failures = 0;
         h.circuit_open_until = None; // reset circuit breaker on success
-        // Exponential moving average of latency
+                                     // Exponential moving average of latency
         h.avg_latency_ms = h.avg_latency_ms * 0.9 + ms * 0.1;
     }
 
     async fn record_failure(&self, command: &str, err: &anyhow::Error) {
         let mut diag = self.diagnostics.write().await;
-        let stats = diag.calls_by_command.entry(command.to_string()).or_default();
+        let stats = diag
+            .calls_by_command
+            .entry(command.to_string())
+            .or_default();
         stats.total_calls += 1;
         stats.failures += 1;
 
@@ -595,7 +616,8 @@ impl BullpenBridge {
         const CIRCUIT_BREAKER_THRESHOLD: u32 = 5;
         const CIRCUIT_BREAKER_COOLDOWN_SECS: u64 = 60;
         if h.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD && h.circuit_open_until.is_none() {
-            h.circuit_open_until = Some(Instant::now() + Duration::from_secs(CIRCUIT_BREAKER_COOLDOWN_SECS));
+            h.circuit_open_until =
+                Some(Instant::now() + Duration::from_secs(CIRCUIT_BREAKER_COOLDOWN_SECS));
             tracing::error!(
                 consecutive_failures = h.consecutive_failures,
                 cooldown_secs = CIRCUIT_BREAKER_COOLDOWN_SECS,
@@ -623,7 +645,8 @@ impl BullpenBridge {
 impl BullpenBridge {
     /// Discover markets via one of 7 lenses.
     pub async fn discover_markets(&self, lens: &str) -> Result<DiscoverResponse> {
-        self.execute(&["polymarket", "discover", lens], "discover").await
+        self.execute(&["polymarket", "discover", lens], "discover")
+            .await
     }
 }
 
@@ -631,12 +654,20 @@ impl BullpenBridge {
 impl BullpenBridge {
     /// Get smart money signals (top_traders | new_wallet | aggregated).
     pub async fn smart_money(&self, signal_type: &str) -> Result<GenericJson> {
-        self.execute(&["polymarket", "data", "smart-money", "--type", signal_type], "smart_money").await
+        self.execute(
+            &["polymarket", "data", "smart-money", "--type", signal_type],
+            "smart_money",
+        )
+        .await
     }
 
     /// Profile a specific trader by wallet address.
     pub async fn trader_profile(&self, address: &str) -> Result<GenericJson> {
-        self.execute(&["polymarket", "data", "profile", address], "trader_profile").await
+        self.execute(
+            &["polymarket", "data", "profile", address],
+            "trader_profile",
+        )
+        .await
     }
 
     /// Get filtered trade feed (high-P&L trades).
@@ -645,7 +676,8 @@ impl BullpenBridge {
         self.execute(
             &["polymarket", "feed", "trades", "--min-pnl", &min_pnl_str],
             "trade_feed",
-        ).await
+        )
+        .await
     }
 }
 
@@ -658,17 +690,29 @@ impl BullpenBridge {
 
     /// Get order book for a token ID.
     pub async fn clob_book(&self, token_id: &str) -> Result<GenericJson> {
-        self.execute(&["polymarket", "clob", "book", "--token", token_id], "clob_book").await
+        self.execute(
+            &["polymarket", "clob", "book", "--token", token_id],
+            "clob_book",
+        )
+        .await
     }
 
     /// Get midpoint price for a token ID.
     pub async fn clob_midpoint(&self, token_id: &str) -> Result<GenericJson> {
-        self.execute(&["polymarket", "clob", "midpoint", "--token", token_id], "clob_midpoint").await
+        self.execute(
+            &["polymarket", "clob", "midpoint", "--token", token_id],
+            "clob_midpoint",
+        )
+        .await
     }
 
     /// Get bid-ask spread for a token ID.
     pub async fn clob_spread(&self, token_id: &str) -> Result<GenericJson> {
-        self.execute(&["polymarket", "clob", "spread", "--token", token_id], "clob_spread").await
+        self.execute(
+            &["polymarket", "clob", "spread", "--token", token_id],
+            "clob_spread",
+        )
+        .await
     }
 }
 
@@ -676,7 +720,8 @@ impl BullpenBridge {
 impl BullpenBridge {
     /// Get all open positions with P&L.
     pub async fn positions(&self) -> Result<GenericJson> {
-        self.execute(&["polymarket", "positions"], "positions").await
+        self.execute(&["polymarket", "positions"], "positions")
+            .await
     }
 
     /// Get account balance.
@@ -697,7 +742,8 @@ impl BullpenBridge {
         self.execute(
             &["polymarket", "orders", "--cancel-all", "--yes"],
             "cancel_all",
-        ).await
+        )
+        .await
     }
 }
 
@@ -806,6 +852,9 @@ mod tests {
         let result = bridge.discover_markets("all").await;
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("disabled"), "Expected 'disabled' in: {err_msg}");
+        assert!(
+            err_msg.contains("disabled"),
+            "Expected 'disabled' in: {err_msg}"
+        );
     }
 }

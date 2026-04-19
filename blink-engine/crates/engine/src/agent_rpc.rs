@@ -7,18 +7,20 @@
 
 use std::io;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex,
 };
 use std::time::Duration;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::alpha_signal::{AlphaAnalytics, AlphaCycleReport, AlphaRiskConfig, AlphaSignal, AlphaSignalRecord};
+use crate::alpha_signal::{
+    AlphaAnalytics, AlphaCycleReport, AlphaRiskConfig, AlphaSignal, AlphaSignalRecord,
+};
 use crate::paper_engine::PaperEngine;
 
 #[derive(Clone)]
@@ -32,7 +34,8 @@ pub struct AgentRpcState {
     pub paper: Option<Arc<PaperEngine>>,
     pub bullpen: Option<Arc<crate::bullpen_bridge::BullpenBridge>>,
     pub discovery_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_discovery::DiscoveryStore>>>,
-    pub convergence_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_smart_money::ConvergenceStore>>>,
+    pub convergence_store:
+        Option<Arc<tokio::sync::RwLock<crate::bullpen_smart_money::ConvergenceStore>>>,
     /// Channel for submitting AI-generated alpha signals into the engine.
     pub alpha_signal_tx: Option<tokio::sync::mpsc::Sender<AlphaSignal>>,
     /// Alpha trading analytics (accept/reject counts, P&L attribution).
@@ -128,7 +131,9 @@ fn parse_http_headers(req: &str) -> Result<(&str, &str, usize, usize)> {
     };
     let head = &req[..header_end];
     let mut lines = head.lines();
-    let first = lines.next().ok_or_else(|| anyhow!("missing request line"))?;
+    let first = lines
+        .next()
+        .ok_or_else(|| anyhow!("missing request line"))?;
     let mut parts = first.split_whitespace();
     let method = parts.next().ok_or_else(|| anyhow!("missing HTTP method"))?;
     let path = parts.next().ok_or_else(|| anyhow!("missing HTTP path"))?;
@@ -142,7 +147,10 @@ fn parse_http_headers(req: &str) -> Result<(&str, &str, usize, usize)> {
     Ok((method, path, content_len, header_end + 4))
 }
 
-async fn handle_rpc(req: RpcRequest, state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+async fn handle_rpc(
+    req: RpcRequest,
+    state: &AgentRpcState,
+) -> std::result::Result<Value, RpcError> {
     match req.method.as_str() {
         "blink_status" => blink_status(state).await,
         "paper_summary" => paper_summary(state).await,
@@ -156,13 +164,24 @@ async fn handle_rpc(req: RpcRequest, state: &AgentRpcState) -> std::result::Resu
         "report_alpha_cycle" => report_alpha_cycle(req.params, state).await,
         "report_alpha_calibration" => report_alpha_calibration(req.params, state).await,
         "alpha_status" => alpha_status(state).await,
-        _ => Err(RpcError { code: -32601, message: "Method not found".to_string() }),
+        _ => Err(RpcError {
+            code: -32601,
+            message: "Method not found".to_string(),
+        }),
     }
 }
 
 async fn blink_status(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
-    let risk_status = state.risk_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let subscriptions = state.market_subscriptions.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let risk_status = state
+        .risk_status
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let subscriptions = state
+        .market_subscriptions
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let mut base = json!({
         "timestamp_ms": chrono::Utc::now().timestamp_millis(),
         "ws_connected": state.ws_live.load(Ordering::Relaxed),
@@ -173,7 +192,19 @@ async fn blink_status(state: &AgentRpcState) -> std::result::Result<Value, RpcEr
     });
 
     if let Some(ref paper) = state.paper {
-        let (cash_usdc, nav_usdc, invested_usdc, unrealized_pnl_usdc, realized_pnl_usdc, open_positions, closed_trades, total_signals, filled_orders, skipped_orders, aborted_orders) = {
+        let (
+            cash_usdc,
+            nav_usdc,
+            invested_usdc,
+            unrealized_pnl_usdc,
+            realized_pnl_usdc,
+            open_positions,
+            closed_trades,
+            total_signals,
+            filled_orders,
+            skipped_orders,
+            aborted_orders,
+        ) = {
             let p = paper.portfolio.lock().await;
             (
                 p.cash_usdc,
@@ -211,11 +242,19 @@ async fn blink_status(state: &AgentRpcState) -> std::result::Result<Value, RpcEr
 
 async fn paper_summary(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
     let Some(ref paper) = state.paper else {
-        return Err(RpcError { code: -32001, message: "Paper mode not active".to_string() });
+        return Err(RpcError {
+            code: -32001,
+            message: "Paper mode not active".to_string(),
+        });
     };
     let (cash_usdc, nav_usdc, open_positions, closed_trades) = {
         let p = paper.portfolio.lock().await;
-        (p.cash_usdc, p.nav(), p.positions.len(), p.closed_trades.len())
+        (
+            p.cash_usdc,
+            p.nav(),
+            p.positions.len(),
+            p.closed_trades.len(),
+        )
     };
     let summary = paper.execution_summary().await;
     Ok(json!({
@@ -320,7 +359,10 @@ async fn bullpen_convergence(state: &AgentRpcState) -> std::result::Result<Value
     }))
 }
 
-async fn bullpen_discover(params: Value, state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+async fn bullpen_discover(
+    params: Value,
+    state: &AgentRpcState,
+) -> std::result::Result<Value, RpcError> {
     let bridge = state.bullpen.as_ref().ok_or(RpcError {
         code: -32000,
         message: "Bullpen bridge not enabled".into(),
@@ -338,7 +380,10 @@ async fn bullpen_discover(params: Value, state: &AgentRpcState) -> std::result::
     }
 }
 
-async fn bullpen_smart_money_rpc(params: Value, state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+async fn bullpen_smart_money_rpc(
+    params: Value,
+    state: &AgentRpcState,
+) -> std::result::Result<Value, RpcError> {
     let bridge = state.bullpen.as_ref().ok_or(RpcError {
         code: -32000,
         message: "Bullpen bridge not enabled".into(),
@@ -355,7 +400,10 @@ async fn bullpen_smart_money_rpc(params: Value, state: &AgentRpcState) -> std::r
 
 // ── Alpha Signal RPC methods ────────────────────────────────────────────────
 
-async fn submit_alpha_signal(params: Value, state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+async fn submit_alpha_signal(
+    params: Value,
+    state: &AgentRpcState,
+) -> std::result::Result<Value, RpcError> {
     let tx = state.alpha_signal_tx.as_ref().ok_or(RpcError {
         code: -32000,
         message: "Alpha pipeline not enabled (set ALPHA_ENABLED=true)".into(),
@@ -456,12 +504,18 @@ async fn submit_alpha_signal(params: Value, state: &AgentRpcState) -> std::resul
             let mut a = analytics.lock().unwrap_or_else(|e| e.into_inner());
             a.record_reject("engine_shutdown");
             a.record_signal(rec);
-            Err(RpcError { code: -32000, message: "Engine shutting down".into() })
+            Err(RpcError {
+                code: -32000,
+                message: "Engine shutting down".into(),
+            })
         }
     }
 }
 
-async fn report_alpha_cycle(params: Value, state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+async fn report_alpha_cycle(
+    params: Value,
+    state: &AgentRpcState,
+) -> std::result::Result<Value, RpcError> {
     let analytics = state.alpha_analytics.as_ref().ok_or(RpcError {
         code: -32000,
         message: "Alpha analytics not available".into(),
@@ -473,7 +527,10 @@ async fn report_alpha_cycle(params: Value, state: &AgentRpcState) -> std::result
     })?;
 
     let n_markets = report.top_markets.len();
-    analytics.lock().unwrap_or_else(|e| e.into_inner()).record_cycle(report);
+    analytics
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .record_cycle(report);
     tracing::info!(markets = n_markets, "Alpha cycle report received");
 
     Ok(json!({ "ok": true }))
@@ -498,14 +555,20 @@ async fn alpha_status(state: &AgentRpcState) -> std::result::Result<Value, RpcEr
     }))
 }
 
-async fn report_alpha_calibration(params: Value, state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+async fn report_alpha_calibration(
+    params: Value,
+    state: &AgentRpcState,
+) -> std::result::Result<Value, RpcError> {
     let analytics = state.alpha_analytics.as_ref().ok_or(RpcError {
         code: -32000,
         message: "Alpha analytics not available".into(),
     })?;
 
     // Store the calibration data as-is (JSON blob from Python sidecar)
-    analytics.lock().unwrap_or_else(|e| e.into_inner()).calibration = Some(params);
+    analytics
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .calibration = Some(params);
     tracing::info!("Alpha calibration report received");
 
     Ok(json!({ "ok": true }))

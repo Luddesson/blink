@@ -52,40 +52,79 @@ fn realism_mode() -> bool {
 pub fn detect_fee_category(title: &str) -> (&'static str, f64) {
     let t = title.to_lowercase();
     // Geopolitics — 0% fee (Polymarket promo category, still 0)
-    if t.contains("geopolit") || t.contains("sanction") || t.contains("nato")
-        || t.contains("war ") || t.contains("military") || t.contains("treaty")
-        || t.contains("united nations") || t.contains("diplomacy")
+    if t.contains("geopolit")
+        || t.contains("sanction")
+        || t.contains("nato")
+        || t.contains("war ")
+        || t.contains("military")
+        || t.contains("treaty")
+        || t.contains("united nations")
+        || t.contains("diplomacy")
     {
         return ("geopolitics", 0.00);
     }
     // Sports
-    if t.contains("win on 2") || t.contains("o/u ") || t.contains("over/under")
-        || t.contains(" vs ") || t.contains(" vs. ") || t.contains("afc")
-        || t.contains(" fc ") || t.contains("nba") || t.contains("nfl")
-        || t.contains("mlb") || t.contains("nhl") || t.contains("soccer")
-        || t.contains("tennis") || t.contains("golf") || t.contains("boxing")
-        || t.contains("ufc") || t.contains("mma") || t.contains("f1 ")
-        || t.contains("formula") || t.contains("grand prix")
-        || t.contains("serie a") || t.contains("la liga") || t.contains("bundesliga")
-        || t.contains("premier league") || t.contains("ligue 1")
-        || t.contains("campinas") || t.contains("linz") || t.contains("open:")
-        || t.contains("championship") || t.contains("cup ")
+    if t.contains("win on 2")
+        || t.contains("o/u ")
+        || t.contains("over/under")
+        || t.contains(" vs ")
+        || t.contains(" vs. ")
+        || t.contains("afc")
+        || t.contains(" fc ")
+        || t.contains("nba")
+        || t.contains("nfl")
+        || t.contains("mlb")
+        || t.contains("nhl")
+        || t.contains("soccer")
+        || t.contains("tennis")
+        || t.contains("golf")
+        || t.contains("boxing")
+        || t.contains("ufc")
+        || t.contains("mma")
+        || t.contains("f1 ")
+        || t.contains("formula")
+        || t.contains("grand prix")
+        || t.contains("serie a")
+        || t.contains("la liga")
+        || t.contains("bundesliga")
+        || t.contains("premier league")
+        || t.contains("ligue 1")
+        || t.contains("campinas")
+        || t.contains("linz")
+        || t.contains("open:")
+        || t.contains("championship")
+        || t.contains("cup ")
     {
         return ("sports", 0.0001);
     }
     // Politics
-    if t.contains("president") || t.contains("election") || t.contains("congress")
-        || t.contains("senate") || t.contains("governor") || t.contains("democrat")
-        || t.contains("republican") || t.contains("trump") || t.contains("biden")
-        || t.contains("poll") || t.contains("vote") || t.contains("party")
-        || t.contains("legislation") || t.contains("bill ")
+    if t.contains("president")
+        || t.contains("election")
+        || t.contains("congress")
+        || t.contains("senate")
+        || t.contains("governor")
+        || t.contains("democrat")
+        || t.contains("republican")
+        || t.contains("trump")
+        || t.contains("biden")
+        || t.contains("poll")
+        || t.contains("vote")
+        || t.contains("party")
+        || t.contains("legislation")
+        || t.contains("bill ")
     {
         return ("politics", 0.0001);
     }
     // Crypto
-    if t.contains("bitcoin") || t.contains("btc") || t.contains("ethereum")
-        || t.contains("eth ") || t.contains("crypto") || t.contains("solana")
-        || t.contains("token") || t.contains("defi") || t.contains("nft")
+    if t.contains("bitcoin")
+        || t.contains("btc")
+        || t.contains("ethereum")
+        || t.contains("eth ")
+        || t.contains("crypto")
+        || t.contains("solana")
+        || t.contains("token")
+        || t.contains("defi")
+        || t.contains("nft")
     {
         return ("crypto", 0.0001);
     }
@@ -101,13 +140,13 @@ pub fn polymarket_taker_fee(shares: f64, price: f64) -> f64 {
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(0.0001)
         .clamp(0.0, 0.20);
-    let fee = shares * price * rate;  // notional × rate (flat, not variance)
+    let fee = shares * price * rate; // notional × rate (flat, not variance)
     (fee * 100_000.0).round() / 100_000.0
 }
 
 /// Category-aware taker fee: flat rate on notional.
 pub fn polymarket_taker_fee_with_rate(shares: f64, price: f64, fee_rate: f64) -> f64 {
-    let fee = shares * price * fee_rate;  // notional × rate (flat, not variance)
+    let fee = shares * price * fee_rate; // notional × rate (flat, not variance)
     (fee * 100_000.0).round() / 100_000.0
 }
 
@@ -134,7 +173,7 @@ fn apply_exit_slippage(price: f64, side: &OrderSide) -> f64 {
     let slip = exit_slippage_bps() / 10_000.0;
     match side {
         // Selling shares (BUY positions close by selling) → price worsens downward
-        OrderSide::Buy  => (price * (1.0 - slip)).max(0.001),
+        OrderSide::Buy => (price * (1.0 - slip)).max(0.001),
         // Buying back (SELL positions close by buying) → price worsens upward
         OrderSide::Sell => (price * (1.0 + slip)).min(0.999),
     }
@@ -201,8 +240,8 @@ impl PaperPosition {
     #[inline]
     pub fn unrealized_pnl(&self) -> f64 {
         match self.side {
-            OrderSide::Buy  => (self.current_price - self.entry_price) * self.shares,
-            OrderSide::Sell => (self.entry_price   - self.current_price) * self.shares,
+            OrderSide::Buy => (self.current_price - self.entry_price) * self.shares,
+            OrderSide::Sell => (self.entry_price - self.current_price) * self.shares,
         }
     }
 
@@ -390,17 +429,17 @@ impl PaperPortfolio {
     /// Creates a fresh portfolio with `STARTING_BALANCE_USDC` virtual USDC.
     pub fn new() -> Self {
         Self {
-            cash_usdc:      STARTING_BALANCE_USDC,
+            cash_usdc: STARTING_BALANCE_USDC,
             total_fees_paid_usdc: 0.0,
-            positions:      Vec::new(),
-            closed_trades:  Vec::new(),
-            total_signals:  0,
-            filled_orders:  0,
+            positions: Vec::new(),
+            closed_trades: Vec::new(),
+            total_signals: 0,
+            filled_orders: 0,
             aborted_orders: 0,
             skipped_orders: 0,
-            equity_curve:       Vec::with_capacity(EQUITY_CURVE_MAX),
-            equity_timestamps:  Vec::with_capacity(EQUITY_CURVE_MAX),
-            next_id:        1,
+            equity_curve: Vec::with_capacity(EQUITY_CURVE_MAX),
+            equity_timestamps: Vec::with_capacity(EQUITY_CURVE_MAX),
+            next_id: 1,
             last_equity_push_ts: 0,
         }
     }
@@ -409,7 +448,11 @@ impl PaperPortfolio {
 
     /// Total net asset value: cash + market value of open positions.
     pub fn nav(&self) -> f64 {
-        let haircut = if realism_mode() { exit_haircut_bps() } else { 0.0 };
+        let haircut = if realism_mode() {
+            exit_haircut_bps()
+        } else {
+            0.0
+        };
         let mkt_value: f64 = self
             .positions
             .iter()
@@ -432,7 +475,11 @@ impl PaperPortfolio {
 
     /// Sum of unrealized P&L across all open positions.
     pub fn unrealized_pnl(&self) -> f64 {
-        let haircut = if realism_mode() { exit_haircut_bps() } else { 0.0 };
+        let haircut = if realism_mode() {
+            exit_haircut_bps()
+        } else {
+            0.0
+        };
         self.positions
             .iter()
             .map(|p| {
@@ -452,42 +499,62 @@ impl PaperPortfolio {
 
     /// Annualised Sharpe ratio from per-trade returns (risk-free = 0).
     pub fn live_sharpe(&self) -> f64 {
-        let returns: Vec<f64> = self.closed_trades.iter()
+        let returns: Vec<f64> = self
+            .closed_trades
+            .iter()
             .filter(|t| t.shares * t.entry_price > 0.001)
             .map(|t| t.realized_pnl / (t.shares * t.entry_price))
             .collect();
-        if returns.len() < 2 { return 0.0; }
+        if returns.len() < 2 {
+            return 0.0;
+        }
         let n = returns.len() as f64;
         let mean = returns.iter().sum::<f64>() / n;
         let var = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0);
         let std = var.sqrt();
-        if std == 0.0 { return 0.0; }
+        if std == 0.0 {
+            return 0.0;
+        }
         (mean / std) * (n.min(252.0)).sqrt() // scale by sqrt(trades), capped at annualized
     }
 
     /// Annualised Sortino ratio (only downside deviation).
     pub fn live_sortino(&self) -> f64 {
-        let returns: Vec<f64> = self.closed_trades.iter()
+        let returns: Vec<f64> = self
+            .closed_trades
+            .iter()
             .filter(|t| t.shares * t.entry_price > 0.001)
             .map(|t| t.realized_pnl / (t.shares * t.entry_price))
             .collect();
-        if returns.len() < 2 { return 0.0; }
+        if returns.len() < 2 {
+            return 0.0;
+        }
         let n = returns.len() as f64;
         let mean = returns.iter().sum::<f64>() / n;
-        let down_sq: f64 = returns.iter().filter(|&&r| r < 0.0).map(|r| r.powi(2)).sum();
+        let down_sq: f64 = returns
+            .iter()
+            .filter(|&&r| r < 0.0)
+            .map(|r| r.powi(2))
+            .sum();
         let down_dev = (down_sq / n).sqrt();
-        if down_dev == 0.0 { return if mean > 0.0 { f64::INFINITY } else { 0.0 }; }
+        if down_dev == 0.0 {
+            return if mean > 0.0 { f64::INFINITY } else { 0.0 };
+        }
         (mean / down_dev) * (n.min(252.0)).sqrt()
     }
 
     /// Fee drag: total fees as % of gross realized P&L.
     /// Returns 0.0 when no realized profits exist.
     pub fn fee_drag_pct(&self) -> f64 {
-        let gross: f64 = self.closed_trades.iter()
+        let gross: f64 = self
+            .closed_trades
+            .iter()
             .filter(|t| t.realized_pnl > 0.0)
             .map(|t| t.realized_pnl)
             .sum();
-        if gross <= 0.0 { return 0.0; }
+        if gross <= 0.0 {
+            return 0.0;
+        }
         (self.total_fees_paid_usdc / gross * 100.0).clamp(0.0, 999.0)
     }
 
@@ -539,14 +606,24 @@ impl PaperPortfolio {
             .unwrap_or(5.0) // Data-driven: trades >$5 have negative E[V]
             .clamp(min_floor_usdc, 500.0);
 
-        let raw        = rn1_notional_usdc * size_multiplier;
-        let cap_nav    = self.nav() * max_position_pct;
+        let raw = rn1_notional_usdc * size_multiplier;
+        let cap_nav = self.nav() * max_position_pct;
         // No cash reserve — always deploy all available cash to maximise exposure
         let cash_reserve_pct: f64 = std::env::var("CASH_RESERVE_PCT")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0);
         let available_cash = (self.cash_usdc - self.nav() * cash_reserve_pct).max(0.0);
-        let size       = raw.max(min_floor_usdc).min(max_order_usdc).min(cap_nav).min(available_cash);
-        if size < min_trade_usdc { None } else { Some(size) }
+        let size = raw
+            .max(min_floor_usdc)
+            .min(max_order_usdc)
+            .min(cap_nav)
+            .min(available_cash);
+        if size < min_trade_usdc {
+            None
+        } else {
+            Some(size)
+        }
     }
 
     // ── Mutations ─────────────────────────────────────────────────────────
@@ -556,23 +633,38 @@ impl PaperPortfolio {
     /// Returns the sequential position ID.
     pub fn open_position(
         &mut self,
-        token_id:     String,
-        side:         OrderSide,
-        entry_price:  f64,
-        usdc_size:    f64,
+        token_id: String,
+        side: OrderSide,
+        entry_price: f64,
+        usdc_size: f64,
         rn1_order_id: String,
     ) -> usize {
-        self.open_position_with_meta(token_id, None, None, side, entry_price, usdc_size, rn1_order_id, 0.0, 0, "A", None, None, "rn1", None)
+        self.open_position_with_meta(
+            token_id,
+            None,
+            None,
+            side,
+            entry_price,
+            usdc_size,
+            rn1_order_id,
+            0.0,
+            0,
+            "A",
+            None,
+            None,
+            "rn1",
+            None,
+        )
     }
 
     pub fn open_position_with_meta(
         &mut self,
-        token_id:     String,
+        token_id: String,
         market_title: Option<String>,
         market_outcome: Option<String>,
-        side:         OrderSide,
-        entry_price:  f64,
-        usdc_size:    f64,
+        side: OrderSide,
+        entry_price: f64,
+        usdc_size: f64,
         rn1_order_id: String,
         entry_slippage_bps: f64,
         queue_delay_ms: u64,
@@ -585,24 +677,27 @@ impl PaperPortfolio {
         // Apply entry spread cost when realism mode is on.
         // For BUY: we pay slightly more; for SELL: we receive slightly less.
         let realism = std::env::var("PAPER_REALISM_MODE")
-            .ok().map(|v| v == "true" || v == "1").unwrap_or(true);
+            .ok()
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(true);
         let effective_entry = if realism {
             let spread_bps = std::env::var("PAPER_ENTRY_SPREAD_BPS")
-                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(5.0).clamp(0.0, 100.0);
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(5.0)
+                .clamp(0.0, 100.0);
             let spread = entry_price * spread_bps / 10_000.0;
             match side {
-                OrderSide::Buy  => (entry_price + spread).min(0.999),
+                OrderSide::Buy => (entry_price + spread).min(0.999),
                 OrderSide::Sell => (entry_price - spread).max(0.001),
             }
         } else {
             entry_price
         };
         let shares = usdc_size / effective_entry;
-        let id     = self.next_id;
-        self.next_id   += 1;
-        let (fee_cat, fee_rate) = detect_fee_category(
-            market_title.as_deref().unwrap_or(""),
-        );
+        let id = self.next_id;
+        self.next_id += 1;
+        let (fee_cat, fee_rate) = detect_fee_category(market_title.as_deref().unwrap_or(""));
         let entry_fee = polymarket_taker_fee_with_rate(shares, effective_entry, fee_rate);
         self.cash_usdc -= usdc_size + entry_fee;
         // Track entry fee in the global fees counter and per-position for accounting.
@@ -615,13 +710,13 @@ impl PaperPortfolio {
             side,
             entry_price: effective_entry,
             shares,
-            usdc_spent:    usdc_size,
+            usdc_spent: usdc_size,
             entry_fee_paid_usdc: entry_fee,
             current_price: effective_entry,
             peak_price: effective_entry,
             fee_category: fee_cat.to_string(),
             fee_rate,
-            opened_at:     Instant::now(),
+            opened_at: Instant::now(),
             rn1_order_id,
             opened_at_wall: chrono::Local::now(),
             entry_slippage_bps,
@@ -691,7 +786,13 @@ impl PaperPortfolio {
                     slippage_bps: pos.entry_slippage_bps,
                     queue_delay_ms: pos.queue_delay_ms,
                     outcome_tags: vec![
-                        if pnl > 0.0 { "profit".to_string() } else if pnl < 0.0 { "loss".to_string() } else { "breakeven".to_string() },
+                        if pnl > 0.0 {
+                            "profit".to_string()
+                        } else if pnl < 0.0 {
+                            "loss".to_string()
+                        } else {
+                            "breakeven".to_string()
+                        },
                         format!("variant:{}", pos.experiment_variant),
                     ],
                 },
@@ -783,7 +884,6 @@ impl PaperPortfolio {
         actions
     }
 
-
     pub fn close_position_fraction(&mut self, idx: usize, fraction: f64, reason: String) -> bool {
         if idx >= self.positions.len() {
             return false;
@@ -822,7 +922,13 @@ impl PaperPortfolio {
                     slippage_bps: pos.entry_slippage_bps,
                     queue_delay_ms: pos.queue_delay_ms,
                     outcome_tags: vec![
-                        if pnl > 0.0 { "profit".to_string() } else if pnl < 0.0 { "loss".to_string() } else { "breakeven".to_string() },
+                        if pnl > 0.0 {
+                            "profit".to_string()
+                        } else if pnl < 0.0 {
+                            "loss".to_string()
+                        } else {
+                            "breakeven".to_string()
+                        },
                         format!("variant:{}", pos.experiment_variant),
                     ],
                 },
@@ -873,7 +979,13 @@ impl PaperPortfolio {
                 slippage_bps: pos.entry_slippage_bps,
                 queue_delay_ms: pos.queue_delay_ms,
                 outcome_tags: vec![
-                    if pnl > 0.0 { "profit".to_string() } else if pnl < 0.0 { "loss".to_string() } else { "breakeven".to_string() },
+                    if pnl > 0.0 {
+                        "profit".to_string()
+                    } else if pnl < 0.0 {
+                        "loss".to_string()
+                    } else {
+                        "breakeven".to_string()
+                    },
                     format!("variant:{}", pos.experiment_variant),
                 ],
             },
@@ -903,16 +1015,23 @@ impl PaperPortfolio {
         let mut peak = f64::NEG_INFINITY;
         let mut max_dd = 0.0f64;
         for &nav in &self.equity_curve {
-            if nav > peak { peak = nav; }
+            if nav > peak {
+                peak = nav;
+            }
             let dd = (peak - nav) / peak * 100.0;
-            if dd > max_dd { max_dd = dd; }
+            if dd > max_dd {
+                max_dd = dd;
+            }
         }
         max_dd
     }
 
     /// Returns the high-water mark NAV from the equity curve.
     pub fn high_water_mark(&self) -> f64 {
-        self.equity_curve.iter().cloned().fold(STARTING_BALANCE_USDC, f64::max)
+        self.equity_curve
+            .iter()
+            .cloned()
+            .fold(STARTING_BALANCE_USDC, f64::max)
     }
 
     /// Records the current NAV as a sparkline sample (capped at 300 entries).
@@ -973,52 +1092,60 @@ impl From<&PaperPortfolio> for PersistedPaperPortfolio {
             schema_version: 2,
             cash_usdc: value.cash_usdc,
             total_fees_paid_usdc: value.total_fees_paid_usdc,
-            positions: value.positions.iter().map(|p| PersistedPaperPosition {
-                id: p.id,
-                token_id: p.token_id.clone(),
-                market_title: p.market_title.clone(),
-                market_outcome: p.market_outcome.clone(),
-                side: p.side,
-                entry_price: p.entry_price,
-                shares: p.shares,
-                usdc_spent: p.usdc_spent,
-                current_price: p.current_price,
-                rn1_order_id: p.rn1_order_id.clone(),
-                opened_at_wall_ms: p.opened_at_wall.timestamp_millis(),
-                opened_age_secs: p.opened_at.elapsed().as_secs(),
-                entry_fee_paid_usdc: p.entry_fee_paid_usdc,
-                entry_slippage_bps: p.entry_slippage_bps,
-                queue_delay_ms: p.queue_delay_ms,
-                experiment_variant: p.experiment_variant.clone(),
-                fee_category: p.fee_category.clone(),
-                fee_rate: p.fee_rate,
-                event_start_time: p.event_start_time,
-                event_end_time: p.event_end_time,
-                momentum_ref_price: p.momentum_ref_price,
-                momentum_ref_ts: p.momentum_ref_ts,
-                last_claimed_tier_pct: p.last_claimed_tier_pct,
-                signal_source: p.signal_source.clone(),
-                analysis_id: p.analysis_id.clone(),
-            }).collect(),
-            closed_trades: value.closed_trades.iter().map(|t| PersistedClosedTrade {
-                token_id: t.token_id.clone(),
-                market_title: t.market_title.clone(),
-                side: t.side,
-                entry_price: t.entry_price,
-                exit_price: t.exit_price,
-                shares: t.shares,
-                realized_pnl: t.realized_pnl,
-                fees_paid_usdc: t.fees_paid_usdc,
-                reason: t.reason.clone(),
-                opened_at_wall_ms: t.opened_at_wall.timestamp_millis(),
-                closed_at_wall_ms: t.closed_at_wall.timestamp_millis(),
-                duration_secs: t.duration_secs,
-                scorecard: t.scorecard.clone(),
-                event_start_time: t.event_start_time,
-                event_end_time: t.event_end_time,
-                signal_source: t.signal_source.clone(),
-                analysis_id: t.analysis_id.clone(),
-            }).collect(),
+            positions: value
+                .positions
+                .iter()
+                .map(|p| PersistedPaperPosition {
+                    id: p.id,
+                    token_id: p.token_id.clone(),
+                    market_title: p.market_title.clone(),
+                    market_outcome: p.market_outcome.clone(),
+                    side: p.side,
+                    entry_price: p.entry_price,
+                    shares: p.shares,
+                    usdc_spent: p.usdc_spent,
+                    current_price: p.current_price,
+                    rn1_order_id: p.rn1_order_id.clone(),
+                    opened_at_wall_ms: p.opened_at_wall.timestamp_millis(),
+                    opened_age_secs: p.opened_at.elapsed().as_secs(),
+                    entry_fee_paid_usdc: p.entry_fee_paid_usdc,
+                    entry_slippage_bps: p.entry_slippage_bps,
+                    queue_delay_ms: p.queue_delay_ms,
+                    experiment_variant: p.experiment_variant.clone(),
+                    fee_category: p.fee_category.clone(),
+                    fee_rate: p.fee_rate,
+                    event_start_time: p.event_start_time,
+                    event_end_time: p.event_end_time,
+                    momentum_ref_price: p.momentum_ref_price,
+                    momentum_ref_ts: p.momentum_ref_ts,
+                    last_claimed_tier_pct: p.last_claimed_tier_pct,
+                    signal_source: p.signal_source.clone(),
+                    analysis_id: p.analysis_id.clone(),
+                })
+                .collect(),
+            closed_trades: value
+                .closed_trades
+                .iter()
+                .map(|t| PersistedClosedTrade {
+                    token_id: t.token_id.clone(),
+                    market_title: t.market_title.clone(),
+                    side: t.side,
+                    entry_price: t.entry_price,
+                    exit_price: t.exit_price,
+                    shares: t.shares,
+                    realized_pnl: t.realized_pnl,
+                    fees_paid_usdc: t.fees_paid_usdc,
+                    reason: t.reason.clone(),
+                    opened_at_wall_ms: t.opened_at_wall.timestamp_millis(),
+                    closed_at_wall_ms: t.closed_at_wall.timestamp_millis(),
+                    duration_secs: t.duration_secs,
+                    scorecard: t.scorecard.clone(),
+                    event_start_time: t.event_start_time,
+                    event_end_time: t.event_end_time,
+                    signal_source: t.signal_source.clone(),
+                    analysis_id: t.analysis_id.clone(),
+                })
+                .collect(),
             total_signals: value.total_signals,
             filled_orders: value.filled_orders,
             aborted_orders: value.aborted_orders,
@@ -1033,90 +1160,122 @@ impl From<&PaperPortfolio> for PersistedPaperPortfolio {
 impl From<PersistedPaperPortfolio> for PaperPortfolio {
     fn from(value: PersistedPaperPortfolio) -> Self {
         let now = Instant::now();
-        let positions = value.positions.into_iter().map(|p| {
-            let opened_at_wall = Local
-                .timestamp_millis_opt(p.opened_at_wall_ms)
-                .single()
-                .unwrap_or_else(Local::now);
-            let opened_at = {
-                // Compute actual age from wall clock — survives engine restarts.
-                // opened_at_wall is the authoritative source; Instant is best-effort.
-                // exit_strategy uses opened_at_wall directly, so Instant only matters for
-                // display / in-session tracking — a clamped age is acceptable there.
-                let wall_ms = opened_at_wall.timestamp_millis();
-                let now_ms = chrono::Local::now().timestamp_millis();
-                let real_age_secs = ((now_ms - wall_ms) / 1000).max(0) as u64;
-                now.checked_sub(Duration::from_secs(real_age_secs))
-                    .unwrap_or_else(|| {
-                        // Position is older than system uptime — Instant can't represent
-                        // the true age.  Exit strategy uses opened_at_wall so exits still
-                        // fire correctly; clamp to process-start for display purposes.
-                        tracing::warn!(
+        let positions = value
+            .positions
+            .into_iter()
+            .map(|p| {
+                let opened_at_wall = Local
+                    .timestamp_millis_opt(p.opened_at_wall_ms)
+                    .single()
+                    .unwrap_or_else(Local::now);
+                let opened_at = {
+                    // Compute actual age from wall clock — survives engine restarts.
+                    // opened_at_wall is the authoritative source; Instant is best-effort.
+                    // exit_strategy uses opened_at_wall directly, so Instant only matters for
+                    // display / in-session tracking — a clamped age is acceptable there.
+                    let wall_ms = opened_at_wall.timestamp_millis();
+                    let now_ms = chrono::Local::now().timestamp_millis();
+                    let real_age_secs = ((now_ms - wall_ms) / 1000).max(0) as u64;
+                    now.checked_sub(Duration::from_secs(real_age_secs))
+                        .unwrap_or_else(|| {
+                            // Position is older than system uptime — Instant can't represent
+                            // the true age.  Exit strategy uses opened_at_wall so exits still
+                            // fire correctly; clamp to process-start for display purposes.
+                            tracing::warn!(
                             age_secs = real_age_secs,
                             "Position age exceeds system uptime; Instant clamped to process start"
                         );
-                        now
-                    })
-            };
-            PaperPosition {
-                id: p.id,
-                token_id: p.token_id,
-                market_title: p.market_title,
-                market_outcome: p.market_outcome,
-                side: p.side,
-                entry_price: p.entry_price,
-                shares: p.shares,
-                usdc_spent: p.usdc_spent,
-                current_price: p.current_price,
-                peak_price: p.current_price.max(p.entry_price),
-                entry_fee_paid_usdc: p.entry_fee_paid_usdc,
-                opened_at,
-                rn1_order_id: p.rn1_order_id,
-                opened_at_wall,
-                entry_slippage_bps: p.entry_slippage_bps,
-                queue_delay_ms: p.queue_delay_ms,
-                experiment_variant: if p.experiment_variant.is_empty() { "A".to_string() } else { p.experiment_variant },
-                fee_rate: if p.fee_rate == 0.0 && p.fee_category.is_empty() { 0.0001 } else { p.fee_rate },
-                fee_category: if p.fee_category.is_empty() { "other".to_string() } else { p.fee_category },
-                event_start_time: p.event_start_time,
-                event_end_time: p.event_end_time,
-                momentum_ref_price: if p.momentum_ref_price == 0.0 { p.entry_price } else { p.momentum_ref_price },
-                momentum_ref_ts: p.momentum_ref_ts,
-                last_claimed_tier_pct: p.last_claimed_tier_pct,
-                signal_source: if p.signal_source.is_empty() { "rn1".to_string() } else { p.signal_source },
-                analysis_id: p.analysis_id,
-            }
-        }).collect();
+                            now
+                        })
+                };
+                PaperPosition {
+                    id: p.id,
+                    token_id: p.token_id,
+                    market_title: p.market_title,
+                    market_outcome: p.market_outcome,
+                    side: p.side,
+                    entry_price: p.entry_price,
+                    shares: p.shares,
+                    usdc_spent: p.usdc_spent,
+                    current_price: p.current_price,
+                    peak_price: p.current_price.max(p.entry_price),
+                    entry_fee_paid_usdc: p.entry_fee_paid_usdc,
+                    opened_at,
+                    rn1_order_id: p.rn1_order_id,
+                    opened_at_wall,
+                    entry_slippage_bps: p.entry_slippage_bps,
+                    queue_delay_ms: p.queue_delay_ms,
+                    experiment_variant: if p.experiment_variant.is_empty() {
+                        "A".to_string()
+                    } else {
+                        p.experiment_variant
+                    },
+                    fee_rate: if p.fee_rate == 0.0 && p.fee_category.is_empty() {
+                        0.0001
+                    } else {
+                        p.fee_rate
+                    },
+                    fee_category: if p.fee_category.is_empty() {
+                        "other".to_string()
+                    } else {
+                        p.fee_category
+                    },
+                    event_start_time: p.event_start_time,
+                    event_end_time: p.event_end_time,
+                    momentum_ref_price: if p.momentum_ref_price == 0.0 {
+                        p.entry_price
+                    } else {
+                        p.momentum_ref_price
+                    },
+                    momentum_ref_ts: p.momentum_ref_ts,
+                    last_claimed_tier_pct: p.last_claimed_tier_pct,
+                    signal_source: if p.signal_source.is_empty() {
+                        "rn1".to_string()
+                    } else {
+                        p.signal_source
+                    },
+                    analysis_id: p.analysis_id,
+                }
+            })
+            .collect();
 
-        let closed_trades = value.closed_trades.into_iter().map(|t| {
-            let opened_at_wall = Local
-                .timestamp_millis_opt(t.opened_at_wall_ms)
-                .single()
-                .unwrap_or_else(Local::now);
-            let closed_at_wall = Local
-                .timestamp_millis_opt(t.closed_at_wall_ms)
-                .single()
-                .unwrap_or_else(Local::now);
-            ClosedTrade {
-                token_id: t.token_id,
-                market_title: t.market_title,
-                side: t.side,
-                entry_price: t.entry_price,
-                exit_price: t.exit_price,
-                shares: t.shares,
-                realized_pnl: t.realized_pnl,
-                fees_paid_usdc: t.fees_paid_usdc,
-                reason: t.reason,
-                opened_at_wall,
-                closed_at_wall,
-                duration_secs: t.duration_secs,
-                scorecard: t.scorecard,
-                event_start_time: t.event_start_time,
-                event_end_time: t.event_end_time,
-                signal_source: if t.signal_source.is_empty() { "rn1".to_string() } else { t.signal_source },
-                analysis_id: t.analysis_id,
-            }
-        }).collect();
+        let closed_trades = value
+            .closed_trades
+            .into_iter()
+            .map(|t| {
+                let opened_at_wall = Local
+                    .timestamp_millis_opt(t.opened_at_wall_ms)
+                    .single()
+                    .unwrap_or_else(Local::now);
+                let closed_at_wall = Local
+                    .timestamp_millis_opt(t.closed_at_wall_ms)
+                    .single()
+                    .unwrap_or_else(Local::now);
+                ClosedTrade {
+                    token_id: t.token_id,
+                    market_title: t.market_title,
+                    side: t.side,
+                    entry_price: t.entry_price,
+                    exit_price: t.exit_price,
+                    shares: t.shares,
+                    realized_pnl: t.realized_pnl,
+                    fees_paid_usdc: t.fees_paid_usdc,
+                    reason: t.reason,
+                    opened_at_wall,
+                    closed_at_wall,
+                    duration_secs: t.duration_secs,
+                    scorecard: t.scorecard,
+                    event_start_time: t.event_start_time,
+                    event_end_time: t.event_end_time,
+                    signal_source: if t.signal_source.is_empty() {
+                        "rn1".to_string()
+                    } else {
+                        t.signal_source
+                    },
+                    analysis_id: t.analysis_id,
+                }
+            })
+            .collect();
 
         Self {
             cash_usdc: value.cash_usdc,
@@ -1156,7 +1315,7 @@ mod tests {
     #[test]
     fn size_capped_at_max_order() {
         let p = PaperPortfolio::new(); // NAV = 200
-        // RN1 trades $20,000 → 10% = $2,000, capped at max_order_usdc ($5 default)
+                                       // RN1 trades $20,000 → 10% = $2,000, capped at max_order_usdc ($5 default)
         let size = p.calculate_size_usdc(20_000.0).unwrap();
         // Data-driven: PAPER_MAX_ORDER_USDC default is $5
         assert!((size - 5.0).abs() < 1e-9, "size={size} expected cap=5");
@@ -1177,10 +1336,18 @@ mod tests {
         p.open_position("tok".into(), OrderSide::Buy, 0.65, 20.0, "oid".into());
         let shares = 20.0 / 0.65;
         let entry_fee = polymarket_taker_fee(shares, 0.65);
-        assert!((p.nav() - (100.0 - entry_fee)).abs() < 0.01,
-            "nav={} expected={}", p.nav(), 100.0 - entry_fee);
-        assert!((p.cash_usdc - (80.0 - entry_fee)).abs() < 0.01,
-            "cash={} expected={}", p.cash_usdc, 80.0 - entry_fee);
+        assert!(
+            (p.nav() - (100.0 - entry_fee)).abs() < 0.01,
+            "nav={} expected={}",
+            p.nav(),
+            100.0 - entry_fee
+        );
+        assert!(
+            (p.cash_usdc - (80.0 - entry_fee)).abs() < 0.01,
+            "cash={} expected={}",
+            p.cash_usdc,
+            80.0 - entry_fee
+        );
         std::env::remove_var("PAPER_REALISM_MODE");
     }
 
@@ -1211,7 +1378,11 @@ mod tests {
             p.update_price(&tid, exit_px);
             p.close_position_fraction(0, 1.0, "test".into());
         }
-        assert!(p.live_sharpe() > 0.0, "sharpe={} should be positive", p.live_sharpe());
+        assert!(
+            p.live_sharpe() > 0.0,
+            "sharpe={} should be positive",
+            p.live_sharpe()
+        );
     }
 
     #[test]
@@ -1224,7 +1395,11 @@ mod tests {
             p.update_price(&tid, exit_px);
             p.close_position_fraction(0, 1.0, "test".into());
         }
-        assert!(p.live_sortino() > 0.0, "sortino={} should be positive", p.live_sortino());
+        assert!(
+            p.live_sortino() > 0.0,
+            "sortino={} should be positive",
+            p.live_sortino()
+        );
     }
 
     #[test]

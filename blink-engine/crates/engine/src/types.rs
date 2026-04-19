@@ -261,20 +261,20 @@ pub struct FilterConfig {
     // Bet size filters
     pub min_rn1_bet_usdc: f64,
     pub max_rn1_bet_usdc: f64,
-    
+
     // Market filters
     pub min_market_liquidity_usdc: f64,
     pub preferred_categories: Vec<String>,
     pub allowed_sports: Vec<String>,
-    
+
     // Entry price filters
     pub min_entry_price: f64,
     pub max_entry_price: f64,
-    
+
     // Timing filters (in seconds)
     pub min_seconds_before_event: i64,
     pub max_seconds_before_event: i64,
-    
+
     // Dynamic sizing parameters
     pub base_multiplier: f64,
     pub whale_bet_threshold_usdc: f64,
@@ -284,7 +284,7 @@ pub struct FilterConfig {
     pub sports_bonus: f64,
     pub preferred_sport_bonus: f64,
     pub max_multiplier: f64,
-    
+
     // Position limits
     pub max_position_pct: f64,
     pub max_concurrent_positions: usize,
@@ -296,16 +296,13 @@ impl Default for FilterConfig {
             // RN1 bet size: $10k-$100k sweet spot
             min_rn1_bet_usdc: 10_000.0,
             max_rn1_bet_usdc: 100_000.0,
-            
+
             // Market liquidity: $100k+ only
             min_market_liquidity_usdc: 100_000.0,
-            
+
             // Categories: Sports primary, high-liquidity politics secondary
-            preferred_categories: vec![
-                "sports".to_string(),
-                "politics".to_string(),
-            ],
-            
+            preferred_categories: vec!["sports".to_string(), "politics".to_string()],
+
             // Sports focus: Soccer (37%), NFL (26%), NBA (11%)
             allowed_sports: vec![
                 "Soccer".to_string(),
@@ -316,15 +313,15 @@ impl Default for FilterConfig {
                 "MLB".to_string(),
                 "Baseball".to_string(),
             ],
-            
+
             // Entry price: 25-65¢ range (RN1's sweet spot ~34¢)
             min_entry_price: 0.25,
             max_entry_price: 0.65,
-            
+
             // Timing: 2-72 hours before event
             min_seconds_before_event: 2 * 3600,
             max_seconds_before_event: 72 * 3600,
-            
+
             // Dynamic sizing: 5% base, up to 15% for high conviction
             base_multiplier: 0.05,
             whale_bet_threshold_usdc: 50_000.0,
@@ -334,7 +331,7 @@ impl Default for FilterConfig {
             sports_bonus: 0.02,
             preferred_sport_bonus: 0.01,
             max_multiplier: 0.15,
-            
+
             // Risk limits
             max_position_pct: 0.15,
             max_concurrent_positions: 5,
@@ -355,7 +352,7 @@ impl FilterConfig {
     /// ```
     pub fn from_env() -> Self {
         let mut config = Self::default();
-        
+
         if let Ok(val) = std::env::var("MIN_RN1_BET_USDC") {
             config.min_rn1_bet_usdc = val.parse().unwrap_or(config.min_rn1_bet_usdc);
         }
@@ -363,7 +360,8 @@ impl FilterConfig {
             config.max_rn1_bet_usdc = val.parse().unwrap_or(config.max_rn1_bet_usdc);
         }
         if let Ok(val) = std::env::var("MIN_MARKET_LIQUIDITY_USDC") {
-            config.min_market_liquidity_usdc = val.parse().unwrap_or(config.min_market_liquidity_usdc);
+            config.min_market_liquidity_usdc =
+                val.parse().unwrap_or(config.min_market_liquidity_usdc);
         }
         if let Ok(val) = std::env::var("MIN_ENTRY_PRICE") {
             config.min_entry_price = val.parse().unwrap_or(config.min_entry_price);
@@ -381,9 +379,10 @@ impl FilterConfig {
             config.max_position_pct = val.parse().unwrap_or(config.max_position_pct);
         }
         if let Ok(val) = std::env::var("MAX_CONCURRENT_POSITIONS") {
-            config.max_concurrent_positions = val.parse().unwrap_or(config.max_concurrent_positions);
+            config.max_concurrent_positions =
+                val.parse().unwrap_or(config.max_concurrent_positions);
         }
-        
+
         config
     }
 }
@@ -445,8 +444,8 @@ pub struct MarketMetadata {
     pub tags: Vec<String>,
     pub volume_24h: f64,
     pub liquidity: f64,
-    pub event_start_time: Option<i64>,  // Unix timestamp — game/event kickoff
-    pub event_end_time: Option<i64>,    // Unix timestamp — market resolution deadline
+    pub event_start_time: Option<i64>, // Unix timestamp — game/event kickoff
+    pub event_end_time: Option<i64>,   // Unix timestamp — market resolution deadline
     pub closed: bool,
 }
 
@@ -457,17 +456,21 @@ impl MarketMetadata {
         if self.liquidity < config.min_market_liquidity_usdc {
             return Err(SkipReason::LiquidityTooLow(self.liquidity));
         }
-        
+
         // Category check
-        if !config.preferred_categories.iter().any(|c| self.category.contains(c)) {
+        if !config
+            .preferred_categories
+            .iter()
+            .any(|c| self.category.contains(c))
+        {
             return Err(SkipReason::CategoryNotPreferred(self.category.clone()));
         }
-        
+
         // Timing check (if event_start_time available)
         if let Some(event_time) = self.event_start_time {
             let now = chrono::Utc::now().timestamp();
             let seconds_until = event_time - now;
-            
+
             if seconds_until < config.min_seconds_before_event {
                 return Err(SkipReason::EventTooSoon(seconds_until));
             }
@@ -475,15 +478,15 @@ impl MarketMetadata {
                 return Err(SkipReason::EventTooFar(seconds_until));
             }
         }
-        
+
         // Market closed check
         if self.closed {
             return Err(SkipReason::RiskLimitReached("Market is closed".to_string()));
         }
-        
+
         Ok(())
     }
-    
+
     /// Extract sports category if present
     pub fn extract_sport(&self) -> Option<String> {
         for tag in &self.tags {

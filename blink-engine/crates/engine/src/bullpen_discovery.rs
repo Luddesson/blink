@@ -54,7 +54,14 @@ impl DiscoverySchedulerConfig {
                 .unwrap_or(300),
             lenses: std::env::var("BULLPEN_DISCOVER_LENSES")
                 .map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
-                .unwrap_or_else(|_| vec!["sports".into(), "crypto".into(), "traders".into(), "all".into()]),
+                .unwrap_or_else(|_| {
+                    vec![
+                        "sports".into(),
+                        "crypto".into(),
+                        "traders".into(),
+                        "all".into(),
+                    ]
+                }),
             limit_per_lens: std::env::var("BULLPEN_DISCOVER_LIMIT")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -177,7 +184,10 @@ impl DiscoveryStore {
         let avg_viability = if self.markets.is_empty() {
             0.0
         } else {
-            self.markets.values().map(|m| m.viability_score).sum::<f64>()
+            self.markets
+                .values()
+                .map(|m| m.viability_score)
+                .sum::<f64>()
                 / self.markets.len() as f64
         };
         DiscoverySummary {
@@ -304,10 +314,7 @@ impl DiscoveryScheduler {
                 let category = event.category.clone();
 
                 // Parse resolution deadline from the event-level end_date field.
-                let ends_at_ts: Option<i64> = event
-                    .end_date
-                    .as_deref()
-                    .and_then(parse_end_date);
+                let ends_at_ts: Option<i64> = event.end_date.as_deref().and_then(parse_end_date);
 
                 // Collect token_ids from event markets
                 let token_ids: Vec<String> = event
@@ -330,27 +337,28 @@ impl DiscoveryScheduler {
                 }
 
                 for token_id in &token_ids {
-                    let entry = store
-                        .markets
-                        .entry(token_id.clone())
-                        .or_insert_with(|| EnrichedMarket {
-                            token_id: token_id.clone(),
-                            slug: slug.clone(),
-                            title: title.clone(),
-                            category: category.clone(),
-                            volume: Self::event_total_volume(event),
-                            liquidity: Self::event_total_liquidity(event),
-                            ends_at_ts,
-                            discovery_lenses: vec![],
-                            best_volume_rank: None,
-                            smart_money_interest: false,
-                            flow_detected: false,
-                            viability_score: 0.0,
-                            conviction_boost: 0.0,
-                            first_seen: now,
-                            last_seen: now,
-                            seen_count: 0,
-                        });
+                    let entry =
+                        store
+                            .markets
+                            .entry(token_id.clone())
+                            .or_insert_with(|| EnrichedMarket {
+                                token_id: token_id.clone(),
+                                slug: slug.clone(),
+                                title: title.clone(),
+                                category: category.clone(),
+                                volume: Self::event_total_volume(event),
+                                liquidity: Self::event_total_liquidity(event),
+                                ends_at_ts,
+                                discovery_lenses: vec![],
+                                best_volume_rank: None,
+                                smart_money_interest: false,
+                                flow_detected: false,
+                                viability_score: 0.0,
+                                conviction_boost: 0.0,
+                                first_seen: now,
+                                last_seen: now,
+                                seen_count: 0,
+                            });
 
                     // Update ends_at_ts if we now have it and didn't before.
                     if entry.ends_at_ts.is_none() {
@@ -387,7 +395,9 @@ impl DiscoveryScheduler {
 
         // Prune stale entries
         let stale_cutoff = Duration::from_secs(self.config.stale_prune_secs);
-        store.markets.retain(|_, v| v.last_seen.elapsed() < stale_cutoff);
+        store
+            .markets
+            .retain(|_, v| v.last_seen.elapsed() < stale_cutoff);
 
         store.last_scan = Some(now);
         store.scan_count += 1;
@@ -400,11 +410,7 @@ impl DiscoveryScheduler {
     }
 
     fn event_total_volume(event: &DiscoverEvent) -> Option<f64> {
-        let sum: f64 = event
-            .markets
-            .iter()
-            .filter_map(|m| m.volume)
-            .sum();
+        let sum: f64 = event.markets.iter().filter_map(|m| m.volume).sum();
         if sum > 0.0 {
             Some(sum)
         } else {
@@ -413,11 +419,7 @@ impl DiscoveryScheduler {
     }
 
     fn event_total_liquidity(event: &DiscoverEvent) -> Option<f64> {
-        let sum: f64 = event
-            .markets
-            .iter()
-            .filter_map(|m| m.liquidity)
-            .sum();
+        let sum: f64 = event.markets.iter().filter_map(|m| m.liquidity).sum();
         if sum > 0.0 {
             Some(sum)
         } else {
@@ -506,7 +508,12 @@ mod tests {
 
     #[test]
     fn viability_high_quality_market() {
-        let m = make_market(&["sports", "traders", "flow", "crypto"], true, true, Some(0));
+        let m = make_market(
+            &["sports", "traders", "flow", "crypto"],
+            true,
+            true,
+            Some(0),
+        );
         let score = compute_viability_score(&m);
         // All factors contribute → close to 1.0
         assert!(score > 0.85, "score={score}");
@@ -533,14 +540,11 @@ mod tests {
         assert!(store.is_empty());
         assert_eq!(store.conviction_boost("unknown"), 0.0);
 
-        store.markets.insert(
-            "tok_1".into(),
-            {
-                let mut m = make_market(&["traders"], true, false, Some(5));
-                m.conviction_boost = 0.02;
-                m
-            },
-        );
+        store.markets.insert("tok_1".into(), {
+            let mut m = make_market(&["traders"], true, false, Some(5));
+            m.conviction_boost = 0.02;
+            m
+        });
 
         assert_eq!(store.len(), 1);
         assert!((store.conviction_boost("tok_1") - 0.02).abs() < f64::EPSILON);

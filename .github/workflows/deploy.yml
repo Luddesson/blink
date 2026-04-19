@@ -19,10 +19,25 @@ jobs:
     name: Build UI + rebuild engine on server
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      HETZNER_HOST: 5.161.100.38
+      HETZNER_USER: root
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Check deploy secret
+        id: deploy_guard
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.HETZNER_SSH_KEY }}" ]; then
+            echo "deploy_enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Skipping Hetzner deploy: missing GitHub secret HETZNER_SSH_KEY."
+            echo "::notice::Set HETZNER_SSH_KEY in Settings -> Secrets and variables -> Actions to enable deployment."
+          else
+            echo "deploy_enabled=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -46,24 +61,40 @@ jobs:
           ls -lh blink-engine/static/ui/assets/ | head -20
 
       - name: Setup SSH
+        if: steps.deploy_guard.outputs.deploy_enabled == 'true'
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
-          echo "${{ secrets.HETZNER_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 700 ~/.ssh
+          printf '%s' "${{ secrets.HETZNER_SSH_KEY }}" | tr -d '\r' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H 5.161.100.38 >> ~/.ssh/known_hosts 2>/dev/null
+          if ! ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null 2>&1; then
+            echo "::error::HETZNER_SSH_KEY is not a valid private key."
+            echo "::error::Ensure the key is complete and in OpenSSH/PEM private key format."
+            exit 1
+          fi
+          ssh-keyscan -H "$HETZNER_HOST" >> ~/.ssh/known_hosts 2>/dev/null || {
+            echo "::error::Failed to fetch SSH host key for $HETZNER_HOST."
+            exit 1
+          }
+          chmod 644 ~/.ssh/known_hosts
+          ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 \
+            "$HETZNER_USER@$HETZNER_HOST" "echo 'SSH connectivity OK'" >/dev/null
 
       # rsync the freshly-built UI assets up so we don't rely on the server
       # checking them out of git.
       - name: Push built UI to server
+        if: steps.deploy_guard.outputs.deploy_enabled == 'true'
         run: |
           rsync -az --delete \
-            -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes" \
+            -e "ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes" \
             blink-engine/static/ui/ \
-            root@5.161.100.38:/opt/blink/static/ui/
+            "$HETZNER_USER@$HETZNER_HOST:/opt/blink/static/ui/"
 
       - name: Pull latest + rebuild engine + restart services
+        if: steps.deploy_guard.outputs.deploy_enabled == 'true'
         run: |
-          ssh -i ~/.ssh/id_ed25519 root@5.161.100.38 'bash -se' <<'REMOTE'
+          ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes "$HETZNER_USER@$HETZNER_HOST" 'bash -se' <<'REMOTE'
           set -euo pipefail
           BLINK_DIR=/opt/blink
           cd $BLINK_DIR/src
@@ -99,5 +130,5 @@ jobs:
           REMOTE
 
       - name: Cleanup SSH key
-        if: always()
+        if: always() && steps.deploy_guard.outputs.deploy_enabled == 'true'
         run: rm -f ~/.ssh/id_ed25519

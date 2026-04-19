@@ -39,13 +39,13 @@ const POLYGONSCAN_API: &str = "https://api.polygonscan.com/api";
 /// Moving-average gas price oracle backed by the Polygonscan API.
 pub struct GasOracle {
     api_key: Option<String>,
-    client:  reqwest::Client,
-    cache:   Mutex<GasCache>,
+    client: reqwest::Client,
+    cache: Mutex<GasCache>,
 }
 
 struct GasCache {
-    last_fetch:    Option<Instant>,
-    base_fees:     Vec<u64>,
+    last_fetch: Option<Instant>,
+    base_fees: Vec<u64>,
     suggested_fee: u64,
 }
 
@@ -65,8 +65,8 @@ impl GasOracle {
                 .build()
                 .unwrap_or_default(),
             cache: Mutex::new(GasCache {
-                last_fetch:    None,
-                base_fees:     Vec::with_capacity(WINDOW_SIZE),
+                last_fetch: None,
+                base_fees: Vec::with_capacity(WINDOW_SIZE),
                 suggested_fee: DEFAULT_PRIORITY_FEE_GWEI,
             }),
         }
@@ -94,7 +94,10 @@ impl GasOracle {
             Ok(fee) => fee,
             Err(e) => {
                 warn!("GasOracle fetch failed, using cached/default: {e}");
-                self.cache.lock().unwrap_or_else(|e| e.into_inner()).suggested_fee
+                self.cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .suggested_fee
             }
         }
     }

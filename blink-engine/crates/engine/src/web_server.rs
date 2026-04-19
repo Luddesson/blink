@@ -34,6 +34,7 @@ use crate::order_book::OrderBookStore;
 use crate::paper_engine::PaperEngine;
 use crate::paper_portfolio::PaperPortfolio;
 use crate::risk_manager::RiskManager;
+use crate::timed_mutex::TimedMutex;
 use crate::ws_client::WsHealthMetrics;
 
 type SlugCache = Arc<Mutex<std::collections::HashMap<String, String>>>;
@@ -49,7 +50,7 @@ pub struct AppState {
     pub book_store: Arc<OrderBookStore>,
     pub activity_log: ActivityLog,
     pub paper: Option<Arc<PaperEngine>>,
-    pub risk: Option<Arc<Mutex<RiskManager>>>,
+    pub risk: Option<Arc<TimedMutex<RiskManager>>>,
     pub twin_snapshot: Option<Arc<Mutex<Option<TwinSnapshot>>>>,
     pub ws_health: Option<Arc<Mutex<WsHealthMetrics>>>,
     pub latency: Option<Arc<LatencyTracker>>,
@@ -360,7 +361,7 @@ async fn get_health(State(state): State<AppState>) -> Json<serde_json::Value> {
 async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
     let subs = state.market_subscriptions.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let risk_status = if let Some(ref risk) = state.risk {
-        let r = risk.lock().unwrap_or_else(|e| e.into_inner());
+        let r = risk.lock_or_recover();
         if r.is_circuit_breaker_tripped() {
             "CIRCUIT_BREAKER".to_string()
         } else if !r.config().trading_enabled {
@@ -630,7 +631,7 @@ async fn get_risk(State(state): State<AppState>) -> Json<serde_json::Value> {
     let Some(ref risk) = state.risk else {
         return Json(json!({"error": "Risk manager not available"}));
     };
-    let r = risk.lock().unwrap_or_else(|e| e.into_inner());
+    let r = risk.lock_or_recover();
     let cfg = r.config();
     let stop_loss_enabled = std::env::var("STOP_LOSS_ENABLED").map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false);
     let stop_loss_pct = std::env::var("STOP_LOSS_PCT").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
@@ -821,7 +822,7 @@ async fn get_live_portfolio(State(state): State<AppState>) -> Json<serde_json::V
     let pending_count = live.pending_orders_count().await;
     let (daily_pnl, cb_tripped, max_daily_loss_pct, trading_enabled) =
         if let Some(ref risk) = state.risk {
-            let r = risk.lock().unwrap_or_else(|e| e.into_inner());
+            let r = risk.lock_or_recover();
             (r.daily_pnl(), r.is_circuit_breaker_tripped(), r.config().max_daily_loss_pct, r.config().trading_enabled)
         } else {
             (0.0, false, 0.1, false)
@@ -855,7 +856,7 @@ async fn post_reset_circuit_breaker(State(state): State<AppState>) -> Json<serde
     let Some(ref risk) = state.risk else {
         return Json(json!({ "error": "Risk manager not available" }));
     };
-    risk.lock().unwrap_or_else(|e| e.into_inner()).reset_circuit_breaker();
+    risk.lock_or_recover().reset_circuit_breaker();
     tracing::warn!("Circuit breaker manually reset via API");
     Json(json!({ "ok": true, "circuit_breaker_tripped": false }))
 }
@@ -867,7 +868,7 @@ async fn post_update_config(
     let Some(ref risk) = state.risk else {
         return Json(json!({ "error": "Risk manager not available" }));
     };
-    let mut rm = risk.lock().unwrap_or_else(|e| e.into_inner());
+    let mut rm = risk.lock_or_recover();
     let cfg = rm.config_mut();
     let mut changed = Vec::new();
 
@@ -923,7 +924,7 @@ async fn post_sell_position(
     // Record realized P&L from the close in the risk manager
     if let Some(ref risk) = state.risk {
         if let Some(last_trade) = p.closed_trades.last() {
-            risk.lock().unwrap_or_else(|e| e.into_inner()).record_close(last_trade.realized_pnl);
+            risk.lock_or_recover().record_close(last_trade.realized_pnl);
         }
     }
 
@@ -1038,7 +1039,7 @@ async fn build_snapshot(state: &AppState) -> Result<String, ()> {
 
     // Risk status
     if let Some(ref risk) = state.risk {
-        let r = risk.lock().unwrap_or_else(|e| e.into_inner());
+        let r = risk.lock_or_recover();
         let cfg = r.config();
         snapshot["risk"] = json!({
             "trading_enabled": cfg.trading_enabled,

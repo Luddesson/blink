@@ -47,6 +47,7 @@ use crate::paper_engine::{
 use crate::paper_portfolio::PaperPortfolio;
 use crate::rn1_poller::Rn1PollDiagnosticsHandle;
 use crate::risk_manager::RiskManager;
+use crate::timed_mutex::TimedMutex;
 use crate::types::OrderSide;
 use crate::ws_client::WsHealthMetrics;
 
@@ -314,7 +315,7 @@ pub fn run_tui(
     msg_count:      Arc<AtomicU64>,
     latency:        Arc<Mutex<LatencyStats>>,
     kernel:         Option<Arc<Mutex<KernelSnapshot>>>,
-    risk_manager:   Arc<Mutex<RiskManager>>,
+    risk_manager:   Arc<TimedMutex<RiskManager>>,
     fill_window:    Arc<Mutex<Option<FillWindowSnapshot>>>,
     fill_latency:   Arc<Mutex<LatencyStats>>,
     market_subscriptions: Arc<Mutex<Vec<String>>>,
@@ -368,7 +369,7 @@ fn tui_loop(
     msg_count:      Arc<AtomicU64>,
     latency:        Arc<Mutex<LatencyStats>>,
     kernel:         Option<Arc<Mutex<KernelSnapshot>>>,
-    risk_manager:   Arc<Mutex<RiskManager>>,
+    risk_manager:   Arc<TimedMutex<RiskManager>>,
     fill_window:    Arc<Mutex<Option<FillWindowSnapshot>>>,
     fill_latency:   Arc<Mutex<LatencyStats>>,
     market_subscriptions: Arc<Mutex<Vec<String>>>,
@@ -489,7 +490,7 @@ fn tui_loop(
 
         // ── Snapshot risk config ─────────────────────────────────────────
         let risk_snap = {
-            let rm = risk_manager.lock().unwrap();
+            let rm = risk_manager.lock_or_recover();
             let cfg = rm.config();
             RiskConfigSnap {
                 max_daily_loss_pct:      cfg.max_daily_loss_pct,
@@ -607,7 +608,7 @@ fn handle_key(
     trading_paused: &Arc<AtomicBool>,
     activity:       &ActivityLog,
     shutdown:       &Arc<AtomicBool>,
-    risk_manager:   &Arc<Mutex<RiskManager>>,
+    risk_manager:   &Arc<TimedMutex<RiskManager>>,
     book_store:     &Arc<OrderBookStore>,
     markets:        &[String],
     market_subscriptions: &Arc<Mutex<Vec<String>>>,
@@ -796,7 +797,7 @@ fn handle_history_key(code: KeyCode, state: &mut TuiState) {
 fn handle_config_key(
     code:         KeyCode,
     state:        &mut TuiState,
-    risk_manager: &Arc<Mutex<RiskManager>>,
+    risk_manager: &Arc<TimedMutex<RiskManager>>,
     activity:     &ActivityLog,
     experiment_switches: &Arc<Mutex<ExperimentSwitches>>,
 ) {
@@ -806,7 +807,7 @@ fn handle_config_key(
         KeyCode::Enter | KeyCode::Char('e') => {
             state.config_editing = true;
             // Pre-fill buffer with current value
-            let rm = risk_manager.lock().unwrap();
+            let rm = risk_manager.lock_or_recover();
             let cfg = rm.config();
             state.config_edit_buf = match state.config_selected {
                 0 => format!("{:.1}", cfg.max_daily_loss_pct * 100.0),
@@ -820,7 +821,7 @@ fn handle_config_key(
         }
         KeyCode::Char('r') => {
             // Reset circuit breaker
-            let mut rm = risk_manager.lock().unwrap();
+            let mut rm = risk_manager.lock_or_recover();
             if rm.is_circuit_breaker_tripped() {
                 rm.reset_circuit_breaker();
                 drop(rm);
@@ -848,10 +849,10 @@ fn handle_config_key(
 
 fn apply_config_edit(
     state:        &mut TuiState,
-    risk_manager: &Arc<Mutex<RiskManager>>,
+    risk_manager: &Arc<TimedMutex<RiskManager>>,
     activity:     &ActivityLog,
 ) {
-    let mut rm = risk_manager.lock().unwrap();
+    let mut rm = risk_manager.lock_or_recover();
     let cfg = rm.config_mut();
     let val = &state.config_edit_buf;
 

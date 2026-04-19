@@ -26,6 +26,7 @@ use crate::latency_tracker::LatencyStats;
 use crate::order_book::{OrderBook, OrderBookStore};
 use crate::paper_portfolio::{drift_threshold, PaperPortfolio, STARTING_BALANCE_USDC, polymarket_taker_fee_with_rate};
 use crate::risk_manager::{RiskConfig, RiskManager};
+use crate::timed_mutex::TimedMutex;
 use crate::types::{OrderSide, RN1Signal, format_price};
 
 // ─── PaperEngine ─────────────────────────────────────────────────────────────
@@ -70,7 +71,7 @@ pub struct PaperEngine {
     /// Optional activity log for TUI display. `None` → log to stdout only.
     activity:      Option<ActivityLog>,
     /// Risk manager — shared with TUI for runtime config editing.
-    pub risk:      Arc<std::sync::Mutex<RiskManager>>,
+    pub risk:      Arc<TimedMutex<RiskManager>>,
     /// Active fill-window snapshot for the TUI failsafe visualizer.
     pub fill_window:  Arc<std::sync::Mutex<Option<FillWindowSnapshot>>>,
     /// Detection-to-fill latency samples for the TUI histogram.
@@ -336,7 +337,7 @@ impl PaperEngine {
             portfolio: Arc::new(Mutex::new(PaperPortfolio::new())),
             book_store,
             activity,
-            risk: Arc::new(std::sync::Mutex::new(RiskManager::new(RiskConfig::from_env()))),
+            risk: Arc::new(TimedMutex::new("risk", RiskManager::new(RiskConfig::from_env()))),
             fill_window: Arc::new(std::sync::Mutex::new(None)),
             fill_latency: Arc::new(std::sync::Mutex::new(LatencyStats::new(1_000))),
             signal_queue: Arc::new(Mutex::new(BinaryHeap::new())),
@@ -379,7 +380,7 @@ impl PaperEngine {
     }
 
     pub fn risk_status(&self) -> String {
-        self.risk.lock().unwrap_or_else(|e| e.into_inner()).status_line()
+        self.risk.lock_or_recover().status_line()
     }
 
     /// Returns the current global volatility in basis points (coefficient of variation × 10 000).
@@ -920,7 +921,7 @@ impl PaperEngine {
                     signal_source: pos.signal_source.clone(),
                     analysis_id: pos.analysis_id.clone(),
                 });
-                self.risk.lock().unwrap_or_else(|e| e.into_inner()).record_close(net_realized_pnl);
+                self.risk.lock_or_recover().record_close(net_realized_pnl);
                 if let Some(ref log) = self.activity {
                     log_push(log, EntryKind::Fill, format!(
                         "RN1 EXIT: closed BUY @{:.3} (entry={:.3})  pnl={:+.3}  fee={:.4}  dur={}s",
@@ -1187,7 +1188,7 @@ impl PaperEngine {
 
         // ── Risk check ────────────────────────────────────────────────────
         let position_count = {let p = self.portfolio.lock().await; p.positions.len()};
-        if let Err(violation) = self.risk.lock().unwrap_or_else(|e| e.into_inner()).check_pre_order(
+        if let Err(violation) = self.risk.lock_or_recover().check_pre_order(
             size_usdc, position_count,
             current_nav, STARTING_BALANCE_USDC,
         ) {
@@ -1339,7 +1340,7 @@ impl PaperEngine {
             )
         };
         // Record fill in risk manager for VaR tracking (does not affect daily P&L).
-        self.risk.lock().unwrap_or_else(|e| e.into_inner()).record_fill(size_usdc);
+        self.risk.lock_or_recover().record_fill(size_usdc);
 
         // 2C: Mark this (token, side) as recently filled to prevent tranche re-entry.
         {
@@ -2246,7 +2247,7 @@ impl PaperEngine {
     ///
     /// Call at UTC midnight via a scheduled task.
     pub fn reset_daily_risk(&self) {
-        self.risk.lock().unwrap_or_else(|e| e.into_inner()).reset_daily();
+        self.risk.lock_or_recover().reset_daily();
         if let Some(ref log) = self.activity {
             log_push(log, EntryKind::Engine,
                 "🌅 Daily risk counters reset (UTC midnight)".to_string());
@@ -2427,7 +2428,7 @@ impl PaperEngine {
 
         // Update risk manager with total realized P&L.
         if total_realized.abs() > f64::EPSILON {
-            self.risk.lock().unwrap_or_else(|e| e.into_inner()).record_close(total_realized);
+            self.risk.lock_or_recover().record_close(total_realized);
         }
 
         // Log summary per action type.

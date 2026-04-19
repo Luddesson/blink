@@ -28,6 +28,7 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 
 use crate::order_executor::OrderExecutor;
+use crate::timed_mutex::TimedMutex;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -108,7 +109,7 @@ impl HeartbeatSnapshot {
 pub fn spawn_heartbeat_worker(
     executor: OrderExecutor,
     metrics:  Option<Arc<HeartbeatMetrics>>,
-    risk:     Option<Arc<std::sync::Mutex<crate::risk_manager::RiskManager>>>,
+    risk:     Option<Arc<TimedMutex<crate::risk_manager::RiskManager>>>,
 ) -> Arc<HeartbeatMetrics> {
     let metrics = metrics.unwrap_or_default();
     let m       = Arc::clone(&metrics);
@@ -150,7 +151,7 @@ pub fn spawn_heartbeat_worker(
                                 threshold = CONSECUTIVE_FAIL_THRESHOLD,
                                 "🚨 Heartbeat dead — tripping circuit breaker to protect open orders"
                             );
-                            risk.lock().unwrap().trip_circuit_breaker(
+                            risk.lock_or_recover().trip_circuit_breaker(
                                 &format!("heartbeat_dead_{}consecutive_failures", consec),
                             );
                         }

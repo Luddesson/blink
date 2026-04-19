@@ -842,7 +842,7 @@ async fn main() -> Result<()> {
                     let ok  = hb_metrics.ok_count.load(std::sync::atomic::Ordering::Relaxed);
                     let err = hb_metrics.fail_count.load(std::sync::atomic::Ordering::Relaxed);
                     {
-                        let mut m = l.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut m = l.failsafe_metrics.lock_or_recover();
                         m.heartbeat_ok_count   = ok;
                         m.heartbeat_fail_count = err;
                     }
@@ -895,7 +895,7 @@ async fn main() -> Result<()> {
                     tokio::time::sleep(Duration::from_secs(secs)).await;
 
                     if sd.load(Ordering::Relaxed) { break; }
-                    risk_for_reset.lock().unwrap_or_else(|e| e.into_inner()).reset_daily();
+                    risk_for_reset.lock_or_recover().reset_daily();
                     tracing::info!("🔄 Daily risk counters reset (UTC midnight)");
                 }
             });

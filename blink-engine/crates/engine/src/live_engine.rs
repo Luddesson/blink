@@ -16,8 +16,27 @@ use crate::order_executor::OrderExecutor;
 use crate::order_signer::{sign_order_with_vault_policy, OrderParams, OrderSigningPolicy};
 use crate::paper_portfolio::{drift_threshold, PaperPortfolio, STARTING_BALANCE_USDC};
 use crate::risk_manager::{RiskConfig, RiskManager};
+use crate::timed_mutex::TimedMutex;
 use crate::truth_reconciler::{PendingOrder, PendingOrderWal, process_order_status, ReconciliationOutcome};
 use crate::types::{OrderSide, RN1Signal, TimeInForce};
+
+// ─── Lock Hierarchy ──────────────────────────────────────────────────────────
+// Two mutex flavours are used.  Always acquire in the order listed below;
+// never hold a sync guard across an `.await` point.
+//
+// ASYNC (tokio::sync::Mutex) — may be held across `.await`:
+//   1. accounted_closed_trades  — acquired first in sync_risk_closes_from_portfolio
+//   2. portfolio                — acquired after #1 when nested; standalone elsewhere
+//   3. pending_orders           — standalone; never nested with #1 or #2
+//
+// SYNC (TimedMutex) — brief critical sections, dropped before any `.await`:
+//   4. risk             — pre-order risk checks and fill accounting
+//   5. failsafe_metrics — drift counters and fill/no-fill tallies
+//   6. canary_state     — session order cap and reject-streak tracking
+//   7. mev_router       — dead code; not in hot path
+//
+// Invariant: sync guards (#4–#7) are always dropped before the next `.await`.
+// ─────────────────────────────────────────────────────────────────────────────
 
 pub struct LiveEngine {
     pub portfolio: Arc<Mutex<PaperPortfolio>>,
@@ -26,7 +45,7 @@ pub struct LiveEngine {
     pub executor: OrderExecutor,
     vault: Option<Arc<tee_vault::VaultHandle>>,
     funder_addr: String,
-    pub risk: Arc<std::sync::Mutex<RiskManager>>,
+    pub risk: Arc<TimedMutex<RiskManager>>,
     #[allow(dead_code)]
     mev_router: Option<std::sync::Mutex<MevRouter>>,
     accounted_closed_trades: Mutex<usize>,
@@ -37,9 +56,9 @@ pub struct LiveEngine {
     /// actual fill amounts via `GET /order/{id}`.
     pending_orders: Mutex<HashMap<String, PendingOrder>>,
     reconcile_interval: Duration,
-    pub failsafe_metrics: std::sync::Mutex<FailsafeMetrics>,
+    pub failsafe_metrics: TimedMutex<FailsafeMetrics>,
     canary_policy: CanaryPolicy,
-    canary_state: std::sync::Mutex<CanaryState>,
+    canary_state: TimedMutex<CanaryState>,
     /// Path to the pending-orders WAL file. Written atomically after every
     /// insert/remove so that crash recovery can reconcile against the exchange.
     wal_path: String,
@@ -137,7 +156,7 @@ impl LiveEngine {
         };
 
         let funder_addr = config.funder_address.clone();
-        let risk = Arc::new(std::sync::Mutex::new(RiskManager::new(RiskConfig::from_env())));
+        let risk = Arc::new(TimedMutex::new("risk", RiskManager::new(RiskConfig::from_env())));
         let signing_policy = OrderSigningPolicy {
             expiration: config.polymarket_order_expiration,
             nonce: config.polymarket_order_nonce,
@@ -192,9 +211,9 @@ impl LiveEngine {
             nonce_counter: AtomicU64::new(config.polymarket_order_nonce),
             pending_orders: Mutex::new(HashMap::new()),
             reconcile_interval: Duration::from_secs(reconcile_interval_secs),
-            failsafe_metrics: std::sync::Mutex::new(FailsafeMetrics::default()),
+            failsafe_metrics: TimedMutex::new("failsafe_metrics", FailsafeMetrics::default()),
             canary_policy,
-            canary_state: std::sync::Mutex::new(CanaryState::default()),
+            canary_state: TimedMutex::new("canary_state", CanaryState::default()),
             wal_path: std::env::var("PENDING_ORDERS_WAL_PATH")
                 .unwrap_or_else(|_| "logs/live_pending_orders_wal.json".to_string()),
         })
@@ -311,7 +330,7 @@ impl LiveEngine {
     }
 
     pub fn risk_status(&self) -> String {
-        self.risk.lock().unwrap_or_else(|e| e.into_inner()).status_line()
+        self.risk.lock_or_recover().status_line()
     }
 
     /// Flush all open positions from the internal order cache.
@@ -405,7 +424,7 @@ impl LiveEngine {
             return;
         }
 
-        if let Err(violation) = self.risk.lock().unwrap_or_else(|e| e.into_inner()).check_pre_order(
+        if let Err(violation) = self.risk.lock_or_recover().check_pre_order(
             size_usdc,
             open_positions,
             current_nav,
@@ -557,12 +576,12 @@ impl LiveEngine {
                     signal.order_id.clone(),
                 );
             }
-            self.risk.lock().unwrap_or_else(|e| e.into_inner()).record_fill(size_usdc);
+            self.risk.lock_or_recover().record_fill(size_usdc);
         }
     }
 
     fn check_canary_gate(&self, signal: &RN1Signal, size_usdc: f64) -> Result<(), String> {
-        let state = self.canary_state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.canary_state.lock_or_recover();
         if state.halted {
             return Err("canary_halted_after_reject_streak".to_string());
         }
@@ -595,7 +614,7 @@ impl LiveEngine {
     }
 
     fn bump_reject_streak(&self) {
-        let mut state = self.canary_state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.canary_state.lock_or_recover();
         state.reject_streak += 1;
         if state.reject_streak >= self.canary_policy.max_reject_streak {
             state.halted = true;
@@ -625,7 +644,7 @@ impl LiveEngine {
     }
 
     fn record_canary_accept(&self) {
-        let mut state = self.canary_state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.canary_state.lock_or_recover();
         state.accepted_orders += 1;
         state.reject_streak = 0;
     }
@@ -661,7 +680,7 @@ impl LiveEngine {
             (p.closed_trades.len(), delta)
         };
 
-        self.risk.lock().unwrap_or_else(|e| e.into_inner()).record_close(realized_delta);
+        self.risk.lock_or_recover().record_close(realized_delta);
         *accounted = new_count;
     }
 
@@ -716,10 +735,10 @@ impl LiveEngine {
                             order_id.clone(),
                         );
                     }
-                    self.risk.lock().unwrap_or_else(|e| e.into_inner()).record_fill(actual_size_usdc);
+                    self.risk.lock_or_recover().record_fill(actual_size_usdc);
                     fills_recorded += 1;
                     resolved       += 1;
-                    self.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner()).confirmed_fills += 1;
+                    self.failsafe_metrics.lock_or_recover().confirmed_fills += 1;
 
                     if partial_fill {
                         warn!(
@@ -777,7 +796,7 @@ impl LiveEngine {
                     }
                     self.bump_reject_streak();
                     resolved += 1;
-                    self.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner()).no_fills += 1;
+                    self.failsafe_metrics.lock_or_recover().no_fills += 1;
                     self.pending_orders.lock().await.remove(&order_id);
                     self.persist_wal().await;
                 }
@@ -796,7 +815,7 @@ impl LiveEngine {
                             format!("STALE ORDER {order_id} pending {elapsed_secs}s — operator review required"),
                         );
                     }
-                    self.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner()).stale_orders += 1;
+                    self.failsafe_metrics.lock_or_recover().stale_orders += 1;
                     // Keep in pending_orders — will retry every reconcile pass.
                 }
 
@@ -819,7 +838,7 @@ impl LiveEngine {
             if let Some(current) = self.get_market_price(token_id) {
                 let drift = (current - entry_price).abs() / entry_price;
                 {
-                    let mut metrics = self.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut metrics = self.failsafe_metrics.lock_or_recover();
                     metrics.check_count += 1;
                     let drift_bps = (drift * 10_000.0).round().max(0.0) as u64;
                     if drift_bps > metrics.max_observed_drift_bps {
@@ -827,7 +846,7 @@ impl LiveEngine {
                     }
                 }
                 if drift > drift_threshold() {
-                    self.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner()).trigger_count += 1;
+                    self.failsafe_metrics.lock_or_recover().trigger_count += 1;
                     warn!(
                         check,
                         "🚨 Fill window abort: price drifted {:.2}%",
@@ -847,7 +866,7 @@ impl LiveEngine {
     }
 
     pub fn failsafe_metrics_snapshot(&self) -> FailsafeMetricsSnapshot {
-        let m = self.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner());
+        let m = self.failsafe_metrics.lock_or_recover();
         let total_resolved = m.confirmed_fills + m.no_fills;
         let confirmation_rate_pct = if total_resolved > 0 {
             Some(m.confirmed_fills as f64 / total_resolved as f64 * 100.0)
@@ -880,7 +899,7 @@ impl LiveEngine {
         error!("🚨 EMERGENCY STOP triggered: {reason}");
 
         // 1. Trip circuit breaker — blocks all new orders immediately.
-        self.risk.lock().unwrap_or_else(|e| e.into_inner()).trip_circuit_breaker(reason);
+        self.risk.lock_or_recover().trip_circuit_breaker(reason);
 
         // 2. Cancel all open orders on the exchange.
         match self.executor.cancel_all_orders().await {

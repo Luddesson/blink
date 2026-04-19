@@ -77,6 +77,7 @@ pub mod r2_uploader;
 pub mod risk_manager;
 pub mod rn1_poller;
 pub mod sniffer;
+pub mod timed_mutex;
 pub mod tui_app;
 pub mod truth_reconciler;
 pub mod tx_router;

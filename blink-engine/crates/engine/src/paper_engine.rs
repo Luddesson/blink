@@ -2442,9 +2442,12 @@ impl PaperEngine {
             .enumerate()
             .flat_map(|(real_idx, pos)| {
                 let patched = patched_exit_config_for_category(&exit_config, pos.market_title.as_deref());
-                evaluate_exits(std::slice::from_ref(pos), &patched, |tid| {
-                    live_tokens.contains(tid)
-                })
+                evaluate_exits(
+                    std::slice::from_ref(pos),
+                    &patched,
+                    |tid| live_tokens.contains(tid),
+                    |tid| self.book_store.get_spread_bps(tid),
+                )
                 .into_iter()
                 .map(move |mut d| { d.position_idx = real_idx; d })
             })

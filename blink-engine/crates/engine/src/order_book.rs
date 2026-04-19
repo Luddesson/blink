@@ -124,6 +124,13 @@ impl OrderBookStore {
         self.books.get(token_id).and_then(|b| b.mid_price())
     }
 
+    /// Returns the bid-ask spread in basis points for a token, or `None` if
+    /// either side of the book is empty.
+    #[inline]
+    pub fn get_spread_bps(&self, token_id: &str) -> Option<u64> {
+        self.books.get(token_id).and_then(|b| b.spread_bps())
+    }
+
     /// Returns a mark price (×1 000) for a token.
     ///
     /// Uses mid-price when both sides are available; otherwise falls back to

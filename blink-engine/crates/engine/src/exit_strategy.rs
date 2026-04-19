@@ -220,16 +220,22 @@ pub struct ExitDecision {
 /// `has_live_price` is a closure that returns `true` if the WS order book has a
 /// fresh price for the given token_id. Pass `|_| true` to skip stale-market checks.
 ///
+/// `spread_bps` returns the current bid-ask spread in basis points for a token,
+/// or `None` if the book is empty / one-sided. Pass `|_| None` to disable the
+/// WideSpread health check.
+///
 /// Decisions are returned in priority order (resolved > stop-loss > trailing >
 /// take-profit > stagnant > max-hold > stale). Only the highest-priority action
 /// per position is returned.
-pub fn evaluate_exits<F>(
+pub fn evaluate_exits<F, G>(
     positions: &[PaperPosition],
     config: &ExitConfig,
     has_live_price: F,
+    spread_bps: G,
 ) -> Vec<ExitDecision>
 where
     F: Fn(&str) -> bool,
+    G: Fn(&str) -> Option<u64>,
 {
     let mut decisions = Vec::new();
 
@@ -281,6 +287,21 @@ where
                 action: ExitAction::TimeStop { held_secs, pnl_pct },
             });
             continue;
+        }
+
+        // 1.8. Wide-spread health exit: book is effectively illiquid.
+        //      Gated on a 30s warmup so WS startup / brief book gaps don't
+        //      trigger a spurious close on fresh positions.
+        if config.wide_spread_bps_exit > 0 && held_secs >= 30 {
+            if let Some(bps) = spread_bps(&pos.token_id) {
+                if bps >= config.wide_spread_bps_exit {
+                    decisions.push(ExitDecision {
+                        position_idx: idx,
+                        action: ExitAction::WideSpread { spread_bps: bps },
+                    });
+                    continue;
+                }
+            }
         }
 
         // 2. Stop-loss
@@ -531,7 +552,7 @@ mod tests {
     fn exit_resolved_winner() {
         let positions = vec![make_position(0.35, 0.99, 100.0)];
         let config = ExitConfig::default();
-        let decisions = evaluate_exits(&positions, &config, |_| true);
+        let decisions = evaluate_exits(&positions, &config, |_| true, |_| None);
         assert_eq!(decisions.len(), 1);
         assert!(matches!(decisions[0].action, ExitAction::Resolved { winner: true, .. }));
     }
@@ -540,7 +561,7 @@ mod tests {
     fn exit_stop_loss_small() {
         let mut pos = make_position(0.50, 0.20, 5.0); // $5 position, -60% loss (exceeds -50% stop)
         let config = ExitConfig::default();
-        let decisions = evaluate_exits(&[pos], &config, |_| true);
+        let decisions = evaluate_exits(&[pos], &config, |_| true, |_| None);
         assert_eq!(decisions.len(), 1);
         assert!(matches!(decisions[0].action, ExitAction::StopLoss { .. }));
     }
@@ -549,7 +570,7 @@ mod tests {
     fn exit_no_action_healthy_position() {
         let pos = make_position(0.50, 0.52, 20.0); // small gain, healthy
         let config = ExitConfig::default();
-        let decisions = evaluate_exits(&[pos], &config, |_| true);
+        let decisions = evaluate_exits(&[pos], &config, |_| true, |_| None);
         assert!(decisions.is_empty());
     }
 
@@ -561,7 +582,7 @@ mod tests {
         pos.opened_at_wall = chrono::Local::now() - chrono::Duration::seconds(600);
         let mut config = ExitConfig::default();
         config.time_stop_secs = 300;
-        let decisions = evaluate_exits(&[pos], &config, |_| true);
+        let decisions = evaluate_exits(&[pos], &config, |_| true, |_| None);
         assert_eq!(decisions.len(), 1);
         assert!(matches!(decisions[0].action, ExitAction::TimeStop { .. }),
             "expected TimeStop, got {:?}", decisions[0].action);
@@ -574,8 +595,39 @@ mod tests {
         pos.opened_at_wall = chrono::Local::now() - chrono::Duration::seconds(600);
         let mut config = ExitConfig::default();
         config.time_stop_secs = 300;
-        let decisions = evaluate_exits(&[pos], &config, |_| true);
+        let decisions = evaluate_exits(&[pos], &config, |_| true, |_| None);
         assert!(decisions.is_empty(), "healthy position should not time-stop");
+    }
+
+    #[test]
+    fn exit_wide_spread_fires_on_illiquid_book() {
+        let mut pos = make_position(0.50, 0.52, 20.0);
+        pos.opened_at_wall = chrono::Local::now() - chrono::Duration::seconds(60);
+        let config = ExitConfig::default(); // wide_spread_bps_exit = 500
+        let decisions = evaluate_exits(&[pos], &config, |_| true, |_| Some(800));
+        assert_eq!(decisions.len(), 1);
+        assert!(matches!(decisions[0].action, ExitAction::WideSpread { spread_bps: 800 }),
+            "expected WideSpread@800bps, got {:?}", decisions[0].action);
+    }
+
+    #[test]
+    fn exit_wide_spread_skipped_during_warmup() {
+        // Position is only 5s old — below the 30s warmup gate, so even an
+        // extreme spread must NOT trigger WideSpread.
+        let pos = make_position(0.50, 0.52, 20.0);
+        let config = ExitConfig::default();
+        let decisions = evaluate_exits(&[pos], &config, |_| true, |_| Some(5_000));
+        assert!(decisions.is_empty(), "warmup gate should suppress WideSpread");
+    }
+
+    #[test]
+    fn exit_wide_spread_respects_tight_book() {
+        let mut pos = make_position(0.50, 0.52, 20.0);
+        pos.opened_at_wall = chrono::Local::now() - chrono::Duration::seconds(60);
+        let config = ExitConfig::default();
+        // 100bps < 500bps threshold → no exit
+        let decisions = evaluate_exits(&[pos], &config, |_| true, |_| Some(100));
+        assert!(decisions.is_empty());
     }
 
     #[test]
@@ -584,7 +636,7 @@ mod tests {
         pos.opened_at_wall = chrono::Local::now() - chrono::Duration::seconds(3600);
         let mut config = ExitConfig::default();
         config.time_stop_secs = 0;
-        let decisions = evaluate_exits(&[pos], &config, |_| true);
+        let decisions = evaluate_exits(&[pos], &config, |_| true, |_| None);
         // -10% drawdown, no time stop, no other trigger → no action
         assert!(decisions.is_empty());
     }

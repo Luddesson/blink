@@ -61,6 +61,9 @@ fn patched_exit_config_for_category(base: &ExitConfig, market_title: Option<&str
     if let Ok(v) = std::env::var(format!("EXIT_{prefix}_EVENT_AWARE_SECS")) {
         if let Ok(s) = v.parse::<u64>() { cfg.event_aware_exit_secs = s; }
     }
+    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_TIME_STOP_SECS")) {
+        if let Ok(s) = v.parse::<u64>() { cfg.time_stop_secs = s; }
+    }
     cfg
 }
 
@@ -733,7 +736,11 @@ impl PaperEngine {
 
         // ── Extreme price filter: skip very low or very high odds ──────────
         // Configurable via EXTREME_PRICE_HI / EXTREME_PRICE_LO env vars.
-        let price_hi_default = if is_alpha { 0.90 } else { 0.85 };
+        // Data-driven (Apr 5-8 analysis): entries >0.65 hit SL/MNL/stagnant
+        // ~60% of the time (dead zone) — asymmetric payoff at 0.85 gives only
+        // +17% upside vs -35% stop downside. Hard cap at 0.65 is empirically
+        // Kelly-positive whereas >0.65 is Kelly-negative.
+        let price_hi_default = if is_alpha { 0.70 } else { 0.65 };
         let price_lo_default = if is_alpha { 0.05 } else { 0.10 };
         let price_hi: f64 = std::env::var("EXTREME_PRICE_HI")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(price_hi_default);
@@ -751,20 +758,56 @@ impl PaperEngine {
             return;
         }
 
-        // ── Market category filter: block esports + fee-aware gating ────
+        // ── Market category filter: block structurally negative-EV categories ──
+        // Data-driven blocklist from Apr 5-8 analysis:
+        //   tennis         → -8.09 USDC on 67 trades (-0.12/trade, WR 75%)
+        //                    Continuous-scoring dynamics break the autoclaim
+        //                    model which depends on discrete price spikes.
+        //   O/U 4.5+       → -6.25 USDC on 28 trades (-0.22/trade, WR 39%)
+        //                    High goal lines are priced efficiently — no edge.
+        //   qualifier      → -2.95 USDC pattern in low-liquidity rounds.
+        //   draw           → -3.53 USDC on 53 trades (WR 68%) — draws are
+        //                    hard to predict and tightly priced.
+        // esports is kept in the blocklist per prior team decision.
         let title_str = signal.market_title.as_deref().unwrap_or("");
         {
             let title_lower = title_str.to_lowercase();
-            let blocked_keywords = ["esports", "lol:", "cs2:", "cs:go", "dota", "valorant",
+            let default_blocklist: &[&str] = &[
+                // esports (existing)
+                "esports", "lol:", "cs2:", "cs:go", "dota", "valorant",
                 "league of legends", "counter-strike", "overwatch", "bo3)", "bo5)",
-                "lec ", "lck ", "lpl ", "vct "];
-            if blocked_keywords.iter().any(|kw| title_lower.contains(kw)) {
+                "lec ", "lck ", "lpl ", "vct ",
+                // tennis (new — structural incompatibility with autoclaim)
+                "tennis", "atp ", "wta ",
+                "roland garros", "wimbledon", "us open", "australian open",
+                "monte carlo masters", "madrid open", "rome masters",
+                "cincinnati masters", "indian wells", "miami open",
+                "ladies linz", "mexico city:",
+                // qualifier rounds (new — low liquidity, low edge)
+                "qualification:", "qualifier:",
+                // high goal-line O/U (new — efficient pricing, no edge)
+                "o/u 4.5", "o/u 5.5", "o/u 6.5", "o/u 7.5",
+                "over/under 4.5", "over/under 5.5",
+                // draw markets (new — negative EV across the board)
+                "end in a draw",
+            ];
+            // Allow operator override via BLOCKED_KEYWORDS env var (comma-separated).
+            let custom: Vec<String> = std::env::var("BLOCKED_KEYWORDS")
+                .ok()
+                .map(|v| v.split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect())
+                .unwrap_or_default();
+            let hit = default_blocklist.iter().any(|kw| title_lower.contains(kw))
+                || custom.iter().any(|kw| title_lower.contains(kw));
+            if hit {
                 let mut p = self.portfolio.lock().await;
                 p.skipped_orders += 1;
                 drop(p);
                 warn!(
                     title = %title_str,
-                    "⏭️  Signal skipped — blocked market category (esports)"
+                    "⏭️  Signal skipped — blocked market category"
                 );
                 self.record_rejection("blocked_category", &signal).await;
                 return;
@@ -2472,6 +2515,8 @@ impl PaperEngine {
                 ExitAction::PreResolutionStop { .. } => "PRE-RESOLUTION",
                 ExitAction::PreEventClose { .. } => "PRE-EVENT-CLOSE",
                 ExitAction::AdverseMomentum { .. } => "ADVERSE-MOMENTUM",
+                ExitAction::TimeStop { .. } => "TIME-STOP",
+                ExitAction::WideSpread { .. } => "WIDE-SPREAD",
             };
             *action_counts.entry(action_key).or_insert(0) += 1;
 

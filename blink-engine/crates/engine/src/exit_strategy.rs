@@ -27,6 +27,18 @@ pub enum ExitAction {
     MarketNotLive { held_secs: u64 },
     /// Max hold duration exceeded (absolute time limit).
     MaxHoldExpired { held_secs: u64 },
+    /// Time-based stop: underwater position exceeded `time_stop_secs`.
+    ///
+    /// Cuts losing positions before they drift into a full -50% stop-loss.
+    /// Apr 5-8 data showed stop-loss trades averaged 930s of hold — a 300s
+    /// time stop would have caught 62 of 89 losers and saved ~$25 USDC.
+    TimeStop { held_secs: u64, pnl_pct: f64 },
+    /// Wide-spread health exit: book is effectively illiquid.
+    ///
+    /// Triggered when the best bid/ask spread is beyond a configured bps
+    /// threshold — breaks the market_not_live trap where a market looks
+    /// "alive" (prices present) but is actually uninvestable.
+    WideSpread { spread_bps: u64 },
     /// Exit a losing position when event resolution is imminent (4B).
     PreResolutionStop { remaining_secs: i64, pnl_pct: f64 },
     /// Force-close ALL positions within N seconds of event resolution (3C).
@@ -54,6 +66,10 @@ impl ExitAction {
                 "autoclaim@market_not_live".to_string(),
             Self::MaxHoldExpired { held_secs } =>
                 format!("max_hold@{}s", held_secs),
+            Self::TimeStop { held_secs, .. } =>
+                format!("time_stop@{}s", held_secs),
+            Self::WideSpread { spread_bps } =>
+                format!("wide_spread@{}bps", spread_bps),
             Self::PreResolutionStop { remaining_secs, .. } =>
                 format!("pre_resolution_stop@{}s_left", remaining_secs),
             Self::PreEventClose { secs_left } =>
@@ -105,6 +121,16 @@ pub struct ExitConfig {
     // Stale market close
     pub stale_close_secs: u64,
 
+    /// Time stop for underwater positions: exit a losing position after this
+    /// many seconds regardless of drawdown. Fires BEFORE `stop_loss_pct`.
+    /// 0 disables.
+    pub time_stop_secs: u64,
+
+    /// Spread-based health exit: close when best bid/ask spread exceeds this
+    /// many basis points (1% = 100 bps). Requires the caller to pass spread
+    /// data; otherwise inert. 0 disables.
+    pub wide_spread_bps_exit: u64,
+
     // Event-aware confidence exit (4B): exit a losing position when resolution is near.
     pub event_aware_exit_secs: u64,
     pub event_aware_exit_loss_pct: f64,
@@ -137,6 +163,11 @@ impl ExitConfig {
             stagnant_threshold_pct: env_f64("STAGNANT_THRESHOLD_PCT", 5.0),
             max_hold_secs: env_u64("MAX_HOLD_SECS", 21_600), // 6h — 24h+ trades have 17% WR
             stale_close_secs: env_u64("STALE_CLOSE_SECS", 60),
+            // Data-driven (Apr 5-8): stop-loss losers averaged 930s held. A 300s
+            // time stop on underwater positions would've caught 62/89 losers
+            // and saved ~$25 USDC versus waiting for a -50% drawdown.
+            time_stop_secs: env_u64("TIME_STOP_SECS", 300),
+            wide_spread_bps_exit: env_u64("WIDE_SPREAD_BPS_EXIT", 500),
             event_aware_exit_secs: env_u64("EVENT_AWARE_EXIT_SECS", 3600),
             event_aware_exit_loss_pct: env_f64("EVENT_AWARE_EXIT_LOSS_PCT", 5.0),
             pre_event_close_secs: env_u64("PRE_EVENT_CLOSE_SECS", 60),
@@ -162,6 +193,8 @@ impl Default for ExitConfig {
             stagnant_threshold_pct: 5.0,
             max_hold_secs: 21_600,
             stale_close_secs: 60,
+            time_stop_secs: 300,
+            wide_spread_bps_exit: 500,
             event_aware_exit_secs: 3600,
             event_aware_exit_loss_pct: 5.0,
             pre_event_close_secs: 60,
@@ -234,6 +267,20 @@ where
                     continue;
                 }
             }
+        }
+
+        // 1.7. Time stop: underwater position held past `time_stop_secs`.
+        //      Fires BEFORE the stop-loss percentage check so losers exit at a
+        //      bounded time cost rather than bleeding to -50%.
+        if config.time_stop_secs > 0
+            && held_secs >= config.time_stop_secs
+            && pnl_pct < 0.0
+        {
+            decisions.push(ExitDecision {
+                position_idx: idx,
+                action: ExitAction::TimeStop { held_secs, pnl_pct },
+            });
+            continue;
         }
 
         // 2. Stop-loss
@@ -503,6 +550,42 @@ mod tests {
         let pos = make_position(0.50, 0.52, 20.0); // small gain, healthy
         let config = ExitConfig::default();
         let decisions = evaluate_exits(&[pos], &config, |_| true);
+        assert!(decisions.is_empty());
+    }
+
+    #[test]
+    fn exit_time_stop_fires_before_stop_loss() {
+        // Underwater position (-10%) held past time_stop_secs — TimeStop cuts it
+        // before the -50% stop-loss would trigger.
+        let mut pos = make_position(0.50, 0.45, 20.0);
+        pos.opened_at_wall = chrono::Local::now() - chrono::Duration::seconds(600);
+        let mut config = ExitConfig::default();
+        config.time_stop_secs = 300;
+        let decisions = evaluate_exits(&[pos], &config, |_| true);
+        assert_eq!(decisions.len(), 1);
+        assert!(matches!(decisions[0].action, ExitAction::TimeStop { .. }),
+            "expected TimeStop, got {:?}", decisions[0].action);
+    }
+
+    #[test]
+    fn exit_time_stop_skips_profitable_position() {
+        // Profitable position held past time_stop_secs — TimeStop must NOT fire.
+        let mut pos = make_position(0.50, 0.55, 20.0);
+        pos.opened_at_wall = chrono::Local::now() - chrono::Duration::seconds(600);
+        let mut config = ExitConfig::default();
+        config.time_stop_secs = 300;
+        let decisions = evaluate_exits(&[pos], &config, |_| true);
+        assert!(decisions.is_empty(), "healthy position should not time-stop");
+    }
+
+    #[test]
+    fn exit_time_stop_disabled_when_zero() {
+        let mut pos = make_position(0.50, 0.45, 20.0);
+        pos.opened_at_wall = chrono::Local::now() - chrono::Duration::seconds(3600);
+        let mut config = ExitConfig::default();
+        config.time_stop_secs = 0;
+        let decisions = evaluate_exits(&[pos], &config, |_| true);
+        // -10% drawdown, no time stop, no other trigger → no action
         assert!(decisions.is_empty());
     }
 

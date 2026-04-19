@@ -161,8 +161,8 @@ async fn handle_rpc(req: RpcRequest, state: &AgentRpcState) -> std::result::Resu
 }
 
 async fn blink_status(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
-    let risk_status = state.risk_status.lock().unwrap().clone();
-    let subscriptions = state.market_subscriptions.lock().unwrap().clone();
+    let risk_status = state.risk_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let subscriptions = state.market_subscriptions.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let mut base = json!({
         "timestamp_ms": chrono::Utc::now().timestamp_millis(),
         "ws_connected": state.ws_live.load(Ordering::Relaxed),
@@ -399,7 +399,7 @@ async fn submit_alpha_signal(params: Value, state: &AgentRpcState) -> std::resul
     if !risk_cfg.enabled {
         let mut rec = record;
         rec.status = "rejected:alpha_disabled".to_string();
-        let mut a = analytics.lock().unwrap();
+        let mut a = analytics.lock().unwrap_or_else(|e| e.into_inner());
         a.record_reject("alpha_disabled");
         a.record_signal(rec);
         return Ok(json!({ "accepted": false, "reason": "Alpha trading disabled" }));
@@ -414,7 +414,7 @@ async fn submit_alpha_signal(params: Value, state: &AgentRpcState) -> std::resul
             floor = risk_cfg.confidence_floor,
             "Alpha signal rejected — confidence below floor"
         );
-        let mut a = analytics.lock().unwrap();
+        let mut a = analytics.lock().unwrap_or_else(|e| e.into_inner());
         a.record_reject("low_confidence");
         a.record_signal(rec);
         return Ok(json!({
@@ -435,7 +435,7 @@ async fn submit_alpha_signal(params: Value, state: &AgentRpcState) -> std::resul
         Ok(()) => {
             let mut rec = record;
             rec.status = "accepted".to_string();
-            let mut a = analytics.lock().unwrap();
+            let mut a = analytics.lock().unwrap_or_else(|e| e.into_inner());
             a.record_accept();
             a.record_signal(rec);
             tracing::info!(analysis_id = %analysis_id, "Alpha signal accepted");
@@ -445,7 +445,7 @@ async fn submit_alpha_signal(params: Value, state: &AgentRpcState) -> std::resul
             let mut rec = record;
             rec.status = "rejected:queue_full".to_string();
             tracing::warn!(analysis_id = %rec.analysis_id, "Alpha signal rejected — queue full");
-            let mut a = analytics.lock().unwrap();
+            let mut a = analytics.lock().unwrap_or_else(|e| e.into_inner());
             a.record_reject("queue_full");
             a.record_signal(rec);
             Ok(json!({ "accepted": false, "reason": "Signal queue full" }))
@@ -453,7 +453,7 @@ async fn submit_alpha_signal(params: Value, state: &AgentRpcState) -> std::resul
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
             let mut rec = record;
             rec.status = "rejected:engine_shutdown".to_string();
-            let mut a = analytics.lock().unwrap();
+            let mut a = analytics.lock().unwrap_or_else(|e| e.into_inner());
             a.record_reject("engine_shutdown");
             a.record_signal(rec);
             Err(RpcError { code: -32000, message: "Engine shutting down".into() })
@@ -473,7 +473,7 @@ async fn report_alpha_cycle(params: Value, state: &AgentRpcState) -> std::result
     })?;
 
     let n_markets = report.top_markets.len();
-    analytics.lock().unwrap().record_cycle(report);
+    analytics.lock().unwrap_or_else(|e| e.into_inner()).record_cycle(report);
     tracing::info!(markets = n_markets, "Alpha cycle report received");
 
     Ok(json!({ "ok": true }))
@@ -484,7 +484,7 @@ async fn alpha_status(state: &AgentRpcState) -> std::result::Result<Value, RpcEr
         code: -32000,
         message: "Alpha pipeline not enabled".into(),
     })?;
-    let a = analytics.lock().unwrap();
+    let a = analytics.lock().unwrap_or_else(|e| e.into_inner());
     Ok(json!({
         "enabled": state.alpha_risk_config.as_ref().map(|c| c.enabled).unwrap_or(false),
         "signals_received": a.signals_received,
@@ -505,7 +505,7 @@ async fn report_alpha_calibration(params: Value, state: &AgentRpcState) -> std::
     })?;
 
     // Store the calibration data as-is (JSON blob from Python sidecar)
-    analytics.lock().unwrap().calibration = Some(params);
+    analytics.lock().unwrap_or_else(|e| e.into_inner()).calibration = Some(params);
     tracing::info!("Alpha calibration report received");
 
     Ok(json!({ "ok": true }))

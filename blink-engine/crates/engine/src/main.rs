@@ -1040,9 +1040,27 @@ async fn main() -> Result<()> {
         let alpha_paper = paper_for_persist.as_ref().map(Arc::clone);
         let alpha_act = activity.clone();
         let alpha_analytics_ref = alpha_analytics.clone();
+        let alpha_risk_cfg = alpha_risk_config.clone();
         let alpha_handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             while let Some(signal) = alpha_handle.block_on(alpha_rx.recv()) {
+                // Staleness gate: discard signals older than the configured limit.
+                if let Some(received_at) = signal.received_at {
+                    let age_secs = received_at.elapsed().as_secs();
+                    let limit = alpha_risk_cfg.as_ref().map(|c| c.max_signal_age_secs).unwrap_or(60);
+                    if age_secs > limit {
+                        tracing::warn!(
+                            analysis_id = %signal.analysis_id,
+                            age_secs,
+                            limit_secs = limit,
+                            "Alpha signal discarded — too stale (age {}s > limit {}s)", age_secs, limit
+                        );
+                        if let Some(ref analytics) = alpha_analytics_ref {
+                            analytics.lock().unwrap_or_else(|e| e.into_inner()).record_reject("stale_signal");
+                        }
+                        continue;
+                    }
+                }
                 let source_label = format!("AI/{}", signal.analysis_id);
                 let analysis_id_clone = signal.analysis_id.clone();
                 if let Some(ref paper) = alpha_paper {

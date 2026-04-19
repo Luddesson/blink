@@ -1,0 +1,12 @@
+{
+  "checks": [],
+  "generated_at_utc": "2026-04-20T00:00:20Z",
+  "overall_status": "PASS",
+  "run_id": "sample-run",
+  "summary": {
+    "checks_failed": 0,
+    "checks_passed": 7,
+    "checks_total": 7,
+    "required_failed": 0
+  }
+}

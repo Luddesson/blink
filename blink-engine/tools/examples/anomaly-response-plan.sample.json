@@ -1,0 +1,121 @@
+{
+  "automation_safe_action_list": [
+    {
+      "action_id": "refresh-drift-artifacts",
+      "automation_safe": true,
+      "category": "artifact-refresh",
+      "command_hint": "python tools\\run_eval_cycle.py --run-id <run-id> drift-matrix --baseline-json <baseline.json>",
+      "description": "Re-run drift-matrix, artifact-integrity, decision-eval, and confidence synthesis.",
+      "live_trade_mutation": false,
+      "priority": 1,
+      "priority_rank": 1,
+      "requires_human_confirmation": false
+    },
+    {
+      "action_id": "freeze-promotion",
+      "automation_safe": true,
+      "category": "gating",
+      "command_hint": "python tools\\run_eval_cycle.py --run-id <run-id> signoff-packet --enforce-confidence-gate",
+      "description": "Freeze promotion and require operator review until anomalies clear.",
+      "live_trade_mutation": false,
+      "priority": 1,
+      "priority_rank": 2,
+      "requires_human_confirmation": false
+    }
+  ],
+  "conditions": [
+    {
+      "condition_id": "severe_drift",
+      "evidence": {
+        "avg_slippage_bps_delta": 146.0,
+        "category_mix_l1": 0.28,
+        "fill_rate_pct_points": -18.6,
+        "max_distribution_l1": 0.81,
+        "notional_distribution_l1": 0.81,
+        "reject_mix_l1": 0.67
+      },
+      "severity": "CRITICAL",
+      "summary": "Drift exceeds configured critical thresholds",
+      "thresholds": {
+        "avg_slippage_bps_max": 120.0,
+        "distribution_l1_max": 0.75,
+        "fill_rate_pct_points_min": -15.0
+      },
+      "triggered": true
+    },
+    {
+      "condition_id": "severe_toxic_flow",
+      "evidence": {
+        "severity_tier": "HIGH",
+        "toxic_flow_score_normalized": 0.74
+      },
+      "severity": "HIGH",
+      "summary": "Toxic-flow tier is HIGH",
+      "thresholds": {
+        "trigger_tiers": [
+          "HIGH",
+          "SEVERE"
+        ]
+      },
+      "triggered": true
+    }
+  ],
+  "constraints": {
+    "live_trade_mutation_allowed": false,
+    "safe_for_control_plane_automation": true
+  },
+  "deterministic_fingerprint": "1e7a8dd8d1895f99a094af5a313ec44bc98102d081aee92026c0ec8ebcbfdd89",
+  "escalation": {
+    "channel": "pagerduty://blink-control-plane-primary",
+    "requires_operator_ack": true,
+    "routing_key": "blink-eval-anomaly",
+    "target_sla_minutes": 10
+  },
+  "generated_at_utc": "2026-04-21T00:00:00+00:00",
+  "inputs": {
+    "confidence_file": {
+      "path": "C:\\repo\\blink\\blink-engine\\logs\\eval-cycle\\sample-run\\recommendation-confidence-v2.json",
+      "present": true
+    },
+    "decision_file": {
+      "path": "C:\\repo\\blink\\blink-engine\\logs\\eval-cycle\\sample-run\\decision.json",
+      "present": true
+    },
+    "drift_file": {
+      "path": "C:\\repo\\blink\\blink-engine\\logs\\eval-cycle\\sample-run\\drift-matrix.json",
+      "present": true
+    },
+    "integrity_file": {
+      "path": "C:\\repo\\blink\\blink-engine\\logs\\eval-cycle\\sample-run\\artifact-integrity.json",
+      "present": true
+    },
+    "toxic_flow_file": {
+      "path": "C:\\repo\\blink\\blink-engine\\logs\\eval-cycle\\sample-run\\toxic-flow-advisor.json",
+      "present": true
+    }
+  },
+  "recommended_mitigations": [
+    {
+      "applies_to": "severe_drift",
+      "description": "Pause promotion and regenerate drift/context artifacts before next decision.",
+      "mitigation_id": "drift-rebaseline-required",
+      "priority": 1
+    },
+    {
+      "applies_to": "severe_toxic_flow",
+      "description": "Escalate control-plane review and require integrity + confidence refresh before signoff.",
+      "mitigation_id": "tighten-eval-guardrails",
+      "priority": 2
+    }
+  ],
+  "run_id": "sample-run",
+  "schema_version": "1.0.0",
+  "summary": {
+    "control_plane_only": true,
+    "escalation_channel": "pagerduty://blink-control-plane-primary",
+    "highest_severity": "CRITICAL",
+    "requires_escalation": true,
+    "triggered_conditions": 2
+  },
+  "warnings": []
+}

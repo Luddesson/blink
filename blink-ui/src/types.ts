@@ -1,11 +1,40 @@
 // ─── Engine mode ─────────────────────────────────────────────────────────────
 export type EngineMode = 'paper' | 'live' | 'readonly'
+export type StrategyMode = 'mirror' | 'conservative' | 'aggressive'
+
+export interface StrategySwitchRecord {
+  seq: number
+  switched_at_ms: number
+  from: StrategyMode
+  to: StrategyMode
+  reason?: string | null
+  source: string
+}
+
+export interface StrategyStatus {
+  current_mode: StrategyMode
+  switch_seq: number
+  last_switched_at_ms: number
+  cooldown_secs: number
+  runtime_switch_enabled: boolean
+  live_switch_allowed: boolean
+  require_reason: boolean
+  cooldown_remaining_ms?: number
+  profile?: {
+    min_notional_multiplier: number
+    sizing_multiplier: number
+    price_band_lo_adjust: number
+    price_band_hi_adjust: number
+  }
+  history?: StrategySwitchRecord[]
+}
 
 export interface ModeResponse {
   mode: EngineMode
   live_trading_env: boolean
   paper_active: boolean
   live_active: boolean
+  strategy?: StrategyStatus
 }
 
 // ─── WebSocket snapshot ──────────────────────────────────────────────────────
@@ -27,6 +56,7 @@ export interface WsSnapshot {
   vol_bps?: number  // global rolling volatility (CoV × 10000)
   /** Live order book summaries — keyed by token_id (from 6A) */
   order_books?: Record<string, OrderBookSummary>
+  strategy?: StrategyStatus
 }
 
 // ─── Portfolio ───────────────────────────────────────────────────────────────
@@ -181,6 +211,7 @@ export interface StatusResponse {
   subscriptions: string[]
   risk_status: 'OK' | 'CIRCUIT_BREAKER' | 'KILL_SWITCH_OFF' | 'N/A'
   uptime_secs?: number
+  strategy?: StrategyStatus
 }
 
 // ─── Fill Window ─────────────────────────────────────────────────────────────
@@ -296,4 +327,44 @@ export interface TwinSnapshot {
   win_rate_pct: number
   nav_return_pct: number
   max_drawdown_pct: number
+}
+
+export type ProjectInventoryStatus =
+  | 'active-runtime'
+  | 'active-ops'
+  | 'compiled-not-wired'
+  | 'archived-or-legacy'
+  | 'unknown-needs-review'
+
+export type ProjectInventoryEvidence = {
+  path: string
+  line?: number
+  note: string
+}
+
+export type ProjectInventoryItem = {
+  id: string
+  area: string
+  name: string
+  status: ProjectInventoryStatus
+  confidence: string
+  recommendation: string
+  evidence: ProjectInventoryEvidence[]
+}
+
+export type ProjectInventorySummary = {
+  totalItems: number
+  byStatus: Record<string, number>
+  byArea: Record<string, number>
+}
+
+export type ProjectInventoryResponse = {
+  available: boolean
+  schemaVersion?: number
+  generatedAt?: string
+  summary?: ProjectInventorySummary
+  items?: ProjectInventoryItem[]
+  error?: string
+  generate_command?: string
+  paths_checked?: string[]
 }

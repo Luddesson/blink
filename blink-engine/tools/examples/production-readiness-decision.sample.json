@@ -1,0 +1,22 @@
+{
+  "decision": "GO",
+  "dimensions": {
+    "drift_severity": {
+      "status": "GO"
+    },
+    "fee_drag_pct": {
+      "status": "GO"
+    },
+    "pnl_return_pct": {
+      "status": "GO"
+    },
+    "risk_events": {
+      "status": "GO"
+    }
+  },
+  "generated_at_utc": "2026-04-20T00:00:10Z",
+  "policy_fingerprint": "cb75c262bd0d1acb39ce835f08c448997854f876b3f6d16b64f2851be9df5d63",
+  "policy_version": "2026.04.19",
+  "run_id": "sample-run",
+  "warnings": []
+}

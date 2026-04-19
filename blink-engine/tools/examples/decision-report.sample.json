@@ -1,0 +1,25 @@
+{
+  "generated_at_utc": "2026-04-20T00:00:00+00:00",
+  "run_id": "sample-run",
+  "pnl_return_pct": 1.8,
+  "fee_drag_pct": 18.5,
+  "window": {
+    "funnel_delta": {
+      "signals": 124,
+      "accepted": 88,
+      "fills": 71,
+      "aborts": 2,
+      "rejections": 36
+    }
+  },
+  "gate_pressure_top5_run_window": [
+    {
+      "gate": "rate_limit",
+      "rejections_delta": 1
+    },
+    {
+      "gate": "fee_to_edge",
+      "rejections_delta": 8
+    }
+  ]
+}

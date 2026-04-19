@@ -84,6 +84,13 @@ npm run build
   - `logs\engine-stdout.log`
   - `logs\vite-stdout.log`
 
+## Operations
+
+- Rollback playbook: `deploy\ROLLBACK-PLAYBOOK.md`
+- Safe helper (preview by default): `deploy\rollback-hetzner.ps1`
+- Operator signoff gate (mandatory pre/post run): `deploy\OPERATOR-SIGNOFF-GATE.md`
+- Machine-readable signoff template: `deploy\templates\operator-signoff-record.template.json`
+
 ## Notes
 
 - Local editor/session files and build artifacts are ignored in `.gitignore`.

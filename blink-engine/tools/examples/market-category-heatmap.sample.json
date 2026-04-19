@@ -1,0 +1,110 @@
+{
+  "artifacts_dir": "logs/eval-cycle/sample-run",
+  "categories": [
+    {
+      "category": "sports",
+      "confidence_recommendation_metrics": {
+        "alpha_accept_rate_pct": 66.666667,
+        "alpha_avg_confidence": 0.7425,
+        "alpha_realized_pnl_usdc": 2.41,
+        "alpha_realized_samples": 2,
+        "alpha_realized_win_rate_pct": 50.0,
+        "alpha_reject_rate_pct": 33.333333,
+        "alpha_signals": 3,
+        "alpha_status_counts": {
+          "closed": 2,
+          "engine_rejected": 1
+        }
+      },
+      "fee_drag_metrics": {
+        "fee_drag_pct_of_abs_realized_pnl": 9.090909,
+        "fee_drag_pct_of_notional": 0.1,
+        "fees_paid_usdc": 0.22
+      },
+      "reject_pressure_metrics": {
+        "low_confidence_rejections": 1,
+        "reject_events": 4,
+        "reject_notional_usdc_est": 11.0,
+        "reject_pressure_pct_of_run": 40.0,
+        "rejects_per_trade": 2.0
+      },
+      "trade_metrics": {
+        "gross_return_pct": 1.5,
+        "losses": 1,
+        "net_return_after_fees_pct": 1.4,
+        "notional_usdc_est": 22.0,
+        "realized_pnl_usdc": 0.33,
+        "trades_total": 2,
+        "win_rate_pct": 50.0,
+        "wins": 1
+      }
+    }
+  ],
+  "generated_at_utc": "2026-04-20T00:00:00+00:00",
+  "heatmap": {
+    "columns": [
+      {
+        "direction": "higher_is_better",
+        "key": "net_return_after_fees_pct"
+      },
+      {
+        "direction": "higher_is_better",
+        "key": "win_rate_pct"
+      },
+      {
+        "direction": "lower_is_better",
+        "key": "fee_drag_pct_of_notional"
+      },
+      {
+        "direction": "lower_is_better",
+        "key": "reject_pressure_pct_of_run"
+      },
+      {
+        "direction": "higher_is_better",
+        "key": "alpha_avg_confidence"
+      },
+      {
+        "direction": "higher_is_better",
+        "key": "alpha_accept_rate_pct"
+      }
+    ],
+    "rows": [
+      {
+        "category": "sports",
+        "values": {
+          "alpha_accept_rate_pct": 66.666667,
+          "alpha_avg_confidence": 0.7425,
+          "fee_drag_pct_of_notional": 0.1,
+          "net_return_after_fees_pct": 1.4,
+          "reject_pressure_pct_of_run": 40.0,
+          "win_rate_pct": 50.0
+        }
+      }
+    ]
+  },
+  "run_id": "sample-run",
+  "schema_version": 1,
+  "sources": {
+    "alpha": "snapshot:/api/alpha.signal_history",
+    "category_resolution_order": [
+      "explicit_category_fields",
+      "market_title_keyword_detection",
+      "uncategorized_fallback"
+    ],
+    "decision_present": true,
+    "recommendation_confidence_present": true,
+    "rejections": "snapshot:/api/rejections.events",
+    "report_present": true,
+    "trades": "snapshot:/api/history.trades"
+  },
+  "summary": {
+    "alpha_signals_total": 3,
+    "categories_total": 1,
+    "decision": "TUNE",
+    "recommendation_confidence_score_percent": 63.5,
+    "rejections_total": 4,
+    "report_pnl_return_pct": 1.1,
+    "trades_total": 2
+  },
+  "warnings": []
+}

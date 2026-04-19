@@ -16,6 +16,7 @@ use crate::order_executor::OrderExecutor;
 use crate::order_signer::{sign_order_with_vault_policy, OrderParams, OrderSigningPolicy};
 use crate::paper_portfolio::{drift_threshold, PaperPortfolio, STARTING_BALANCE_USDC};
 use crate::risk_manager::{RiskConfig, RiskManager};
+use crate::strategy::{StrategyController, StrategySnapshot};
 use crate::timed_mutex::TimedMutex;
 use crate::truth_reconciler::{
     process_order_status, PendingOrder, PendingOrderWal, ReconciliationOutcome,
@@ -64,6 +65,7 @@ pub struct LiveEngine {
     /// Path to the pending-orders WAL file. Written atomically after every
     /// insert/remove so that crash recovery can reconcile against the exchange.
     wal_path: String,
+    strategy_controller: Arc<StrategyController>,
 }
 
 /// Point-in-time snapshot of live SLO metrics for dashboards and alerting.
@@ -131,6 +133,7 @@ impl LiveEngine {
         config: Arc<Config>,
         book_store: Arc<OrderBookStore>,
         activity: Option<ActivityLog>,
+        strategy_controller: Arc<StrategyController>,
     ) -> Result<Self> {
         let executor = OrderExecutor::from_config(&config)?;
 
@@ -227,7 +230,12 @@ impl LiveEngine {
             canary_state: TimedMutex::new("canary_state", CanaryState::default()),
             wal_path: std::env::var("PENDING_ORDERS_WAL_PATH")
                 .unwrap_or_else(|_| "logs/live_pending_orders_wal.json".to_string()),
+            strategy_controller,
         })
+    }
+
+    pub fn strategy_snapshot(&self) -> StrategySnapshot {
+        self.strategy_controller.snapshot()
     }
 
     /// Atomically persist the current `pending_orders` map to the WAL file.
@@ -419,12 +427,32 @@ impl LiveEngine {
         let entry_price = signal.price as f64 / 1_000.0;
         let rn1_shares = signal.size as f64 / 1_000.0;
         let rn1_notional_usd = rn1_shares * entry_price;
+        let strategy_snapshot = self.strategy_controller.snapshot();
+        let strategy_profile = strategy_snapshot.profile;
+        let min_notional_base = std::env::var("MIN_SIGNAL_NOTIONAL_USD")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(10.0);
+        let min_notional = (min_notional_base * strategy_profile.min_notional_multiplier).max(0.0);
+        if rn1_notional_usd < min_notional {
+            warn!(
+                token_id = %signal.token_id,
+                rn1_notional_usd = %format!("${:.2}", rn1_notional_usd),
+                min_notional = %format!("${:.2}", min_notional),
+                strategy_mode = %strategy_snapshot.current_mode,
+                "Skipping live signal: strategy min-notional gate"
+            );
+            let mut p = self.portfolio.lock().await;
+            p.skipped_orders += 1;
+            return;
+        }
+        let strategy_adjusted_notional = rn1_notional_usd * strategy_profile.sizing_multiplier;
 
         // 2. Size the order — brief lock on portfolio
         let (size_usdc, current_nav, open_positions) = {
             let mut p = self.portfolio.lock().await;
             p.total_signals += 1;
-            let size = p.calculate_size_usdc(rn1_notional_usd);
+            let size = p.calculate_size_usdc(strategy_adjusted_notional);
             let nav = p.nav();
             let open = p.positions.len();
             (size, nav, open)

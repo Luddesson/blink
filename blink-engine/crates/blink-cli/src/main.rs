@@ -57,6 +57,9 @@ enum Commands {
 
     /// Engine control — status, pause, resume.
     Engine(commands::engine::EngineArgs),
+
+    /// Safe control-plane orchestrator for Blink eval sequences.
+    Orchestrator(commands::orchestrator::OrchestratorArgs),
 }
 
 #[tokio::main]
@@ -70,5 +73,6 @@ async fn main() -> Result<()> {
         Commands::Market(args) => commands::market::run(ctx, args).await,
         Commands::Order(args) => commands::order::run(ctx, args).await,
         Commands::Engine(args) => commands::engine::run(ctx, args).await,
+        Commands::Orchestrator(args) => commands::orchestrator::run(ctx, args).await,
     }
 }

@@ -37,6 +37,7 @@ use crate::order_book::OrderBookStore;
 use crate::paper_engine::PaperEngine;
 use crate::paper_portfolio::PaperPortfolio;
 use crate::risk_manager::RiskManager;
+use crate::strategy::{StrategyController, StrategyMode, StrategySwitchError};
 use crate::timed_mutex::TimedMutex;
 use crate::ws_client::WsHealthMetrics;
 
@@ -85,6 +86,8 @@ pub struct AppState {
     pub portfolio_cached_at_ms: Arc<AtomicU64>,
     /// Alpha analytics — present when ALPHA_ENABLED=true. Shared with agent_rpc.
     pub alpha_analytics: Option<Arc<Mutex<AlphaAnalytics>>>,
+    pub strategy_controller: Arc<StrategyController>,
+    pub strategy_live_active: bool,
 }
 
 // ─── JSON response types ────────────────────────────────────────────────────
@@ -173,6 +176,8 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/latency", get(get_latency))
         .route("/api/failsafe", get(get_failsafe))
         .route("/api/mode", get(get_mode))
+        .route("/api/strategy", post(post_strategy))
+        .route("/api/strategy/rollback", post(post_strategy_rollback))
         .route("/api/live/portfolio", get(get_live_portfolio))
         .route("/api/pause", post(post_pause))
         .route(
@@ -199,6 +204,7 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/analytics/equity", get(get_analytics_equity))
         .route("/api/alpha", get(get_alpha_status))
         .route("/api/alpha/calibration", get(get_alpha_calibration))
+        .route("/api/project-inventory", get(get_project_inventory))
         .route("/api/gates", get(get_gates))
         .route("/ws", get(ws_handler))
         .with_state(state)
@@ -322,6 +328,25 @@ fn build_portfolio_json(
     })
 }
 
+fn strategy_json(state: &AppState) -> serde_json::Value {
+    let snapshot = state.strategy_controller.snapshot();
+    let mut value = json!(snapshot);
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "rollback".to_string(),
+            json!({
+                "target_mode": "mirror",
+                "available": true,
+                "active": snapshot.current_mode == StrategyMode::Mirror,
+                "required": snapshot.current_mode != StrategyMode::Mirror,
+                "api_path": "/api/strategy/rollback",
+                "api_alt_path": "/api/strategy with {mode:\"mirror\",force_rollback_to_mirror:true}",
+            }),
+        );
+    }
+    value
+}
+
 /// Starts the web server on the given address.
 pub async fn run_web_server(
     addr: &str,
@@ -433,6 +458,7 @@ async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
         "messages_total": state.msg_count.load(Ordering::Relaxed),
         "subscriptions": subs,
         "risk_status": risk_status,
+        "strategy": strategy_json(&state),
     }))
 }
 
@@ -968,6 +994,7 @@ async fn get_mode(State(state): State<AppState>) -> Json<serde_json::Value> {
         "live_trading_env": live_trading,
         "paper_active": state.paper.is_some(),
         "live_active": state.live_engine.is_some(),
+        "strategy": strategy_json(&state),
     }))
 }
 
@@ -1018,6 +1045,122 @@ async fn post_pause(
         .unwrap_or(false);
     state.trading_paused.store(paused, Ordering::Relaxed);
     Json(json!({ "trading_paused": paused }))
+}
+
+async fn post_strategy(
+    State(state): State<AppState>,
+    body: Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let mode_raw = match body.get("mode").and_then(|v| v.as_str()) {
+        Some(mode) => mode,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    json!({"error": "invalid params: expected mode=mirror|conservative|aggressive"}),
+                ),
+            )
+                .into_response();
+        }
+    };
+    let mode = match mode_raw.parse::<StrategyMode>() {
+        Ok(mode) => mode,
+        Err(err) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": err}))).into_response();
+        }
+    };
+    let reason = body
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    let force_rollback_to_mirror = body
+        .get("force_rollback_to_mirror")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let source = body
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("web_api");
+
+    if force_rollback_to_mirror && mode != StrategyMode::Mirror {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "force_rollback_to_mirror requires mode=mirror"})),
+        )
+            .into_response();
+    }
+
+    let result = if force_rollback_to_mirror {
+        Ok(state
+            .strategy_controller
+            .rollback_to_mirror(reason, &format!("{source}:rollback")))
+    } else {
+        state
+            .strategy_controller
+            .switch_mode(mode, reason, source, state.strategy_live_active)
+    };
+    match result {
+        Ok(snapshot) => {
+            if force_rollback_to_mirror {
+                tracing::warn!(
+                    from_mode = %snapshot
+                        .history
+                        .last()
+                        .map(|record| record.from.to_string())
+                        .unwrap_or_else(|| "mirror".to_string()),
+                    to_mode = %snapshot.current_mode,
+                    switch_seq = snapshot.switch_seq,
+                    "Strategy rollback-to-mirror applied via API"
+                );
+            } else {
+                tracing::info!(
+                    mode = %snapshot.current_mode,
+                    switch_seq = snapshot.switch_seq,
+                    "Strategy mode updated via API"
+                );
+            }
+            (StatusCode::OK, Json(json!(snapshot))).into_response()
+        }
+        Err(err) => {
+            let status = match err {
+                StrategySwitchError::RuntimeSwitchDisabled
+                | StrategySwitchError::LiveSwitchNotAllowed
+                | StrategySwitchError::ReasonRequired => StatusCode::FORBIDDEN,
+                StrategySwitchError::CooldownActive { .. } => StatusCode::TOO_MANY_REQUESTS,
+            };
+            (status, Json(json!({ "error": err.message() }))).into_response()
+        }
+    }
+}
+
+async fn post_strategy_rollback(
+    State(state): State<AppState>,
+    body: Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let reason = body
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    let source = body
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("web_api")
+        .to_string();
+
+    let snapshot = state
+        .strategy_controller
+        .rollback_to_mirror(reason, &format!("{source}:rollback"));
+    tracing::warn!(
+        from_mode = %snapshot
+            .history
+            .last()
+            .map(|record| record.from.to_string())
+            .unwrap_or_else(|| "mirror".to_string()),
+        to_mode = %snapshot.current_mode,
+        switch_seq = snapshot.switch_seq,
+        "Strategy rollback-to-mirror applied via dedicated endpoint"
+    );
+    (StatusCode::OK, Json(json!(snapshot))).into_response()
 }
 
 async fn post_reset_circuit_breaker(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -1240,6 +1383,7 @@ async fn build_snapshot(state: &AppState) -> Result<String, ()> {
         "ws_connected": state.ws_live.load(Ordering::Relaxed),
         "trading_paused": state.trading_paused.load(Ordering::Relaxed),
         "messages_total": state.msg_count.load(Ordering::Relaxed),
+        "strategy": strategy_json(state),
     });
 
     // Portfolio summary — read from the cache populated by the background
@@ -2297,6 +2441,34 @@ async fn get_alpha_calibration(State(state): State<AppState>) -> impl IntoRespon
     }
 }
 
+async fn get_project_inventory() -> Json<serde_json::Value> {
+    let candidates = [
+        "../docs/generated/project-inventory.json",
+        "docs/generated/project-inventory.json",
+    ];
+
+    for path in candidates {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            return match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(payload) => Json(payload),
+                Err(err) => Json(json!({
+                    "available": false,
+                    "error": format!("project-inventory.json is invalid JSON: {err}"),
+                    "path": path,
+                    "generate_command": ".\\scripts\\generate-project-inventory.ps1",
+                })),
+            };
+        }
+    }
+
+    Json(json!({
+        "available": false,
+        "error": "Project inventory is not generated yet",
+        "paths_checked": candidates,
+        "generate_command": ".\\scripts\\generate-project-inventory.ps1",
+    }))
+}
+
 /// Per-gate rejection analytics — shows which gates are blocking signals
 /// and how often, enabling remote diagnosis of overly aggressive filters.
 async fn get_gates(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -2348,4 +2520,180 @@ async fn get_gates(State(state): State<AppState>) -> Json<serde_json::Value> {
         "total_rejections_24h": total_24h,
         "gates": gates,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{post_strategy, post_strategy_rollback, AppState};
+    use crate::activity_log::new_activity_log;
+    use crate::order_book::OrderBookStore;
+    use crate::strategy::{StrategyController, StrategyControllerConfig, StrategyMode};
+    use axum::body::to_bytes;
+    use axum::extract::State;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use axum::Json;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::broadcast;
+
+    fn make_test_state(controller: StrategyController, strategy_live_active: bool) -> AppState {
+        let (broadcast_tx, _) = broadcast::channel(16);
+        AppState {
+            ws_live: Arc::new(AtomicBool::new(false)),
+            trading_paused: Arc::new(AtomicBool::new(false)),
+            msg_count: Arc::new(AtomicU64::new(0)),
+            book_store: Arc::new(OrderBookStore::new()),
+            activity_log: new_activity_log(),
+            paper: None,
+            risk: None,
+            twin_snapshot: None,
+            ws_health: None,
+            latency: None,
+            market_subscriptions: Arc::new(Mutex::new(Vec::new())),
+            broadcast_tx,
+            started_at: Arc::new(std::time::Instant::now()),
+            provider: None,
+            live_engine: None,
+            bullpen: None,
+            discovery_store: None,
+            convergence_store: None,
+            slug_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            portfolio_cache: Arc::new(std::sync::RwLock::new(None)),
+            clickhouse_url: None,
+            snapshot_seq: Arc::new(AtomicU64::new(0)),
+            portfolio_cached_at_ms: Arc::new(AtomicU64::new(0)),
+            alpha_analytics: None,
+            strategy_controller: Arc::new(controller),
+            strategy_live_active,
+        }
+    }
+
+    #[tokio::test]
+    async fn post_strategy_rejects_invalid_mode() {
+        let controller = StrategyController::new(StrategyControllerConfig::with_defaults(
+            StrategyMode::Mirror,
+            true,
+            true,
+            0,
+            false,
+        ));
+        let state = make_test_state(controller, false);
+        let response = post_strategy(
+            State(state),
+            Json(json!({"mode": "invalid", "reason": "test"})),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn post_strategy_maps_runtime_disabled_to_forbidden() {
+        let controller = StrategyController::new(StrategyControllerConfig::with_defaults(
+            StrategyMode::Mirror,
+            false,
+            true,
+            0,
+            false,
+        ));
+        let state = make_test_state(controller, false);
+        let response = post_strategy(
+            State(state),
+            Json(json!({"mode": "conservative", "reason": "test"})),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("response should be valid JSON");
+        assert!(payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("runtime switching is disabled"));
+    }
+
+    #[tokio::test]
+    async fn post_strategy_maps_cooldown_to_too_many_requests() {
+        let controller = StrategyController::new(StrategyControllerConfig::with_defaults(
+            StrategyMode::Mirror,
+            true,
+            true,
+            300,
+            false,
+        ));
+        let state = make_test_state(controller, false);
+
+        let ok_response = post_strategy(
+            State(state.clone()),
+            Json(json!({"mode": "conservative", "reason": "initial"})),
+        )
+        .await
+        .into_response();
+        assert_eq!(ok_response.status(), StatusCode::OK);
+
+        let cooldown_response = post_strategy(
+            State(state),
+            Json(json!({"mode": "aggressive", "reason": "second-switch"})),
+        )
+        .await
+        .into_response();
+        assert_eq!(cooldown_response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn post_strategy_force_rollback_bypasses_runtime_disabled() {
+        let controller = StrategyController::new(StrategyControllerConfig::with_defaults(
+            StrategyMode::Aggressive,
+            false,
+            false,
+            300,
+            true,
+        ));
+        let state = make_test_state(controller, true);
+
+        let response = post_strategy(
+            State(state),
+            Json(json!({
+                "mode": "mirror",
+                "force_rollback_to_mirror": true
+            })),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("response should be valid JSON");
+        assert_eq!(payload["current_mode"], "mirror");
+    }
+
+    #[tokio::test]
+    async fn post_strategy_rollback_endpoint_switches_to_mirror() {
+        let controller = StrategyController::new(StrategyControllerConfig::with_defaults(
+            StrategyMode::Conservative,
+            false,
+            false,
+            300,
+            true,
+        ));
+        let state = make_test_state(controller, true);
+
+        let response = post_strategy_rollback(State(state), Json(json!({})))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("response should be valid JSON");
+        assert_eq!(payload["current_mode"], "mirror");
+    }
 }

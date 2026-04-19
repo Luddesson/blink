@@ -1,0 +1,103 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: blink-eval-clickhouse
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
+    environment:
+      CLICKHOUSE_DB: blink
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - blink_eval_clickhouse_data:/var/lib/clickhouse
+      - blink_eval_clickhouse_logs:/var/log/clickhouse-server
+    restart: unless-stopped
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: blink-eval-blackbox
+    command:
+      - "--config.file=/etc/blackbox_exporter/config.yml"
+    ports:
+      - "127.0.0.1:9115:9115"
+    volumes:
+      - ./blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: blink-eval-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - blink_eval_prometheus_data:/prometheus
+    depends_on:
+      - blackbox-exporter
+      - otel-collector
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.105.0
+    container_name: blink-eval-otel
+    command:
+      - "--config=/etc/otelcol-contrib/config.yaml"
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:9464:9464"
+    volumes:
+      - ./otel-collector.yml:/etc/otelcol-contrib/config.yaml:ro
+      - ../../logs:/var/log/blink:ro
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: blink-eval-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - blink_eval_grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - clickhouse
+    restart: unless-stopped
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.16.2
+    container_name: blink-eval-mlflow
+    command:
+      - "mlflow"
+      - "server"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "5001"
+      - "--backend-store-uri"
+      - "sqlite:///mlflow/mlflow.db"
+      - "--default-artifact-root"
+      - "/mlflow/artifacts"
+    ports:
+      - "127.0.0.1:5001:5001"
+    volumes:
+      - blink_eval_mlflow_data:/mlflow
+    restart: unless-stopped
+
+volumes:
+  blink_eval_clickhouse_data:
+  blink_eval_clickhouse_logs:
+  blink_eval_prometheus_data:
+  blink_eval_grafana_data:
+  blink_eval_mlflow_data:

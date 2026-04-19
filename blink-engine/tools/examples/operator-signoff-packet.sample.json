@@ -1,0 +1,105 @@
+{
+  "artifact_diagnostics": [
+    {
+      "artifact": "decision",
+      "errors": [],
+      "path": "C:\\repo\\blink-engine\\logs\\eval-cycle\\sample-run\\decision.json",
+      "present": true,
+      "required": true,
+      "valid": true
+    }
+  ],
+  "artifacts": {
+    "confidence_file_path": "blink-engine/logs/eval-cycle/sample-run/recommendation-confidence-v2.json",
+    "decision_file_path": "blink-engine/logs/eval-cycle/sample-run/decision.json",
+    "integrity_file_path": "blink-engine/logs/eval-cycle/sample-run/artifact-integrity.json",
+    "recommendation_file_path": "blink-engine/logs/eval-cycle/sample-run/regime-conditional-recommendations.json",
+    "rollback_helper_path": "deploy/rollback-hetzner.ps1",
+    "rollback_playbook_path": "deploy/ROLLBACK-PLAYBOOK.md",
+    "thresholds_schema_path": "blink-engine/tools/examples/decision-thresholds.json"
+  },
+  "checklist_missing_fields": [],
+  "gate_statuses": {
+    "artifact_gate": {
+      "reason": "required artifacts present and valid",
+      "status": "PASS"
+    },
+    "confidence_gate": {
+      "reason": "confidence_score_normalized >= 0.55",
+      "status": "PASS"
+    },
+    "decision_gate": {
+      "reason": "decision is promotable and no dimension is ROLLBACK",
+      "status": "PASS"
+    },
+    "integrity_gate": {
+      "reason": "artifact-integrity overall_status is PASS",
+      "status": "PASS"
+    },
+    "post_run_gate": {
+      "reason": "post-run checklist satisfied",
+      "status": "PASS"
+    },
+    "pre_run_gate": {
+      "reason": "pre-run checklist satisfied",
+      "status": "PASS"
+    },
+    "risk_critical_gate": {
+      "reason": "risk_events and drift_severity are not ROLLBACK",
+      "status": "PASS"
+    }
+  },
+  "generated_at_utc": "2026-04-20T00:02:30Z",
+  "missing_artifact_diagnostics": [],
+  "notes": "Sample output for docs/testing.",
+  "post_run": {
+    "decision": "GO",
+    "decision_dimensions_reviewed": true,
+    "hard_stop_reasons": [],
+    "hard_stop_triggered": false,
+    "rollback_executed": false,
+    "rollback_reference": "",
+    "warnings_present": false
+  },
+  "pre_run": {
+    "hard_stop_reasons": [],
+    "hard_stop_triggered": false,
+    "prior_decision_reviewed": true,
+    "rollback_preview_verified": true,
+    "target_mode_verified": true
+  },
+  "promotion_allowed": true,
+  "recorded_at_utc": "2026-04-20T00:02:00Z",
+  "run_id": "sample-run",
+  "schema_version": "1.1.0",
+  "signers": {
+    "primary_operator": {
+      "name": "operator-name",
+      "signed_at_utc": "2026-04-20T00:01:00Z"
+    },
+    "secondary_reviewer": {
+      "name": "risk-reviewer-name",
+      "signed_at_utc": "2026-04-20T00:02:00Z"
+    }
+  },
+  "source_artifact_summary": {
+    "confidence": {
+      "level": "HIGH",
+      "score_normalized": 0.81
+    },
+    "decision_warnings": [],
+    "integrity": {
+      "overall_status": "PASS",
+      "required_failed": 0
+    },
+    "recommendation": {
+      "keys": [
+        "generated_at_utc",
+        "recommendations",
+        "run_id"
+      ],
+      "present": true
+    },
+    "rollback_dimensions": []
+  }
+}

@@ -1,5 +1,5 @@
 import { motion } from 'motion/react'
-import { Sparkles, LineChart, History, Radar, TrendingUp, Settings, LayoutDashboard } from 'lucide-react'
+import { Sparkles, LineChart, History, Radar, TrendingUp, Settings, LayoutDashboard, Boxes } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { TabId } from '../hooks/useTab'
 import KeycapHint from './aurora/KeycapHint'
@@ -11,8 +11,9 @@ const TAB_META: { id: TabId; label: string; key: string; icon: LucideIcon; accen
   { id: 'history',      label: 'History',   key: '3', icon: History },
   { id: 'intelligence', label: 'Bullpen',   key: '4', icon: Radar },
   { id: 'performance',  label: 'Perf',      key: '5', icon: TrendingUp },
-  { id: 'config',       label: 'Config',    key: '6', icon: Settings },
-  { id: 'alpha',        label: 'Alpha AI',  key: '7', icon: Sparkles, accent: true },
+  { id: 'inventory',    label: 'Inventory', key: '6', icon: Boxes },
+  { id: 'config',       label: 'Config',    key: '7', icon: Settings },
+  { id: 'alpha',        label: 'Alpha AI',  key: '8', icon: Sparkles, accent: true },
 ]
 
 interface Props {

@@ -1,5 +1,14 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { useFetch, useWebSocket, postPause, postSellPosition, prepareSettlement, submitSignedTx } from '../hooks/useApi';
+import {
+  useFetch,
+  useWebSocket,
+  postPause,
+  postSellPosition,
+  prepareSettlement,
+  submitSignedTx,
+  postStrategy,
+  type StrategyMode,
+} from '../hooks/useApi';
 import { Card, Stat, Badge } from '../components/Card';
 import { EquityChart } from '../components/EquityChart';
 
@@ -18,6 +27,14 @@ function formatAge(secs: number): string {
   if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
   return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
 }
+
+const STRATEGY_MODES: readonly StrategyMode[] = ['mirror', 'conservative', 'aggressive'];
+
+const STRATEGY_BADGE_VARIANTS: Record<StrategyMode, 'green' | 'yellow' | 'red'> = {
+  mirror: 'green',
+  conservative: 'yellow',
+  aggressive: 'red',
+};
 
 // ─── Sell Modal ───────────────────────────────────────────────────────────────
 
@@ -164,7 +181,7 @@ function SellModal({ pos, onClose, onSold }: SellModalProps) {
 
 export default function Dashboard() {
   const { snapshot, connected } = useWebSocket();
-  const wsPortfolio = (snapshot as Record<string, unknown> | null)?.portfolio as Record<string, unknown> | null;
+  const wsPortfolio = snapshot?.portfolio ?? null;
   const wsConnected = connected && wsPortfolio != null;
 
   // Fallback REST polling — only active before WS delivers first portfolio data.
@@ -176,7 +193,7 @@ export default function Dashboard() {
   );
 
   // Activity log: read from WS recent_activity when possible, otherwise REST-poll slowly.
-  const wsActivity = (snapshot as Record<string, unknown> | null)?.recent_activity as unknown[] | undefined;
+  const wsActivity = snapshot?.recent_activity;
   const { data: activityData } = useFetch<{ entries: unknown[] }>(
     '/api/activity',
     wsConnected ? 30_000 : 3_000,
@@ -188,6 +205,9 @@ export default function Dashboard() {
   const [sortKey, setSortKey] = useState<string>('unrealized_pnl');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [search, setSearch] = useState<string>('');
+  const [strategyMode, setStrategyMode] = useState<StrategyMode>('mirror');
+  const [strategySwitching, setStrategySwitching] = useState(false);
+  const [strategyError, setStrategyError] = useState<string | null>(null);
   const activityRef = useRef<HTMLDivElement>(null);
 
   // Merge WS and REST data — WS wins when available.
@@ -201,6 +221,23 @@ export default function Dashboard() {
     (Array.isArray(wsActivity) && wsActivity.length > 0)
       ? wsActivity
       : (Array.isArray(activityData?.entries) ? activityData.entries : []);
+
+  const strategyStatus = snapshot?.strategy;
+  const activeStrategyMode = strategyStatus?.mode ?? strategyMode;
+  const runtimeSwitchEnabled = strategyStatus?.runtime_switch_enabled ?? false;
+  const strategySwitchAllowed = strategyStatus?.switch_allowed ?? false;
+  const cooldownSecs = strategyStatus?.cooldown_remaining_secs;
+  const lockoutReason = strategyStatus?.lockout_reason;
+  const lockoutUntil = strategyStatus?.lockout_until_ts;
+  const canSwitchStrategy = connected && runtimeSwitchEnabled && strategySwitchAllowed;
+  const strategySelectDisabled = !canSwitchStrategy || strategySwitching;
+
+  useEffect(() => {
+    if (strategyStatus?.mode) {
+      setStrategyMode(strategyStatus.mode);
+      setStrategyError(null);
+    }
+  }, [strategyStatus?.mode]);
 
   // Auto-scroll activity log to bottom when new entries arrive
   useEffect(() => {
@@ -274,11 +311,54 @@ export default function Dashboard() {
 
   const totalPnl = ((liveStats?.realized_pnl_usdc as number) ?? 0) + ((liveStats?.unrealized_pnl_usdc as number) ?? 0);
 
-  const snap = snapshot as Record<string, unknown> | null;
+  const snap = snapshot;
   const snapPaused = snap?.trading_paused as boolean | undefined;
   const handlePause = () => {
     if (snap) postPause(!snapPaused);
   };
+
+  const handleStrategyChange = async (nextModeRaw: string) => {
+    if (!STRATEGY_MODES.includes(nextModeRaw as StrategyMode)) return;
+    const nextMode = nextModeRaw as StrategyMode;
+    setStrategyMode(nextMode);
+    setStrategyError(null);
+    setStrategySwitching(true);
+    const result = await postStrategy(nextMode);
+    setStrategySwitching(false);
+
+    if (!result.ok) {
+      setStrategyError(result.error ?? 'Failed to switch strategy mode');
+      if (strategyStatus?.mode) setStrategyMode(strategyStatus.mode);
+      return;
+    }
+
+    if (result.strategy?.mode) {
+      setStrategyMode(result.strategy.mode);
+    }
+  };
+
+  const strategyHints: string[] = [];
+  if (!connected) {
+    strategyHints.push('Disconnected — strategy switching unavailable.');
+  }
+  if (!runtimeSwitchEnabled) {
+    strategyHints.push('Runtime switching is disabled by engine config.');
+  }
+  if (typeof cooldownSecs === 'number' && cooldownSecs > 0) {
+    strategyHints.push(`Cooldown active: ${Math.ceil(cooldownSecs)}s remaining.`);
+  }
+  if (lockoutReason) {
+    strategyHints.push(`Lockout: ${lockoutReason}`);
+  }
+  if (typeof lockoutUntil === 'number') {
+    const lockoutDate = lockoutUntil > 1_000_000_000_000
+      ? new Date(lockoutUntil)
+      : new Date(lockoutUntil * 1000);
+    strategyHints.push(`Lockout until ${lockoutDate.toLocaleTimeString()}.`);
+  }
+  if (runtimeSwitchEnabled && !strategySwitchAllowed && strategyHints.length === 0) {
+    strategyHints.push('Strategy switching is currently not allowed.');
+  }
 
   // Helper to safely read numbers from liveStats (which is Record<string, unknown>)
   const n = (key: string): number => (liveStats?.[key] as number) ?? 0;
@@ -315,6 +395,40 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {/* Portfolio overview */}
+      <Card title="Strategy Mode">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge text={activeStrategyMode.toUpperCase()} variant={STRATEGY_BADGE_VARIANTS[activeStrategyMode]} />
+            <Badge text={runtimeSwitchEnabled ? 'RUNTIME SWITCH ON' : 'RUNTIME SWITCH OFF'} variant={runtimeSwitchEnabled ? 'green' : 'gray'} />
+          </div>
+          <div className="flex items-center gap-2">
+            <label htmlFor="strategy-mode" className="text-xs text-gray-400">Mode</label>
+            <select
+              id="strategy-mode"
+              value={strategyMode}
+              onChange={(e) => handleStrategyChange(e.target.value)}
+              disabled={strategySelectDisabled}
+              className="rounded border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {STRATEGY_MODES.map((modeOption) => (
+                <option key={modeOption} value={modeOption}>
+                  {modeOption}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        {strategyHints.length > 0 && (
+          <div className="mt-2 space-y-1 text-xs text-yellow-400">
+            {strategyHints.map((hint) => (
+              <div key={hint}>{hint}</div>
+            ))}
+          </div>
+        )}
+        {strategyError && <div className="mt-2 text-xs text-red-400">{strategyError}</div>}
+      </Card>
 
       {/* Portfolio overview */}
       <div className="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-10 gap-3">

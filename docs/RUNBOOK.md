@@ -37,6 +37,12 @@ cargo build --release
 .\scripts\generate-config-registry.ps1
 ```
 
+## Generate Project Inventory
+
+```powershell
+.\scripts\generate-project-inventory.ps1
+```
+
 ## Clean Up Local Artifacts
 
 ```powershell

@@ -30,6 +30,7 @@ use crate::paper_portfolio::{
     drift_threshold, polymarket_taker_fee_with_rate, PaperPortfolio, STARTING_BALANCE_USDC,
 };
 use crate::risk_manager::{RiskConfig, RiskManager};
+use crate::strategy::{StrategyController, StrategyMode, StrategySnapshot};
 use crate::timed_mutex::TimedMutex;
 use crate::types::{format_price, OrderSide, RN1Signal};
 
@@ -126,6 +127,8 @@ pub struct PaperEngine {
     warehouse_tx: Option<crossbeam_channel::Sender<WarehouseEvent>>,
     /// Tracks when the engine was started — used for warmup bypass on vol gate.
     engine_started_at: Instant,
+    strategy_controller: Arc<StrategyController>,
+    strategy_mode_explicit_env: bool,
 }
 
 /// Snapshot of the currently active fill window, if any.
@@ -386,6 +389,8 @@ pub struct WarmState {
     pub rejection_analytics: RejectionAnalytics,
     pub comparator: ShadowComparator,
     pub experiments: ExperimentSwitches,
+    #[serde(default)]
+    pub strategy_snapshot: Option<StrategySnapshot>,
     pub checksum: u64,
 }
 
@@ -414,6 +419,8 @@ impl PaperEngine {
         market_subscriptions: Arc<std::sync::Mutex<Vec<String>>>,
         ws_force_reconnect: Arc<std::sync::atomic::AtomicBool>,
         warehouse_tx: Option<crossbeam_channel::Sender<WarehouseEvent>>,
+        strategy_controller: Arc<StrategyController>,
+        strategy_mode_explicit_env: bool,
     ) -> anyhow::Result<Self> {
         if activity.is_none() {
             // Only print the text banner when not in TUI mode.
@@ -485,6 +492,8 @@ impl PaperEngine {
             session_start_nav: Arc::new(std::sync::Mutex::new(None)),
             warehouse_tx,
             engine_started_at: Instant::now(),
+            strategy_controller,
+            strategy_mode_explicit_env,
         })
     }
 
@@ -498,6 +507,10 @@ impl PaperEngine {
 
     pub fn risk_status(&self) -> String {
         self.risk.lock_or_recover().status_line()
+    }
+
+    pub fn strategy_snapshot(&self) -> StrategySnapshot {
+        self.strategy_controller.snapshot()
     }
 
     /// Returns the current global volatility in basis points (coefficient of variation × 10 000).
@@ -619,17 +632,38 @@ impl PaperEngine {
         // Alpha signals bypass this gate — different signal source = independent edge thesis.
         {
             let is_alpha_signal = signal.signal_source == "alpha";
+            let strategy_mode = self.strategy_controller.snapshot().current_mode;
+            let aggressive_token_cap_usdc = std::env::var("AGGRESSIVE_TOKEN_EXPOSURE_USDC")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(40.0)
+                .max(1.0);
             let mut p = self.portfolio.lock().await;
-            if !is_alpha_signal
-                && p.positions
+            if !is_alpha_signal {
+                let existing_token_exposure = p
+                    .positions
                     .iter()
-                    .any(|pos| pos.token_id == signal.token_id)
-            {
-                warn!(token_id = %signal.token_id, "⏭️  Already holding position — skipping");
-                p.skipped_orders += 1;
-                drop(p);
-                self.record_rejection("already_holding", &signal).await;
-                return;
+                    .filter(|pos| pos.token_id == signal.token_id)
+                    .map(|pos| pos.usdc_spent)
+                    .sum::<f64>();
+                if existing_token_exposure > 0.0 {
+                    let can_scale_in = strategy_mode == StrategyMode::Aggressive
+                        && existing_token_exposure < aggressive_token_cap_usdc;
+                    if can_scale_in {
+                        info!(
+                            token_id = %signal.token_id,
+                            existing_token_exposure = %format!("${:.2}", existing_token_exposure),
+                            cap_usdc = %format!("${:.2}", aggressive_token_cap_usdc),
+                            "🚀 Aggressive scale-in allowed despite existing position"
+                        );
+                    } else {
+                        warn!(token_id = %signal.token_id, "⏭️  Already holding position — skipping");
+                        p.skipped_orders += 1;
+                        drop(p);
+                        self.record_rejection("already_holding", &signal).await;
+                        return;
+                    }
+                }
             }
             // ── Per-match concentration limit: max 2 positions on same event ──
             let max_per_match: usize = std::env::var("MAX_POSITIONS_PER_MATCH")
@@ -791,6 +825,8 @@ impl PaperEngine {
         let mut entry_price = signal.price as f64 / 1_000.0;
         let rn1_shares = signal.size as f64 / 1_000.0;
         let rn1_notional_usd = rn1_shares * entry_price;
+        let strategy_snapshot = self.strategy_controller.snapshot();
+        let strategy_profile = strategy_snapshot.profile;
         let realism_mode = std::env::var("PAPER_REALISM_MODE")
             .ok()
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
@@ -812,10 +848,11 @@ impl PaperEngine {
         // ── Min-notional filter (skip micro-signals before sizing) ──────────
         // Alpha signals use Kelly-sized amounts — bypass notional floor.
         let is_alpha = signal.signal_source == "alpha";
-        let min_notional: f64 = std::env::var("MIN_SIGNAL_NOTIONAL_USD")
+        let min_notional_base: f64 = std::env::var("MIN_SIGNAL_NOTIONAL_USD")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(10.0);
+        let min_notional = (min_notional_base * strategy_profile.min_notional_multiplier).max(0.0);
         if !is_alpha && rn1_notional_usd < min_notional {
             let mut p = self.portfolio.lock().await;
             p.skipped_orders += 1;
@@ -837,14 +874,22 @@ impl PaperEngine {
         // Kelly-positive whereas >0.65 is Kelly-negative.
         let price_hi_default = if is_alpha { 0.70 } else { 0.65 };
         let price_lo_default = if is_alpha { 0.05 } else { 0.10 };
-        let price_hi: f64 = std::env::var("EXTREME_PRICE_HI")
+        let price_hi_base: f64 = std::env::var("EXTREME_PRICE_HI")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(price_hi_default);
-        let price_lo: f64 = std::env::var("EXTREME_PRICE_LO")
+        let price_lo_base: f64 = std::env::var("EXTREME_PRICE_LO")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(price_lo_default);
+        let mut price_hi =
+            (price_hi_base + strategy_profile.price_band_hi_adjust).clamp(0.01, 0.99);
+        let mut price_lo =
+            (price_lo_base + strategy_profile.price_band_lo_adjust).clamp(0.01, 0.99);
+        if price_lo >= price_hi {
+            price_lo = price_lo_base.clamp(0.01, 0.99);
+            price_hi = price_hi_base.clamp(0.01, 0.99);
+        }
         if entry_price < price_lo || entry_price > price_hi {
             let mut p = self.portfolio.lock().await;
             p.skipped_orders += 1;
@@ -1116,13 +1161,15 @@ impl PaperEngine {
         };
 
         // ── Sizing (brief lock, no await) ─────────────────────────────
+        let strategy_adjusted_notional = rn1_notional_usd * strategy_profile.sizing_multiplier;
         let (size_usdc, current_nav) = {
             let mut p = self.portfolio.lock().await;
             p.total_signals += 1;
             // Keep paper marks alive even when WS mark prices are stale/missing.
             // RN1 signal price becomes a fallback mark update for this token.
             p.update_price(&signal.token_id, entry_price);
-            let size = p.calculate_size_usdc_with_conviction(rn1_notional_usd, conviction_mult);
+            let size =
+                p.calculate_size_usdc_with_conviction(strategy_adjusted_notional, conviction_mult);
             let nav = p.nav();
             (size, nav)
         };
@@ -1132,6 +1179,7 @@ impl PaperEngine {
             side             = %signal.side,
             rn1_price        = %format_price(signal.price),
             rn1_notional_usd = %format!("${:.2}", rn1_notional_usd),
+            strategy_mode    = %strategy_snapshot.current_mode,
             our_size         = ?size_usdc.map(|s| format!("${:.2}", s)),
             nav              = %format!("${:.2}", current_nav),
             "📡 RN1 signal received"
@@ -2492,6 +2540,7 @@ impl PaperEngine {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        let strategy_snapshot = self.strategy_controller.snapshot();
         let mut state = WarmState {
             schema_version: 1,
             saved_at_ms: Utc::now().timestamp_millis(),
@@ -2501,6 +2550,7 @@ impl PaperEngine {
             rejection_analytics: rejections,
             comparator,
             experiments,
+            strategy_snapshot: Some(strategy_snapshot),
             checksum: 0,
         };
         state.checksum = warm_state_checksum(&state);
@@ -2532,6 +2582,16 @@ impl PaperEngine {
         *self.rejection_analytics.lock().await = state.rejection_analytics;
         *self.shadow_comparator.lock().await = state.comparator;
         *self.experiments.lock().unwrap_or_else(|e| e.into_inner()) = state.experiments;
+        if !self.strategy_mode_explicit_env {
+            if let Some(snapshot) = state.strategy_snapshot.as_ref() {
+                self.strategy_controller.restore_snapshot(snapshot);
+                tracing::info!(
+                    strategy_mode = %snapshot.current_mode,
+                    switch_seq = snapshot.switch_seq,
+                    "Warm state restored strategy mode"
+                );
+            }
+        }
         Ok(true)
     }
 
@@ -3192,7 +3252,7 @@ fn read_json_with_fallback(path: &str) -> std::io::Result<Option<serde_json::Val
 
 #[cfg(test)]
 mod tests {
-    use super::SeenOrderIds;
+    use super::{SeenOrderIds, WarmState};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -3224,5 +3284,33 @@ mod tests {
 
         assert!(deduper.insert("order-1", start));
         assert!(deduper.insert("order-1", start + Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn warm_state_deserializes_without_strategy_snapshot_field() {
+        let raw = serde_json::json!({
+            "schema_version": 1,
+            "saved_at_ms": 0,
+            "market_subscriptions": [],
+            "order_books": [],
+            "portfolio_path": "logs/paper_portfolio_state.json",
+            "rejection_analytics": {
+                "schema_version": 1,
+                "events": [],
+                "reasons": {}
+            },
+            "comparator": {
+                "observations": []
+            },
+            "experiments": {
+                "schema_version": 1,
+                "sizing_variant_b": false,
+                "autoclaim_variant_b": false,
+                "drift_variant_b": false
+            },
+            "checksum": 0
+        });
+        let parsed: WarmState = serde_json::from_value(raw).expect("warm state should deserialize");
+        assert!(parsed.strategy_snapshot.is_none());
     }
 }

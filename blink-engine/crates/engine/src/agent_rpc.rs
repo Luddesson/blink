@@ -4,6 +4,9 @@
 //! - `blink_status`
 //! - `paper_summary`
 //! - `set_pause`
+//! - `get_strategy_mode`
+//! - `set_strategy_mode`
+//! - `rollback_strategy_mode`
 
 use std::io;
 use std::sync::{
@@ -22,6 +25,7 @@ use crate::alpha_signal::{
     AlphaAnalytics, AlphaCycleReport, AlphaRiskConfig, AlphaSignal, AlphaSignalRecord,
 };
 use crate::paper_engine::PaperEngine;
+use crate::strategy::{StrategyController, StrategyMode, StrategySwitchError};
 
 #[derive(Clone)]
 pub struct AgentRpcState {
@@ -42,6 +46,8 @@ pub struct AgentRpcState {
     pub alpha_analytics: Option<Arc<Mutex<AlphaAnalytics>>>,
     /// Alpha-specific risk configuration.
     pub alpha_risk_config: Option<AlphaRiskConfig>,
+    pub strategy_controller: Arc<StrategyController>,
+    pub live_active: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -164,6 +170,10 @@ async fn handle_rpc(
         "report_alpha_cycle" => report_alpha_cycle(req.params, state).await,
         "report_alpha_calibration" => report_alpha_calibration(req.params, state).await,
         "alpha_status" => alpha_status(state).await,
+        "get_strategy_mode" => get_strategy_mode(state).await,
+        "set_strategy_mode" => set_strategy_mode(req.params, state).await,
+        "rollback_strategy_mode" => rollback_strategy_mode(req.params, state).await,
+        "get_strategy_history" => get_strategy_history(state).await,
         _ => Err(RpcError {
             code: -32601,
             message: "Method not found".to_string(),
@@ -189,6 +199,7 @@ async fn blink_status(state: &AgentRpcState) -> std::result::Result<Value, RpcEr
         "messages_total": state.msg_count.load(Ordering::Relaxed),
         "risk_status": risk_status,
         "subscriptions": subscriptions,
+        "strategy": strategy_status_json(&state.strategy_controller),
     });
 
     if let Some(ref paper) = state.paper {
@@ -280,6 +291,135 @@ async fn set_pause(params: Value, state: &AgentRpcState) -> std::result::Result<
         })?;
     state.trading_paused.store(paused, Ordering::Relaxed);
     Ok(json!({ "trading_paused": paused }))
+}
+
+async fn get_strategy_mode(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    Ok(strategy_status_json(&state.strategy_controller))
+}
+
+async fn get_strategy_history(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    Ok(json!({ "history": state.strategy_controller.history() }))
+}
+
+async fn set_strategy_mode(
+    params: Value,
+    state: &AgentRpcState,
+) -> std::result::Result<Value, RpcError> {
+    let mode_raw = params
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| RpcError {
+            code: -32602,
+            message: "Invalid params: expected {\"mode\":\"mirror|conservative|aggressive\"}"
+                .to_string(),
+        })?;
+    let mode = mode_raw.parse::<StrategyMode>().map_err(|e| RpcError {
+        code: -32602,
+        message: format!("Invalid params: {e}"),
+    })?;
+    let reason = params
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    let force_rollback_to_mirror = params
+        .get("force_rollback_to_mirror")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let source = params
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("agent_rpc");
+
+    if force_rollback_to_mirror && mode != StrategyMode::Mirror {
+        return Err(RpcError {
+            code: -32602,
+            message: "Invalid params: force_rollback_to_mirror requires mode=mirror".to_string(),
+        });
+    }
+
+    let snapshot = if force_rollback_to_mirror {
+        state
+            .strategy_controller
+            .rollback_to_mirror(reason, &format!("{source}:rollback"))
+    } else {
+        state
+            .strategy_controller
+            .switch_mode(mode, reason, source, state.live_active)
+            .map_err(to_strategy_rpc_error)?
+    };
+    if force_rollback_to_mirror {
+        tracing::warn!(
+            from_mode = %snapshot
+                .history
+                .last()
+                .map(|record| record.from.to_string())
+                .unwrap_or_else(|| "mirror".to_string()),
+            to_mode = %snapshot.current_mode,
+            switch_seq = snapshot.switch_seq,
+            "Strategy rollback-to-mirror applied via RPC"
+        );
+    } else {
+        tracing::info!(
+            mode = %snapshot.current_mode,
+            switch_seq = snapshot.switch_seq,
+            "Strategy mode updated via RPC"
+        );
+    }
+    Ok(json!(snapshot))
+}
+
+async fn rollback_strategy_mode(
+    params: Value,
+    state: &AgentRpcState,
+) -> std::result::Result<Value, RpcError> {
+    let reason = params
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    let source = params
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("agent_rpc");
+    let snapshot = state
+        .strategy_controller
+        .rollback_to_mirror(reason, &format!("{source}:rollback"));
+    tracing::warn!(
+        from_mode = %snapshot
+            .history
+            .last()
+            .map(|record| record.from.to_string())
+            .unwrap_or_else(|| "mirror".to_string()),
+        to_mode = %snapshot.current_mode,
+        switch_seq = snapshot.switch_seq,
+        "Strategy rollback-to-mirror applied via RPC"
+    );
+    Ok(json!(snapshot))
+}
+
+fn to_strategy_rpc_error(err: StrategySwitchError) -> RpcError {
+    RpcError {
+        code: err.rpc_code(),
+        message: err.message(),
+    }
+}
+
+fn strategy_status_json(controller: &Arc<StrategyController>) -> Value {
+    let snapshot = controller.snapshot();
+    let mut value = json!(snapshot);
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "rollback".to_string(),
+            json!({
+                "target_mode": "mirror",
+                "available": true,
+                "active": snapshot.current_mode == StrategyMode::Mirror,
+                "required": snapshot.current_mode != StrategyMode::Mirror,
+                "rpc_method": "rollback_strategy_mode",
+                "rpc_alt_method": "set_strategy_mode with force_rollback_to_mirror=true",
+            }),
+        );
+    }
+    value
 }
 
 async fn write_http(stream: &mut TcpStream, status: u16, body: Value) -> io::Result<()> {

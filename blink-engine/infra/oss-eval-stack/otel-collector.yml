@@ -1,0 +1,23 @@
+receivers:
+  filelog/blink:
+    include:
+      - /var/log/blink/engine.log.*
+      - /var/log/blink/sessions/*.log
+    start_at: end
+
+processors:
+  batch: {}
+
+exporters:
+  debug:
+    verbosity: normal
+
+service:
+  telemetry:
+    metrics:
+      address: 0.0.0.0:9464
+  pipelines:
+    logs:
+      receivers: [filelog/blink]
+      processors: [batch]
+      exporters: [debug]

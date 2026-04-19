@@ -1,0 +1,150 @@
+{
+  "artifacts": {
+    "anomaly_response_file_path": "tools\\examples\\production-readiness-anomaly.sample.json",
+    "confidence_file_path": "tools\\examples\\production-readiness-confidence.sample.json",
+    "decision_file_path": "tools\\examples\\production-readiness-decision.sample.json",
+    "integrity_file_path": "tools\\examples\\production-readiness-integrity.sample.json",
+    "rollback_packet_file_path": "tools\\examples\\production-readiness-rollback.sample.json",
+    "signoff_file_path": "tools\\examples\\operator-signoff-packet.sample.json",
+    "thresholds_json_path": "tools\\examples\\decision-thresholds.json"
+  },
+  "deterministic_fingerprint": "262f8cdb250f2852b971651463ac5bd06737c09ddd569816a338f95270fcd81b",
+  "deterministic_inputs": {
+    "confidence_gate_min": 0.55,
+    "output_dir": "C:\\Users\\ludvi\\Documents\\GitHub\\blink\\blink-engine\\logs\\eval-cycle\\sample-run",
+    "repo_root": "C:\\Users\\ludvi\\Documents\\GitHub\\blink\\blink-engine",
+    "require_stamped_policy": false,
+    "strict_policy_version": false
+  },
+  "diagnostics": {
+    "anomaly_severity_tier": "LOW",
+    "anomaly_signoff_status": "PASS",
+    "decision_status": "GO",
+    "rollback_dimensions": [],
+    "rollback_packet_recommended": false
+  },
+  "gate_statuses": {
+    "hard": {
+      "anomaly_response_hard_stop": {
+        "details": {
+          "operator_signoff_status": "PASS",
+          "recommended_actions_count": 0,
+          "severity_tier": "LOW"
+        },
+        "gate_type": "hard",
+        "reason": "anomaly response did not request HOLD",
+        "status": "PASS"
+      },
+      "artifact_completeness": {
+        "details": {
+          "missing_required_artifacts": 0
+        },
+        "gate_type": "hard",
+        "reason": "all required readiness artifacts are present and valid",
+        "status": "PASS"
+      },
+      "integrity": {
+        "details": {
+          "overall_status": "PASS",
+          "required_failed": 0
+        },
+        "gate_type": "hard",
+        "reason": "artifact-integrity overall_status is PASS",
+        "status": "PASS"
+      },
+      "policy": {
+        "details": {
+          "decision_policy_fingerprint": "cb75c262bd0d1acb39ce835f08c448997854f876b3f6d16b64f2851be9df5d63",
+          "expected_policy_fingerprint": "cb75c262bd0d1acb39ce835f08c448997854f876b3f6d16b64f2851be9df5d63",
+          "fingerprint_match": true,
+          "policy_version": "2026.04.19",
+          "threshold_policy_errors": [],
+          "threshold_policy_warnings": []
+        },
+        "gate_type": "hard",
+        "reason": "threshold policy checks passed and decision policy fingerprint matches thresholds",
+        "status": "PASS"
+      },
+      "rollback_packet_quality": {
+        "details": {
+          "failed_gate_count": 0,
+          "packet_ready_for_review": true,
+          "trigger_count": 0
+        },
+        "gate_type": "hard",
+        "reason": "rollback packet is present and review-ready",
+        "status": "PASS"
+      },
+      "signoff": {
+        "details": {
+          "failed_signoff_gates": [],
+          "post_run_hard_stop": false,
+          "pre_run_hard_stop": false,
+          "promotion_allowed": true
+        },
+        "gate_type": "hard",
+        "reason": "promotion_allowed=true and no signoff hard-stop triggered",
+        "status": "PASS"
+      }
+    },
+    "soft": {
+      "anomaly_response": {
+        "details": {
+          "operator_signoff_status": "PASS",
+          "severity_tier": "LOW"
+        },
+        "gate_type": "soft",
+        "reason": "anomaly response signoff status is PASS",
+        "status": "PASS"
+      },
+      "confidence": {
+        "details": {
+          "confidence_floor": 0.55,
+          "confidence_level": "HIGH",
+          "confidence_score_normalized": 0.81
+        },
+        "gate_type": "soft",
+        "reason": "confidence_score_normalized >= 0.55",
+        "status": "PASS"
+      },
+      "decision_alignment": {
+        "details": {
+          "decision": "GO",
+          "rollback_dimensions": []
+        },
+        "gate_type": "soft",
+        "reason": "decision artifact indicates GO",
+        "status": "PASS"
+      },
+      "rollback_signal": {
+        "details": {
+          "failed_gate_count": 0,
+          "rollback_recommended": false,
+          "trigger_count": 0
+        },
+        "gate_type": "soft",
+        "reason": "rollback packet has no active rollback recommendation",
+        "status": "PASS"
+      }
+    }
+  },
+  "generated_at_utc": "2026-04-20T00:11:00Z",
+  "missing_artifact_diagnostics": [],
+  "policy_checks": {
+    "decision_policy_fingerprint": "cb75c262bd0d1acb39ce835f08c448997854f876b3f6d16b64f2851be9df5d63",
+    "expected_policy_fingerprint": "cb75c262bd0d1acb39ce835f08c448997854f876b3f6d16b64f2851be9df5d63",
+    "fingerprint_match": true,
+    "policy_version": "2026.04.19",
+    "threshold_policy_errors": [],
+    "threshold_policy_warnings": []
+  },
+  "readiness_verdict": {
+    "critical_rollback_reasons": [],
+    "hard_gate_failures": [],
+    "soft_gate_failures": [],
+    "status": "GO",
+    "summary": "all hard/soft gates passed"
+  },
+  "run_id": "sample-run",
+  "schema_version": "1.0.0"
+}

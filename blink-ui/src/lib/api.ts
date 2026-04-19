@@ -12,7 +12,10 @@ import type {
   ModeResponse,
   OrderBookResponse,
   OrderBooksResponse,
+  ProjectInventoryResponse,
   RiskSummary,
+  StrategyMode,
+  StrategyStatus,
   StatusResponse,
   TwinSnapshot,
 } from '../types'
@@ -170,6 +173,10 @@ export const api = {
   metrics: () => get<MetricsResponse>('/api/metrics'),
   livePortfolio: () => get<LivePortfolio>('/api/live/portfolio'),
   pause: (paused: boolean) => post<{ trading_paused: boolean }>('/api/pause', { paused }),
+  setStrategy: (mode: StrategyMode, reason = 'blink-ui-config') =>
+    post<StrategyStatus>('/api/strategy', { mode, reason }),
+  rollbackStrategy: (reason = 'blink-ui-rollback') =>
+    post<StrategyStatus>('/api/strategy/rollback', { reason }),
   resetCircuitBreaker: () => post<{ ok: boolean }>('/api/risk/reset_circuit_breaker', {}),
   sellPosition: (id: number, fraction = 1.0) =>
     post<{ ok: boolean; realized_pnl: number }>(`/api/positions/${id}/sell`, { fraction }),
@@ -179,6 +186,7 @@ export const api = {
   bullpenConvergence: () => get<BullpenConvergenceResponse>('/api/bullpen/convergence'),
   orderbook: (tokenId: string) => get<OrderBookResponse>(`/api/orderbook/${tokenId}`),
   orderbooks: () => get<OrderBooksResponse>('/api/orderbooks'),
+  projectInventory: () => get<ProjectInventoryResponse>('/api/project-inventory'),
   twin: () => get<TwinSnapshot>('/api/twin'),
   updateConfig: (config: Record<string, number | boolean>) => post<{ ok: boolean; updated: string[] }>('/api/config', config),
   alpha: () => get<AlphaStatus>('/api/alpha'),

@@ -6,7 +6,10 @@
 
 use anyhow::{Context, Result};
 use std::fmt;
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::strategy::StrategyMode;
 
 pub const CANONICAL_LIVE_PROFILE: &str = "canonical-v1";
 
@@ -101,6 +104,19 @@ pub struct Config {
     /// URL of the Python alpha sidecar (for health checks).
     /// Default: `http://127.0.0.1:7879`.
     pub alpha_sidecar_url: String,
+
+    /// Startup strategy mode for the 3-mode execution profile.
+    pub strategy_mode: StrategyMode,
+    /// True when BLINK_STRATEGY_MODE was explicitly set in env.
+    pub strategy_mode_explicit_env: bool,
+    /// Whether runtime mode changes are enabled.
+    pub strategy_runtime_switch: bool,
+    /// Whether runtime mode changes are allowed while live trading is active.
+    pub strategy_live_switch_allowed: bool,
+    /// Cooldown between runtime strategy changes.
+    pub strategy_switch_cooldown_secs: u64,
+    /// Whether a reason is required for runtime strategy changes.
+    pub strategy_require_reason: bool,
 }
 
 impl fmt::Debug for Config {
@@ -154,6 +170,21 @@ impl fmt::Debug for Config {
             )
             .field("alpha_enabled", &self.alpha_enabled)
             .field("alpha_sidecar_url", &self.alpha_sidecar_url)
+            .field("strategy_mode", &self.strategy_mode)
+            .field(
+                "strategy_mode_explicit_env",
+                &self.strategy_mode_explicit_env,
+            )
+            .field("strategy_runtime_switch", &self.strategy_runtime_switch)
+            .field(
+                "strategy_live_switch_allowed",
+                &self.strategy_live_switch_allowed,
+            )
+            .field(
+                "strategy_switch_cooldown_secs",
+                &self.strategy_switch_cooldown_secs,
+            )
+            .field("strategy_require_reason", &self.strategy_require_reason)
             .finish()
     }
 }
@@ -291,6 +322,27 @@ impl Config {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let strategy_mode_raw = std::env::var("BLINK_STRATEGY_MODE").ok();
+        let strategy_mode_explicit_env = strategy_mode_raw.is_some();
+        let strategy_mode = strategy_mode_raw
+            .as_deref()
+            .map(StrategyMode::from_str)
+            .transpose()
+            .map_err(|e| anyhow::anyhow!("BLINK_STRATEGY_MODE: {e}"))?
+            .unwrap_or_default();
+        let strategy_runtime_switch = std::env::var("BLINK_STRATEGY_RUNTIME_SWITCH")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+        let strategy_live_switch_allowed = std::env::var("BLINK_STRATEGY_LIVE_SWITCH_ALLOWED")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+        let strategy_switch_cooldown_secs = std::env::var("BLINK_STRATEGY_SWITCH_COOLDOWN_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(30);
+        let strategy_require_reason = std::env::var("BLINK_STRATEGY_REQUIRE_REASON")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(true);
 
         // When live trading is requested every credential must be present.
         if live_trading {
@@ -360,6 +412,12 @@ impl Config {
                 .unwrap_or(false),
             alpha_sidecar_url: std::env::var("ALPHA_SIDECAR_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:7879".to_string()),
+            strategy_mode,
+            strategy_mode_explicit_env,
+            strategy_runtime_switch,
+            strategy_live_switch_allowed,
+            strategy_switch_cooldown_secs,
+            strategy_require_reason,
         })
     }
 
@@ -506,6 +564,12 @@ mod tests {
             live_canary_allowed_markets: vec![],
             alpha_enabled: false,
             alpha_sidecar_url: "http://127.0.0.1:7879".into(),
+            strategy_mode: StrategyMode::Mirror,
+            strategy_mode_explicit_env: false,
+            strategy_runtime_switch: false,
+            strategy_live_switch_allowed: false,
+            strategy_switch_cooldown_secs: 30,
+            strategy_require_reason: true,
         }
     }
 

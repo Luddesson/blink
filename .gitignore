@@ -1,6 +1,7 @@
 blink-engine/target/
 blink-engine/target-*/
 blink-engine/.env
+blink-engine/infra/oss-eval-stack/.env.eval
 blink-engine/.env.live.template
 blink-engine/data/
 *.log

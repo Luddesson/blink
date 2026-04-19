@@ -23,18 +23,37 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 // All modules are declared in lib.rs; we access them through the crate name.
 use engine::activity_log::{new_activity_log, push as log_push, EntryKind};
 use engine::agent_rpc::{run_agent_rpc_server, AgentRpcState};
+use engine::alpha_signal::AlphaSignal;
 use engine::backtest_engine::{load_ticks_csv, BacktestConfig, BacktestEngine};
 use engine::blink_twin::TwinSnapshot;
+use engine::buffer_pool::BufferPool;
+use engine::bullpen_bridge::BullpenBridge;
+use engine::bullpen_discovery::DiscoveryStore;
+use engine::bullpen_signal_generator::SignalTick;
+use engine::bullpen_smart_money::ConvergenceStore;
 use engine::clickhouse_logger::{ClickHouseLogger, WarehouseEvent};
 use engine::clob_client::ClobClient;
 use engine::config::Config;
+use engine::execution_provider::create_provider_from_env;
+use engine::exit_strategy::ExitAction;
 use engine::gas_oracle::GasOracle;
+use engine::heartbeat::spawn_heartbeat_worker;
 use engine::latency_tracker::LatencyStats;
+use engine::live_engine::LiveEngine;
+use engine::mev_router::PrivateRouter;
 use engine::order_book::OrderBookStore;
+use engine::order_executor::OrderResponse;
+use engine::order_signer::OrderParams;
 use engine::paper_engine::PaperEngine;
-use engine::r2_uploader;
+use engine::paper_portfolio::STARTING_BALANCE_USDC;
+use engine::r2_uploader::start_r2_uploader;
+use engine::risk_manager::RiskConfig;
 use engine::rn1_poller::{run_rn1_poller, Rn1PollDiagnostics, Rn1PollDiagnosticsHandle};
+use engine::sniffer::Sniffer;
+use engine::strategy::{StrategyController, StrategyControllerConfig};
 use engine::tick_recorder::{TickRecord, TickRecorder};
+use engine::timed_mutex::TimedMutex;
+use engine::truth_reconciler::FillLifecycle;
 use engine::tui_app::run_tui;
 use engine::types::RN1Signal;
 use engine::web_server::{run_web_server, AppState};
@@ -179,6 +198,22 @@ async fn main() -> Result<()> {
 
     let rn1_wallet = config.rn1_wallet.clone();
     let markets = config.markets.clone();
+    let strategy_controller = Arc::new(StrategyController::new(
+        StrategyControllerConfig::with_defaults(
+            config.strategy_mode,
+            config.strategy_runtime_switch,
+            config.strategy_live_switch_allowed,
+            config.strategy_switch_cooldown_secs,
+            config.strategy_require_reason,
+        ),
+    ));
+    info!(
+        strategy_mode = %config.strategy_mode,
+        strategy_runtime_switch = config.strategy_runtime_switch,
+        strategy_live_switch_allowed = config.strategy_live_switch_allowed,
+        strategy_cooldown_secs = config.strategy_switch_cooldown_secs,
+        "Strategy controller initialized"
+    );
     let config = Arc::new(config);
     let book_store = Arc::new(OrderBookStore::new());
     let clob = Arc::new(ClobClient::new(&config.clob_host));
@@ -594,6 +629,8 @@ async fn main() -> Result<()> {
             Arc::clone(&market_subscriptions),
             Arc::clone(&ws_force_reconnect),
             warehouse_tx.clone(),
+            Arc::clone(&strategy_controller),
+            config.strategy_mode_explicit_env,
         )?;
         paper_inner.discovery_store = Some(Arc::clone(&discovery_store));
         paper_inner.convergence_store = convergence_store.clone();
@@ -924,6 +961,7 @@ async fn main() -> Result<()> {
             Arc::clone(&config),
             Arc::clone(&book_store),
             Some(activity.clone()),
+            Arc::clone(&strategy_controller),
         )?);
         live_for_web = Some(Arc::clone(&live));
         live_for_shutdown = Some(Arc::clone(&live));
@@ -1286,6 +1324,8 @@ async fn main() -> Result<()> {
             alpha_signal_tx: alpha_signal_tx.clone(),
             alpha_analytics: alpha_analytics.clone(),
             alpha_risk_config: alpha_risk_config.clone(),
+            strategy_controller: Arc::clone(&strategy_controller),
+            live_active: live_mode,
         };
         let bind = rpc_bind_addr.clone();
         let act = activity.clone();
@@ -1347,6 +1387,8 @@ async fn main() -> Result<()> {
             snapshot_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             portfolio_cached_at_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             alpha_analytics: alpha_analytics.clone(),
+            strategy_controller: Arc::clone(&strategy_controller),
+            strategy_live_active: live_mode,
         };
 
         let static_dir = std::env::var("WEB_UI_STATIC_DIR")

@@ -35,7 +35,7 @@ echo "[3/6] Building engine (this takes 5-10 min on first build)..."
 ssh $SERVER "source /root/.cargo/env && cd ${BLINK_DIR}/src/blink-engine && cargo build --release -p engine 2>&1 | tail -5"
 
 echo "[4/6] Deploying binary and sidecar..."
-ssh $SERVER << 'DEPLOY'
+ssh $SERVER <<'DEPLOY'
 set -e
 BLINK_DIR="/opt/blink"
 
@@ -43,9 +43,15 @@ BLINK_DIR="/opt/blink"
 cp ${BLINK_DIR}/src/blink-engine/target/release/engine ${BLINK_DIR}/engine
 chmod +x ${BLINK_DIR}/engine
 
-# Copy static web UI assets (pre-built)
-if [ -d "${BLINK_DIR}/src/blink-engine/static" ]; then
-    cp -r ${BLINK_DIR}/src/blink-engine/static/* ${BLINK_DIR}/static/ 2>/dev/null || true
+# Build and copy active web UI assets
+if [ -d "${BLINK_DIR}/src/blink-ui" ] && command -v npm >/dev/null 2>&1; then
+    cd ${BLINK_DIR}/src/blink-ui
+    npm ci --silent 2>/dev/null
+    npm run build --silent 2>/dev/null
+    mkdir -p ${BLINK_DIR}/static/ui/assets
+    rm -f ${BLINK_DIR}/static/ui/index.html
+    rm -f ${BLINK_DIR}/static/ui/assets/*
+    cp -r ${BLINK_DIR}/src/blink-engine/static/ui/* ${BLINK_DIR}/static/ui/ 2>/dev/null || true
 fi
 
 # Copy alpha sidecar source
@@ -65,7 +71,7 @@ ssh $SERVER "systemctl restart blink-engine && sleep 3 && systemctl restart blin
 
 echo "[6/6] Verifying..."
 sleep 5
-ssh $SERVER << 'VERIFY'
+ssh $SERVER <<'VERIFY'
 echo "  Engine:  $(systemctl is-active blink-engine)"
 echo "  Sidecar: $(systemctl is-active blink-sidecar)"
 echo "  Memory:  $(free -h | grep Mem | awk '{print $3 "/" $2}')"

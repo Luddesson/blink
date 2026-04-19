@@ -74,6 +74,8 @@ Each agent has its own TODO tracking.
 **Location:** `awesome-agent-skills/` + `.agents/skills/` + `skills/`
 
 Currently active skills:
+- **blink-trader** — Blink engine control and portfolio/market/order operations
+- **bullpen-polymarket** — Bullpen CLI access for Polymarket data, positions, and execution
 - **evm-swiss-knife** — EVM utility functions
 - **market-sentiment** — Market sentiment analysis
 - **trading-strategist** — Strategy recommendations

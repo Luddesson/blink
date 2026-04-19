@@ -58,23 +58,17 @@ export async function resolveMarketUrl(tokenId: string): Promise<string | null> 
 
 /**
  * Fetch Polymarket metadata from Gamma API (public, no auth required)
-/**
- * Fetch Polymarket metadata from Gamma API (public, no auth required)
  * Returns market image, question, 24h volume, and category.
  */
 export async function fetchPolymarketMeta(tokenId: string): Promise<PolymarketMeta | null> {
   try {
-    const url = `https://gamma-api.polymarket.com/markets?token_id=${tokenId}`
-    const res = await fetch(url, { signal: AbortSignal.timeout(8_000) })
-    if (!res.ok) {
-      console.warn(`[fetchPolymarketMeta] API returned ${res.status} for ${tokenId}`)
-      return null
-    }
+    const res = await fetch(
+      `https://gamma-api.polymarket.com/markets?clob_token_ids=${tokenId}`,
+      { signal: AbortSignal.timeout(8_000) }
+    )
+    if (!res.ok) return null
     const data = await res.json() as any
-    if (!Array.isArray(data) || data.length === 0) {
-      console.warn(`[fetchPolymarketMeta] Empty or non-array response for ${tokenId}:`, data)
-      return null
-    }
+    if (!Array.isArray(data) || data.length === 0) return null
     const market = data[0]
     return {
       image: market.image ?? '',
@@ -82,12 +76,10 @@ export async function fetchPolymarketMeta(tokenId: string): Promise<PolymarketMe
       volume: market.volume_24h ?? '0',
       category: market.category ?? '',
     }
-  } catch (err) {
-    console.error(`[fetchPolymarketMeta] Error fetching metadata for ${tokenId}:`, err)
+  } catch {
     return null
   }
 }
-
 
 /**
  * Hook to fetch Polymarket metadata for multiple token IDs
@@ -140,18 +132,8 @@ export const api = {
   portfolio: () => get<FullPortfolio>('/api/portfolio'),
   history: (page = 1, perPage = 50) =>
     get<HistoryResponse>(`/api/history?page=${page}&per_page=${perPage}`),
-  historyAll: async () => {
-    const perPage = 500
-    const firstPage = await get<HistoryResponse>(`/api/history?page=1&per_page=${perPage}`)
-    const trades = [...firstPage.trades]
-
-    for (let page = 2; page <= firstPage.total_pages; page++) {
-      const nextPage = await get<HistoryResponse>(`/api/history?page=${page}&per_page=${perPage}`)
-      trades.push(...nextPage.trades)
-    }
-
-    return trades
-  },
+  historyAll: () =>
+    get<HistoryResponse>('/api/history?page=1&per_page=10000').then(r => r.trades),
   risk: () => get<RiskSummary>('/api/risk'),
   latency: () => get<LatencyResponse>('/api/latency'),
   failsafe: () => get<FailsafeSnapshot>('/api/failsafe'),

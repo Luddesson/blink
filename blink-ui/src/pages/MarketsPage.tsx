@@ -55,9 +55,9 @@ export default function MarketsPage() {
   }, [filtered, selectedToken])
 
   return (
-    <div className="flex-1 grid grid-cols-[1fr_320px] gap-2 p-2 overflow-hidden min-h-0">
+    <div className="flex-1 grid min-h-0 grid-cols-1 gap-3 overflow-y-auto p-2 xl:grid-cols-[minmax(0,1fr)_320px] xl:overflow-hidden">
       {/* Left panel: Market card grid */}
-      <div className="flex flex-col gap-2 min-h-0 overflow-hidden">
+      <div className="flex min-h-0 flex-col gap-2 overflow-hidden">
         {/* Search */}
         <div className="relative flex-shrink-0">
           <svg
@@ -116,7 +116,7 @@ export default function MarketsPage() {
       </div>
 
       {/* Right panel: Order book + spread + latency */}
-      <div className="flex flex-col gap-2 overflow-y-auto min-h-0">
+        <div className="grid min-h-0 grid-cols-1 gap-2 sm:grid-cols-2 xl:flex xl:flex-col xl:overflow-y-auto">
         <ErrorBoundary label="SpreadIndicator">
           <div className="card flex-shrink-0">
             <SpreadIndicator

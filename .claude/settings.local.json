@@ -25,7 +25,20 @@
       "Bash(npx tsc *)",
       "Bash(npx vite *)",
       "Bash(grep -E \"\\\\.tsx$\")",
-      "Bash(xargs grep *)"
-    ]
+      "Bash(xargs grep *)",
+      "Bash(cp blink-ui/src/lib/api.ts.bak blink-ui/src/lib/api.ts)",
+      "Bash(sed -i 's/^  } catch {$/  } catch \\(err\\) {/' blink-ui/src/lib/api.ts)",
+      "Bash(sed -i 's/^    return null$/    console.error\\(`[fetchPolymarketMeta] Error fetching metadata for ${tokenId}:`, err\\)\\\\n    return null/' blink-ui/src/lib/api.ts)",
+      "Bash(sed -i '72s/return null/console.warn\\(`[fetchPolymarketMeta] API returned ${res.status} for ${tokenId}`\\)\\\\n      return null/' blink-ui/src/lib/api.ts)",
+      "Bash(sed -i '76s/return null/console.warn\\(`[fetchPolymarketMeta] Empty or non-array response for ${tokenId}:`, data\\)\\\\n      return null/' blink-ui/src/lib/api.ts)",
+      "Bash(python3)",
+      "Bash(cargo build *)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(cargo test *)",
+      "Skill(update-config)",
+      "Bash(grep -v \"ok$\")",
+      "Bash(blink-engine/target/release/blink.exe portfolio *)"
+    ],
+    "defaultMode": "bypassPermissions"
   }
 }

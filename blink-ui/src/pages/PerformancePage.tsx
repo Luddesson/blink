@@ -61,7 +61,7 @@ export default function PerformancePage({ portfolio, positions = [] }: Props) {
       </ErrorBoundary>
 
       {/* Latency + KPI row */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
         <ErrorBoundary label="LatencyHistogram">
           <LatencyHistogram histogram={latency?.signal_age?.histogram ?? []} />
         </ErrorBoundary>
@@ -78,7 +78,7 @@ export default function PerformancePage({ portfolio, positions = [] }: Props) {
       </div>
 
       {/* Rejections + Exposure row */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
         <ErrorBoundary label="RejectionTrend">
           <RejectionTrend rejectionByReason={metrics?.rejection_by_reason ?? null} />
         </ErrorBoundary>
@@ -99,7 +99,7 @@ export default function PerformancePage({ portfolio, positions = [] }: Props) {
         <span className="text-xs font-semibold uppercase tracking-widest text-slate-500 block mb-3">
           Session Statistics
         </span>
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div className="bg-surface-900 rounded-lg px-3 py-2">
             <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">Total P&amp;L</div>
             <div className={`font-mono font-bold text-lg ${pnlClass(totalPnl)}`}>{fmtPnl(totalPnl)}</div>

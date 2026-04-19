@@ -59,12 +59,13 @@ export default function Header({
   const rejections = metrics?.signals_rejected_last_60s ?? 0
   const hasDelta = navDelta !== undefined && navDelta !== 0
   const deltaPositive = (navDelta ?? 0) >= 0
+  const seTimeCompact = seTime.slice(0, 5)
 
   return (
     <>
       <header
         className={cn(
-          'relative flex items-center gap-4 px-5 py-2.5 shrink-0 z-40',
+          'relative z-40 grid shrink-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-2 px-3 py-2.5 sm:flex sm:flex-wrap sm:items-start sm:gap-x-4 sm:px-5',
           'border-b border-[color:var(--color-border-subtle)]',
           'backdrop-blur-xl',
           isLive
@@ -73,8 +74,8 @@ export default function Header({
         )}
       >
         {/* Left: Brand + Mode */}
-        <div className="flex items-center gap-4 shrink-0">
-          <div className="flex items-center gap-2">
+        <div className="col-start-1 row-start-1 flex min-w-0 flex-col items-start gap-2 sm:flex-1 sm:flex-row sm:items-center sm:gap-4">
+          <div className="flex min-w-0 items-center gap-2">
             <motion.div
               initial={{ rotate: -90, opacity: 0 }}
               animate={{ rotate: 0, opacity: 1 }}
@@ -96,12 +97,12 @@ export default function Header({
                 <path d="M13 2 L3 14 h8 l-1 8 l10-12 h-8 z" />
               </svg>
             </motion.div>
-            <span className="serif-accent text-[17px] text-[color:var(--color-text-primary)] tracking-tight">
+            <span className="truncate serif-accent text-[17px] text-[color:var(--color-text-primary)] tracking-tight">
               Blink
             </span>
           </div>
 
-          <div className="relative flex items-center rounded-lg p-0.5 border border-[color:var(--color-border-subtle)] bg-[color:oklch(0.17_0.015_260/0.6)]">
+          <div className="relative flex w-full items-center rounded-lg border border-[color:var(--color-border-subtle)] bg-[color:oklch(0.17_0.015_260/0.6)] p-0.5 sm:w-auto">
             <ModeToggleBtn
               active={!isLive}
               onClick={() => handleModeClick('paper')}
@@ -121,8 +122,8 @@ export default function Header({
 
         {/* Center: NAV */}
         {nav !== undefined && (
-          <div className="flex items-center gap-6 flex-1 justify-center min-w-0">
-            <div className="flex items-baseline gap-3">
+          <div className="col-span-2 row-start-2 flex min-w-0 flex-col items-start gap-2 border-t border-[color:var(--color-border-subtle)] pt-2 sm:order-none sm:flex-1 sm:basis-auto sm:flex-row sm:items-center sm:justify-center sm:gap-6 sm:border-t-0 sm:pt-0">
+            <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
               <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-muted)]">
                 NAV
               </span>
@@ -168,7 +169,7 @@ export default function Header({
         )}
 
         {/* Right: status */}
-        <div className="flex items-center gap-4 text-[11px] shrink-0">
+        <div className="col-start-2 row-start-1 flex shrink-0 flex-wrap items-center justify-end gap-x-2 gap-y-1 text-[10px] sm:ml-auto sm:gap-x-3 sm:text-[11px]">
           <AnimatePresence>
             {tradingPaused && (
               <motion.span
@@ -184,7 +185,7 @@ export default function Header({
           {metrics?.available && rejections > 0 && (
             <span
               className={cn(
-                'flex items-center gap-1 font-mono',
+                'hidden items-center gap-1 font-mono sm:flex',
                 rejections > 10
                   ? 'text-[color:var(--color-whale-400)]'
                   : 'text-[color:var(--color-text-muted)]',
@@ -202,7 +203,10 @@ export default function Header({
               {wsConnected ? 'LIVE' : 'DOWN'}
             </span>
           </span>
-          <span className="text-[color:var(--color-text-dim)] font-mono tabular">
+          <span className="font-mono tabular text-[color:var(--color-text-dim)] sm:hidden">
+            {seTimeCompact}
+          </span>
+          <span className="hidden text-[color:var(--color-text-dim)] font-mono tabular sm:inline">
             {seTime}
           </span>
         </div>
@@ -242,7 +246,7 @@ function ModeToggleBtn({
       disabled={disabled}
       title={disabled ? disabledHint : undefined}
       className={cn(
-        'relative flex items-center gap-1.5 px-3 py-1 rounded-md text-[10px] font-bold uppercase tracking-[0.1em] transition-colors',
+        'relative flex flex-1 items-center justify-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-[0.1em] transition-colors sm:flex-none sm:px-3',
         active && tone === 'paper' && 'text-white',
         active && tone === 'live' && 'text-white',
         !active && !disabled && 'text-[color:var(--color-text-muted)] hover:text-[color:var(--color-text-primary)]',

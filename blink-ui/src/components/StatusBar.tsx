@@ -14,20 +14,20 @@ export default function StatusBar() {
   const bpOk = !!(bullpen?.enabled && (bullpen?.consecutive_failures ?? 0) < 3)
 
   return (
-    <footer className="flex items-center gap-4 px-4 py-1.5 shrink-0 text-[10px] tabular border-t border-[color:var(--color-border-subtle)] bg-[color:oklch(0.14_0.013_260/0.7)] backdrop-blur-md text-[color:var(--color-text-muted)]">
+    <footer className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-[color:var(--color-border-subtle)] bg-[color:oklch(0.14_0.013_260/0.7)] px-3 py-1.5 text-[10px] tabular text-[color:var(--color-text-muted)] backdrop-blur-md sm:px-4">
       <StatusPill label="WS" ok={wsOk} />
       <StatusPill label="Bullpen" ok={bpOk} dimmed={!bullpen?.enabled} />
-      <span className="text-[color:var(--color-text-dim)]">│</span>
+      <span className="hidden text-[color:var(--color-text-dim)] sm:inline">│</span>
       <span>msgs <span className="text-[color:var(--color-text-secondary)] font-mono">{status?.messages_total?.toLocaleString() ?? '—'}</span></span>
       <span>uptime <span className="text-[color:var(--color-text-secondary)] font-mono">{uptime}</span></span>
-      <span className="ml-auto flex items-center gap-3 text-[color:var(--color-text-dim)]">
-        <span className="flex items-center gap-1.5">
+      <span className="flex w-full items-center gap-3 text-[color:var(--color-text-dim)] sm:ml-auto sm:w-auto">
+        <span className="hidden items-center gap-1.5 sm:flex">
           <KeycapHint keys="P" /> pause
         </span>
-        <span className="flex items-center gap-1.5">
+        <span className="hidden items-center gap-1.5 sm:flex">
           <KeycapHint keys={['⌃', 'K']} /> kill
         </span>
-        <span className="font-mono">Blink v0.2 · Midnight Aurora</span>
+        <span className="font-mono sm:ml-0">Blink v0.2 · Midnight Aurora</span>
       </span>
     </footer>
   )

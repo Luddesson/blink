@@ -266,7 +266,7 @@ function MarketRow({ m, expanded, onToggle }: { m: AlphaCycleMarket; expanded: b
                         )}
                       </div>
 
-                      <div className="flex items-center gap-3 text-[10px] tabular font-mono">
+                        <div className="flex flex-wrap items-center gap-3 text-[10px] tabular font-mono">
                         <span className="text-[color:var(--color-text-muted)]">Call 1:</span>
                         <span className="text-[color:var(--color-aurora-3)] font-bold">
                           {m.reasoning_chain.call1_probability != null ? (m.reasoning_chain.call1_probability * 100).toFixed(1) + '%' : '—'}
@@ -291,7 +291,7 @@ function MarketRow({ m, expanded, onToggle }: { m: AlphaCycleMarket; expanded: b
                       )}
 
                       {(m.reasoning_chain.evidence_for?.length > 0 || m.reasoning_chain.evidence_against?.length > 0) && (
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                           {m.reasoning_chain.evidence_for?.length > 0 && (
                             <div>
                               <div className="text-[10px] text-[color:var(--color-bull-400)] uppercase tracking-[0.14em] mb-1">Evidence for</div>
@@ -349,7 +349,7 @@ function MarketRow({ m, expanded, onToggle }: { m: AlphaCycleMarket; expanded: b
                     </>
                   )}
 
-                  <div className="flex gap-4 text-[10px] text-[color:var(--color-text-muted)] tabular font-mono">
+                  <div className="flex flex-wrap gap-4 text-[10px] text-[color:var(--color-text-muted)] tabular font-mono">
                     {m.bid_depth_usdc != null && <span>Bid depth ${m.bid_depth_usdc.toFixed(0)}</span>}
                     {m.ask_depth_usdc != null && <span>Ask depth ${m.ask_depth_usdc.toFixed(0)}</span>}
                     {m.price_change_1h != null && (
@@ -436,14 +436,14 @@ export default function AlphaPage() {
   const perf = data.performance
 
   return (
-    <div className="flex-1 overflow-y-auto p-5 space-y-5">
+    <div className="flex-1 overflow-y-auto p-3 space-y-4 sm:p-5 sm:space-y-5">
       {/* Hero */}
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between"
+        className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-start gap-3 sm:items-center">
           <div className="relative w-10 h-10 flex items-center justify-center rounded-xl"
             style={{
               background: 'linear-gradient(135deg, oklch(0.25 0.03 260 / 0.8), oklch(0.20 0.018 260 / 0.6))',
@@ -459,7 +459,7 @@ export default function AlphaPage() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {hasCycles && (
             <span className="text-[10px] text-[color:var(--color-text-muted)] tabular font-mono flex items-center gap-1">
               <Clock size={10} /> Cycle {data.cycles_completed} · {timeAgo(data.last_cycle_at)}
@@ -472,7 +472,7 @@ export default function AlphaPage() {
       </motion.div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <StatCard label="Signals" value={data.signals_received} sub={`${data.signals_accepted} accepted`} icon={Sparkles} />
         <StatCard
           label="Positions"
@@ -535,7 +535,7 @@ export default function AlphaPage() {
               No signals yet — waiting for sidecar to submit…
             </GlassCard>
           ) : (
-            <div className="space-y-2 max-h-[560px] overflow-y-auto pr-1">
+            <div className="space-y-2 max-h-[70vh] overflow-y-auto pr-1 lg:max-h-[560px]">
               {[...signalHistory].reverse().map(s => (
                 <SignalCard
                   key={s.analysis_id}
@@ -634,8 +634,8 @@ export default function AlphaPage() {
                 ? (count / data.signals_rejected) * 100
                 : 0
               return (
-                <div key={reason} className="flex items-center gap-3">
-                  <div className="text-xs text-[color:var(--color-text-secondary)] w-44 shrink-0 truncate">{reason}</div>
+                <div key={reason} className="flex flex-wrap items-center gap-3 sm:flex-nowrap">
+                  <div className="w-full shrink-0 truncate text-xs text-[color:var(--color-text-secondary)] sm:w-44">{reason}</div>
                   <div className="flex-1 h-1.5 rounded-full overflow-hidden bg-[color:oklch(0.22_0.018_260/0.5)]">
                     <motion.div
                       initial={{ width: 0 }}

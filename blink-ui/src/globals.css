@@ -151,6 +151,10 @@
 @layer base {
   * { box-sizing: border-box; }
 
+  html, body, #root {
+    min-height: 100%;
+  }
+
   html, body {
     background: var(--color-void);
     color: var(--color-text-primary);
@@ -161,6 +165,9 @@
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
     letter-spacing: -0.005em;
+    overscroll-behavior: none;
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
   }
 
   /* Inherit font-family on form elements so nothing falls back to browser default */

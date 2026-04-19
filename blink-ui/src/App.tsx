@@ -111,7 +111,7 @@ export default function App() {
   return (
     <ToastProvider>
       <AuroraBackground intensity={isLive ? 'intense' : 'normal'} />
-      <div className="relative h-screen flex flex-col overflow-hidden text-[color:var(--color-text-primary)]">
+      <div className="relative flex h-[100dvh] min-h-[100dvh] flex-col overflow-hidden text-[color:var(--color-text-primary)]">
         <Header
           wsConnected={connected}
           tradingPaused={wsPaused}
@@ -144,8 +144,8 @@ export default function App() {
         <AnimatePresence mode="wait">
           <motion.div key={activeTab} {...pageTransition} className="flex-1 flex flex-col overflow-hidden min-h-0">
             {activeTab === 'dashboard' && (
-              <main className="flex-1 grid grid-cols-1 md:grid-cols-[230px_1fr] xl:grid-cols-[230px_1fr_270px] gap-2.5 p-2.5 overflow-hidden min-h-0">
-                <aside className="hidden md:flex flex-col gap-2.5 overflow-y-auto min-h-0 pr-1">
+              <main className="flex-1 grid min-h-0 grid-cols-1 gap-2.5 overflow-y-auto p-2.5 md:overflow-hidden md:grid-cols-[230px_1fr] xl:grid-cols-[230px_1fr_270px]">
+                <aside className="order-2 flex flex-col gap-2.5 md:min-h-0 md:overflow-y-auto md:pr-1 xl:order-1">
                   <ErrorBoundary label="RiskPanel">
                     <RiskPanel risk={risk} />
                   </ErrorBoundary>
@@ -154,7 +154,7 @@ export default function App() {
                   </ErrorBoundary>
                 </aside>
 
-                <section className="flex flex-col gap-2.5 overflow-y-auto min-h-0">
+                <section className="order-1 flex min-h-0 flex-col gap-2.5 md:order-2 md:overflow-y-auto">
                   <ErrorBoundary label="NavCard">
                     <NavCard
                       nav={nav}
@@ -177,7 +177,7 @@ export default function App() {
                       closedTrades={portfolio?.closed_trades_count ?? 0}
                     />
                   </ErrorBoundary>
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5 min-h-0">
+                  <div className="grid min-h-0 grid-cols-1 gap-2.5 xl:grid-cols-2">
                     <ErrorBoundary label="PositionsTable">
                       <PositionsTable positions={positions} loading={!snapshot && connected} isLive={isLive} />
                     </ErrorBoundary>
@@ -187,7 +187,7 @@ export default function App() {
                   </div>
                 </section>
 
-                <aside className="hidden xl:flex flex-col gap-2.5 overflow-y-auto min-h-0 pl-1">
+                <aside className="order-3 flex flex-col gap-2.5 md:min-h-0 xl:overflow-y-auto xl:pl-1">
                   <ErrorBoundary label="LatencyPanel"><LatencyPanel /></ErrorBoundary>
                   <ErrorBoundary label="FailsafePanel"><FailsafePanel /></ErrorBoundary>
                   <ErrorBoundary label="BullpenHealth"><BullpenHealth health={bullpenHealth} /></ErrorBoundary>

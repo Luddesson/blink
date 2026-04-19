@@ -26,7 +26,7 @@ export default function TabBar({ activeTab, onSwitch }: Props) {
       role="tablist"
       aria-label="Main navigation"
       className={cn(
-        'relative flex items-center gap-0.5 px-3 py-1.5 shrink-0 overflow-x-auto',
+        'relative flex items-center gap-1 px-2 py-1.5 shrink-0 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [-ms-overflow-style:none] sm:px-3',
         'border-b border-[color:var(--color-border-subtle)]',
         'bg-[color:oklch(0.14_0.013_260/0.55)] backdrop-blur-lg',
       )}
@@ -42,7 +42,7 @@ export default function TabBar({ activeTab, onSwitch }: Props) {
             aria-selected={active}
             aria-label={`Tab ${t.key}: ${t.label}`}
             className={cn(
-              'relative flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium whitespace-nowrap transition-colors',
+              'relative snap-start flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium whitespace-nowrap transition-colors sm:px-3',
               active
                 ? t.accent
                   ? 'text-[color:var(--color-aurora-1)]'
@@ -71,7 +71,7 @@ export default function TabBar({ activeTab, onSwitch }: Props) {
             )}
             <span className="relative flex items-center gap-1.5">
               <Icon size={12} strokeWidth={2} />
-              <KeycapHint keys={t.key} tone={t.accent && active ? 'aurora' : 'muted'} />
+              <KeycapHint keys={t.key} className="hidden sm:inline-flex" tone={t.accent && active ? 'aurora' : 'muted'} />
               {t.label}
               {t.accent && active && (
                 <span

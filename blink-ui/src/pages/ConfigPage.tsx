@@ -33,7 +33,7 @@ export default function ConfigPage({ risk, connected }: Props) {
   }
 
   return (
-    <div className="flex-1 grid grid-cols-2 gap-2 p-2 overflow-y-auto min-h-0">
+    <div className="flex-1 grid min-h-0 grid-cols-1 gap-2 overflow-y-auto p-2 xl:grid-cols-2">
       <div className="flex flex-col gap-2">
         <ErrorBoundary label="RiskConfigForm">
           <RiskConfigForm risk={risk} />

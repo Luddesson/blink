@@ -69,11 +69,11 @@ export default function CalendarHeatmap({ dailyPnl, dailyTrades }: Props) {
 
   return (
     <div className="card">
-      <div className="flex items-center justify-between mb-3">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <span className="text-xs font-semibold uppercase tracking-widest text-slate-500">
           Daily P&L Calendar
         </span>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <span className={`text-xs font-mono font-semibold ${monthPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
             {monthPnl >= 0 ? '+' : ''}${fmt(monthPnl)} ({monthTrades} trades)
           </span>
@@ -81,7 +81,7 @@ export default function CalendarHeatmap({ dailyPnl, dailyTrades }: Props) {
             <button onClick={() => setMonthOffset(o => o - 1)} className="text-slate-500 hover:text-slate-300">
               <ChevronLeft size={14} />
             </button>
-            <span className="text-xs text-slate-400 w-[120px] text-center">{monthLabel}</span>
+            <span className="w-[120px] text-center text-xs text-slate-400">{monthLabel}</span>
             <button
               onClick={() => setMonthOffset(o => Math.min(0, o + 1))}
               disabled={monthOffset >= 0}
@@ -93,16 +93,19 @@ export default function CalendarHeatmap({ dailyPnl, dailyTrades }: Props) {
         </div>
       </div>
 
-      <div style={{ transform: 'scale(0.5)', transformOrigin: 'top left' }}>
-        <div className="grid grid-cols-7 gap-1">
+      <div className="mx-auto w-full max-w-4xl">
+        <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
           {DAY_LABELS.map(d => (
-            <div key={d} className="text-[9px] text-slate-600 text-center font-medium py-0.5">{d}</div>
+            <div key={d} className="py-1 text-center text-[10px] font-medium text-slate-600 sm:text-xs">
+              {d}
+            </div>
           ))}
           {cells.map(cell => (
             <div
               key={cell.key}
               className={`
-                relative aspect-square rounded-sm flex flex-col items-center justify-center
+                relative aspect-square min-h-[3.1rem] rounded-md border border-slate-800/40 p-1 sm:min-h-[4.25rem] sm:rounded-lg sm:p-1.5
+                flex flex-col items-center justify-center
                 ${cell.day === 0 ? '' : pnlColor(cell.pnl, maxAbs)}
                 ${cell.key === todayKey ? 'ring-1 ring-cyan-400/60' : ''}
                 group
@@ -110,9 +113,9 @@ export default function CalendarHeatmap({ dailyPnl, dailyTrades }: Props) {
             >
               {cell.day > 0 && (
                 <>
-                  <span className="text-[10px] text-slate-400 font-mono">{cell.day}</span>
+                  <span className="text-[10px] font-mono text-slate-400 sm:text-xs">{cell.day}</span>
                   {cell.trades > 0 && (
-                    <span className={`text-[8px] font-mono font-semibold ${cell.pnl >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                    <span className={`mt-0.5 text-center text-[8px] font-mono font-semibold leading-tight sm:text-[10px] ${cell.pnl >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
                       {cell.pnl >= 0 ? '+' : ''}{fmt(cell.pnl, 2)}
                     </span>
                   )}
@@ -132,18 +135,18 @@ export default function CalendarHeatmap({ dailyPnl, dailyTrades }: Props) {
         </div>
       </div>
 
-      <div className="flex items-center justify-center gap-2 mt-2">
-        <span className="text-[9px] text-slate-600">Loss</span>
-        <div className="flex gap-0.5">
-          <div className="w-3 h-3 rounded-sm bg-red-500/70" />
-          <div className="w-3 h-3 rounded-sm bg-red-500/45" />
-          <div className="w-3 h-3 rounded-sm bg-red-500/25" />
-          <div className="w-3 h-3 rounded-sm bg-slate-800/40" />
-          <div className="w-3 h-3 rounded-sm bg-emerald-500/25" />
-          <div className="w-3 h-3 rounded-sm bg-emerald-500/45" />
-          <div className="w-3 h-3 rounded-sm bg-emerald-500/70" />
+      <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+        <span className="text-[9px] text-slate-600 sm:text-[10px]">Loss</span>
+        <div className="flex gap-1">
+          <div className="h-3 w-3 rounded-sm bg-red-500/70 sm:h-3.5 sm:w-3.5" />
+          <div className="h-3 w-3 rounded-sm bg-red-500/45 sm:h-3.5 sm:w-3.5" />
+          <div className="h-3 w-3 rounded-sm bg-red-500/25 sm:h-3.5 sm:w-3.5" />
+          <div className="h-3 w-3 rounded-sm bg-slate-800/40 sm:h-3.5 sm:w-3.5" />
+          <div className="h-3 w-3 rounded-sm bg-emerald-500/25 sm:h-3.5 sm:w-3.5" />
+          <div className="h-3 w-3 rounded-sm bg-emerald-500/45 sm:h-3.5 sm:w-3.5" />
+          <div className="h-3 w-3 rounded-sm bg-emerald-500/70 sm:h-3.5 sm:w-3.5" />
         </div>
-        <span className="text-[9px] text-slate-600">Profit</span>
+        <span className="text-[9px] text-slate-600 sm:text-[10px]">Profit</span>
       </div>
     </div>
   )

@@ -115,6 +115,49 @@ function PositionsTable({ positions, loading, onRefresh }: Props) {
     return asc ? <ChevronUp size={12} className="inline" /> : <ChevronDown size={12} className="inline" />
   }
 
+  function CloseFractionControls({ id, isSelling, errMsg }: { id: number; isSelling: boolean; errMsg?: string }) {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+          Close fraction:
+        </span>
+        {FRACTIONS.map((f) => (
+          <button
+            key={f.value}
+            onClick={() => setPendingFraction(f.value)}
+            className={`px-3 py-1 rounded text-[11px] font-mono font-semibold border transition-colors ${
+              pendingFraction === f.value
+                ? 'bg-rose-700 text-white border-rose-500'
+                : 'bg-surface-800 text-slate-400 border-slate-700 hover:border-slate-500 hover:text-slate-200'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+        <button
+          onClick={() => handleSell(id, pendingFraction)}
+          disabled={isSelling}
+          className="px-4 py-1 rounded text-[11px] font-semibold bg-rose-600 hover:bg-rose-500 text-white border border-rose-400/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {isSelling
+            ? '⏳ Closing…'
+            : `Confirm close ${pendingFraction < 1 ? Math.round(pendingFraction * 100) + '%' : 'all'}`}
+        </button>
+        <button
+          onClick={() => setClosingId(null)}
+          className="text-[10px] text-slate-600 hover:text-slate-400"
+        >
+          Cancel
+        </button>
+        {errMsg && (
+          <span className="text-[10px] text-rose-400 font-mono">
+            ✗ {errMsg}
+          </span>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-3">
@@ -144,8 +187,121 @@ function PositionsTable({ positions, loading, onRefresh }: Props) {
       ) : visible.length === 0 ? (
         <p className="text-slate-600 text-xs text-center py-6">No open positions</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+        <>
+          <div className="space-y-3 md:hidden">
+            {sorted.map((p) => {
+            const cost = p.usdc_spent
+            const currentValue = p.shares * p.current_price
+            const maxProfit = p.side === 'Buy'
+              ? (1 - p.entry_price) * p.shares
+              : p.entry_price * p.shares
+            const toWin = maxProfit - p.unrealized_pnl
+            const nearAutoClose = toWin > 0 && toWin / maxProfit < 0.2
+            const isExpanded = closingId === p.id
+            const isSelling = selling === p.id
+            const flash = pnlFlash[p.id]
+            const errMsg = errors[p.id]
+            let closesText: string
+            let closesClass: string
+            const secsLeft = p.secs_to_event
+            if (secsLeft !== undefined) {
+              if (secsLeft < 0) { closesText = 'ENDED'; closesClass = 'text-slate-500' }
+              else if (secsLeft < 60) { closesText = `⚠ ${secsLeft}s`; closesClass = 'text-red-400 font-bold' }
+              else if (secsLeft < 600) { closesText = fmtDuration(secsLeft); closesClass = 'text-orange-400' }
+              else if (secsLeft < 3600) { closesText = fmtDuration(secsLeft); closesClass = 'text-amber-400' }
+              else { closesText = fmtDuration(secsLeft); closesClass = 'text-slate-400' }
+            } else {
+              const ev = formatEventTiming(p.event_start_time, p.event_end_time)
+              closesText = ev.text
+              closesClass = ev.className
+            }
+
+            return (
+              <div key={p.id} className="rounded-xl border border-surface-700/60 bg-surface-800/40 p-3">
+                <div className="mb-2 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className={`inline-flex max-w-full items-center gap-1 rounded px-2 py-0.5 text-[10px] font-mono font-semibold ${
+                      p.side === 'Buy'
+                        ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-700/50'
+                        : 'bg-pink-900/60 text-pink-300 border border-pink-700/50'
+                    }`}>
+                      {p.market_outcome ?? (p.side === 'Buy' ? 'YES' : 'NO')}
+                    </div>
+                    <div className="mt-2 truncate font-mono text-sm text-slate-100">
+                      <MarketLink
+                        tokenId={p.token_id}
+                        label={p.market_title ?? p.token_id}
+                        titleOverride={p.market_title ?? p.token_id}
+                      />
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className={`font-mono text-sm font-semibold ${pnlClass(p.unrealized_pnl)}`}>
+                      {fmtPnl(p.unrealized_pnl)}
+                    </div>
+                    <div className="text-[10px] text-slate-500">
+                      {p.opened_at && <span className="text-cyan-400">{fmtNeonTime(p.opened_at)} </span>}
+                      {fmtDuration(p.opened_age_secs)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-[11px]">
+                  <div>
+                    <div className="text-slate-500">Entry</div>
+                    <div className="font-mono text-slate-200">{fmt(p.entry_price, 4)}</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-500">Price</div>
+                    <div className="font-mono text-slate-200">{fmt(p.current_price, 4)}</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-500">Shares</div>
+                    <div className="font-mono text-slate-300">{p.shares}</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-500">Stake</div>
+                    <div className="font-mono text-slate-300">${fmt(cost)}</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-500">Value</div>
+                    <div className={`font-mono ${currentValue >= cost ? 'text-emerald-400' : 'text-rose-400'}`}>${fmt(currentValue)}</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-500">Closes</div>
+                    <div className={`font-mono ${closesClass}`}>{closesText}</div>
+                  </div>
+                  <div className="col-span-2">
+                    <div className="text-slate-500">To win</div>
+                    <div className={`font-mono ${nearAutoClose ? 'text-emerald-300 font-bold' : 'text-slate-400'}`}>
+                      {nearAutoClose ? 'AUTO NOW' : `$${fmt(Math.max(0, toWin))}`}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-3 border-t border-surface-700/60 pt-3">
+                  {flash ? (
+                    <span className={`font-mono text-[11px] font-semibold ${flash.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {flash.pnl >= 0 ? '+' : ''}{fmtPnl(flash.pnl)} ✓
+                    </span>
+                  ) : isExpanded ? (
+                    <CloseFractionControls id={p.id} isSelling={isSelling} errMsg={errMsg} />
+                  ) : (
+                    <button
+                      onClick={() => { setClosingId(p.id); setPendingFraction(1.0) }}
+                      disabled={isSelling}
+                      className="w-full rounded border border-rose-700/40 bg-rose-900/50 px-3 py-2 text-[11px] font-semibold text-rose-300 transition-colors hover:bg-rose-800 disabled:opacity-40"
+                    >
+                      Close
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+            })}
+          </div>
+          <div className="hidden overflow-x-auto md:block">
+            <table className="w-full text-xs">
             <thead>
               <tr className="text-slate-500 border-b border-surface-600">
                 <th className="text-left pb-2 pr-3 font-normal w-10">Side</th>
@@ -272,44 +428,7 @@ function PositionsTable({ positions, loading, onRefresh }: Props) {
                     {isExpanded && (
                       <tr className="border-b border-rose-900/30 bg-rose-950/20">
                         <td colSpan={12} className="px-3 py-2">
-                          <div className="flex items-center gap-3 flex-wrap">
-                            <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
-                              Close fraction:
-                            </span>
-                            {FRACTIONS.map((f) => (
-                              <button
-                                key={f.value}
-                                onClick={() => setPendingFraction(f.value)}
-                                className={`px-3 py-1 rounded text-[11px] font-mono font-semibold border transition-colors ${
-                                  pendingFraction === f.value
-                                    ? 'bg-rose-700 text-white border-rose-500'
-                                    : 'bg-surface-800 text-slate-400 border-slate-700 hover:border-slate-500 hover:text-slate-200'
-                                }`}
-                              >
-                                {f.label}
-                              </button>
-                            ))}
-                            <button
-                              onClick={() => handleSell(p.id, pendingFraction)}
-                              disabled={isSelling}
-                              className="px-4 py-1 rounded text-[11px] font-semibold bg-rose-600 hover:bg-rose-500 text-white border border-rose-400/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors ml-1"
-                            >
-                              {isSelling
-                                ? '⏳ Closing…'
-                                : `Confirm close ${pendingFraction < 1 ? Math.round(pendingFraction * 100) + '%' : 'all'}`}
-                            </button>
-                            <button
-                              onClick={() => setClosingId(null)}
-                              className="text-[10px] text-slate-600 hover:text-slate-400"
-                            >
-                              Cancel
-                            </button>
-                            {errMsg && (
-                              <span className="text-[10px] text-rose-400 font-mono ml-2">
-                                ✗ {errMsg}
-                              </span>
-                            )}
-                          </div>
+                          <CloseFractionControls id={p.id} isSelling={isSelling} errMsg={errMsg} />
                         </td>
                       </tr>
                     )}
@@ -317,8 +436,9 @@ function PositionsTable({ positions, loading, onRefresh }: Props) {
                 )
               })}
             </tbody>
-          </table>
-        </div>
+            </table>
+          </div>
+        </>
       )}
     </div>
   )

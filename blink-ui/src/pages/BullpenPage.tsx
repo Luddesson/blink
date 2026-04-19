@@ -72,7 +72,7 @@ export default function BullpenPage() {
           </div>
         </div>
       ) : (
-        <div className="flex-1 grid grid-cols-[1fr_380px] gap-2 overflow-hidden min-h-0">
+        <div className="flex-1 grid min-h-0 grid-cols-1 gap-2 overflow-y-auto xl:grid-cols-[minmax(0,1fr)_380px] xl:overflow-hidden">
           <ErrorBoundary label="DiscoveryTable">
             <div className="overflow-y-auto min-h-0">
               <DiscoveryTable discovery={discovery} />

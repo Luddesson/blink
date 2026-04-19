@@ -74,19 +74,19 @@ impl OrderExecutor {
     /// Constructs an executor from [`Config`].
     ///
     /// `dry_run` is set to `!config.live_trading` automatically.
-    pub fn from_config(config: &Config) -> Self {
-        Self {
+    pub fn from_config(config: &Config) -> Result<Self> {
+        Ok(Self {
             client:        Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
-                .expect("failed to build HTTP client"),
+                .context("failed to build reqwest HTTP client")?,
             base_url:      "https://clob.polymarket.com".to_string(),
             maker_address: config.funder_address.clone(),
             api_key:       config.api_key.clone(),
             api_secret:    config.api_secret.clone(),
             passphrase:    config.api_passphrase.clone(),
             dry_run:       !config.live_trading,
-        }
+        })
     }
 
     // ─── Order submission ────────────────────────────────────────────────────

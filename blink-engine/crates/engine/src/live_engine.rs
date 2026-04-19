@@ -104,7 +104,7 @@ struct CanaryState {
 
 impl LiveEngine {
     pub fn new(config: Arc<Config>, book_store: Arc<OrderBookStore>, activity: Option<ActivityLog>) -> Result<Self> {
-        let executor = OrderExecutor::from_config(&config);
+        let executor = OrderExecutor::from_config(&config)?;
 
         // Initialize the TEE vault for key isolation.
         // P1-7: When LIVE_TRADING=true, vault init failure is FATAL — the
@@ -215,7 +215,7 @@ impl LiveEngine {
     }
 
     pub fn risk_status(&self) -> String {
-        self.risk.lock().unwrap().status_line()
+        self.risk.lock().unwrap_or_else(|e| e.into_inner()).status_line()
     }
 
     /// Flush all open positions from the internal order cache.
@@ -309,7 +309,7 @@ impl LiveEngine {
             return;
         }
 
-        if let Err(violation) = self.risk.lock().unwrap().check_pre_order(
+        if let Err(violation) = self.risk.lock().unwrap_or_else(|e| e.into_inner()).check_pre_order(
             size_usdc,
             open_positions,
             current_nav,
@@ -460,12 +460,12 @@ impl LiveEngine {
                     signal.order_id.clone(),
                 );
             }
-            self.risk.lock().unwrap().record_fill(size_usdc);
+            self.risk.lock().unwrap_or_else(|e| e.into_inner()).record_fill(size_usdc);
         }
     }
 
     fn check_canary_gate(&self, signal: &RN1Signal, size_usdc: f64) -> Result<(), String> {
-        let state = self.canary_state.lock().unwrap();
+        let state = self.canary_state.lock().unwrap_or_else(|e| e.into_inner());
         if state.halted {
             return Err("canary_halted_after_reject_streak".to_string());
         }
@@ -498,7 +498,7 @@ impl LiveEngine {
     }
 
     fn bump_reject_streak(&self) {
-        let mut state = self.canary_state.lock().unwrap();
+        let mut state = self.canary_state.lock().unwrap_or_else(|e| e.into_inner());
         state.reject_streak += 1;
         if state.reject_streak >= self.canary_policy.max_reject_streak {
             state.halted = true;
@@ -528,7 +528,7 @@ impl LiveEngine {
     }
 
     fn record_canary_accept(&self) {
-        let mut state = self.canary_state.lock().unwrap();
+        let mut state = self.canary_state.lock().unwrap_or_else(|e| e.into_inner());
         state.accepted_orders += 1;
         state.reject_streak = 0;
     }
@@ -564,7 +564,7 @@ impl LiveEngine {
             (p.closed_trades.len(), delta)
         };
 
-        self.risk.lock().unwrap().record_close(realized_delta);
+        self.risk.lock().unwrap_or_else(|e| e.into_inner()).record_close(realized_delta);
         *accounted = new_count;
     }
 
@@ -619,10 +619,10 @@ impl LiveEngine {
                             order_id.clone(),
                         );
                     }
-                    self.risk.lock().unwrap().record_fill(actual_size_usdc);
+                    self.risk.lock().unwrap_or_else(|e| e.into_inner()).record_fill(actual_size_usdc);
                     fills_recorded += 1;
                     resolved       += 1;
-                    self.failsafe_metrics.lock().unwrap().confirmed_fills += 1;
+                    self.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner()).confirmed_fills += 1;
 
                     if partial_fill {
                         warn!(
@@ -679,7 +679,7 @@ impl LiveEngine {
                     }
                     self.bump_reject_streak();
                     resolved += 1;
-                    self.failsafe_metrics.lock().unwrap().no_fills += 1;
+                    self.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner()).no_fills += 1;
                     self.pending_orders.lock().await.remove(&order_id);
                 }
 
@@ -697,7 +697,7 @@ impl LiveEngine {
                             format!("STALE ORDER {order_id} pending {elapsed_secs}s — operator review required"),
                         );
                     }
-                    self.failsafe_metrics.lock().unwrap().stale_orders += 1;
+                    self.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner()).stale_orders += 1;
                     // Keep in pending_orders — will retry every reconcile pass.
                 }
 
@@ -720,7 +720,7 @@ impl LiveEngine {
             if let Some(current) = self.get_market_price(token_id) {
                 let drift = (current - entry_price).abs() / entry_price;
                 {
-                    let mut metrics = self.failsafe_metrics.lock().unwrap();
+                    let mut metrics = self.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner());
                     metrics.check_count += 1;
                     let drift_bps = (drift * 10_000.0).round().max(0.0) as u64;
                     if drift_bps > metrics.max_observed_drift_bps {
@@ -728,7 +728,7 @@ impl LiveEngine {
                     }
                 }
                 if drift > drift_threshold() {
-                    self.failsafe_metrics.lock().unwrap().trigger_count += 1;
+                    self.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner()).trigger_count += 1;
                     warn!(
                         check,
                         "🚨 Fill window abort: price drifted {:.2}%",
@@ -748,7 +748,7 @@ impl LiveEngine {
     }
 
     pub fn failsafe_metrics_snapshot(&self) -> FailsafeMetricsSnapshot {
-        let m = self.failsafe_metrics.lock().unwrap();
+        let m = self.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner());
         let total_resolved = m.confirmed_fills + m.no_fills;
         let confirmation_rate_pct = if total_resolved > 0 {
             Some(m.confirmed_fills as f64 / total_resolved as f64 * 100.0)
@@ -781,7 +781,7 @@ impl LiveEngine {
         error!("🚨 EMERGENCY STOP triggered: {reason}");
 
         // 1. Trip circuit breaker — blocks all new orders immediately.
-        self.risk.lock().unwrap().trip_circuit_breaker(reason);
+        self.risk.lock().unwrap_or_else(|e| e.into_inner()).trip_circuit_breaker(reason);
 
         // 2. Cancel all open orders on the exchange.
         match self.executor.cancel_all_orders().await {

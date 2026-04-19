@@ -156,6 +156,9 @@ async fn main() -> Result<()> {
     let config = Config::from_env()?;
     info!(paper_mode, tui_mode, rn1_wallet = %config.rn1_wallet, "Configuration loaded");
     config.validate_live_profile_contract()?;
+    if paper_mode {
+        config.validate_for_paper_trading()?;
+    }
 
     if preflight_live {
         run_preflight_live(&config).await?;
@@ -1501,7 +1504,7 @@ async fn run_preflight_live(config: &Config) -> Result<()> {
     check += 1;
 
     // ── Check 2: auth credentials valid ──────────────────────────────────
-    let executor = engine::order_executor::OrderExecutor::from_config(config);
+    let executor = engine::order_executor::OrderExecutor::from_config(config)?;
     executor
         .validate_credentials()
         .await
@@ -1574,7 +1577,7 @@ async fn run_preflight_live(config: &Config) -> Result<()> {
 /// writes logs/EMERGENCY_STOP.flag.
 async fn run_emergency_stop(config: &Config) -> Result<()> {
     eprintln!("🚨 --emergency-stop requested by operator");
-    let executor = engine::order_executor::OrderExecutor::from_config(config);
+    let executor = engine::order_executor::OrderExecutor::from_config(config)?;
     match executor.cancel_all_orders().await {
         Ok(())  => eprintln!("✅ cancel_all_orders succeeded"),
         Err(e)  => eprintln!("⚠️  cancel_all_orders error (may be no open orders): {e}"),

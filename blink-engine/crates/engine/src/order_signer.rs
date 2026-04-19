@@ -278,7 +278,8 @@ fn domain_separator() -> [u8; 32] {
     let name_hash    = keccak256(b"Polymarket CTF Exchange");
     let version_hash = keccak256(b"1");
     let chain_id     = u128_to_b32(137u128);
-    let contract     = addr_to_b32(VERIFYING_CONTRACT_HEX).unwrap();
+    let contract     = addr_to_b32(VERIFYING_CONTRACT_HEX)
+        .expect("infallible: VERIFYING_CONTRACT_HEX is a compile-time 40-char hex constant");
 
     let mut enc = Vec::with_capacity(32 * 5);
     enc.extend_from_slice(&type_hash);

@@ -389,8 +389,12 @@ impl Config {
             "LIVE_CANARY_MAX_REJECT_STREAK must be > 0"
         );
         anyhow::ensure!(
-            !self.signer_private_key.is_empty(),
-            "LIVE_TRADING=true requires SIGNER_PRIVATE_KEY to be set"
+            self.signer_private_key.starts_with("0x") && self.signer_private_key.len() == 66,
+            "SIGNER_PRIVATE_KEY must be a 0x-prefixed 32-byte hex string (66 chars total)"
+        );
+        anyhow::ensure!(
+            self.rn1_wallet.starts_with("0x") && self.rn1_wallet.len() == 42,
+            "RN1_WALLET must be a 0x-prefixed 20-byte hex address (42 chars total)"
         );
         if self.polymarket_order_expiration != 0 {
             let now = SystemTime::now()
@@ -409,6 +413,37 @@ impl Config {
             trading_enabled,
             "LIVE_TRADING=true requires TRADING_ENABLED=true in canonical live profile"
         );
+        Ok(())
+    }
+
+    /// Validates the minimum configuration required for paper-trading mode.
+    ///
+    /// Returns all errors at once so the operator can fix everything in one go.
+    pub fn validate_for_paper_trading(&self) -> Result<()> {
+        let mut errors: Vec<String> = Vec::new();
+
+        if self.rn1_wallet.is_empty() {
+            errors.push("RN1_WALLET is not set — needed to identify the whale to track".into());
+        } else if !self.rn1_wallet.starts_with("0x") || self.rn1_wallet.len() != 42 {
+            errors.push(format!(
+                "RN1_WALLET '{}' is not a valid 0x-prefixed 20-byte address (42 chars)",
+                self.rn1_wallet
+            ));
+        }
+
+        if self.clob_host.is_empty() {
+            errors.push("CLOB_HOST is not set".into());
+        }
+        if self.ws_url.is_empty() {
+            errors.push("WS_URL is not set".into());
+        }
+
+        if !errors.is_empty() {
+            anyhow::bail!(
+                "Paper-trading configuration errors:\n{}",
+                errors.iter().map(|e| format!("  • {e}")).collect::<Vec<_>>().join("\n")
+            );
+        }
         Ok(())
     }
 }

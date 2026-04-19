@@ -12,9 +12,9 @@
 //! use engine::config::Config;
 //!
 //! let config = Config::from_env().unwrap();
-//! let executor = OrderExecutor::from_config(&config);
+//! let executor = OrderExecutor::from_config(&config).unwrap();
 //! // Spawn once at engine startup, before submitting any orders.
-//! spawn_heartbeat_worker(executor, None);
+//! spawn_heartbeat_worker(executor, None, None);
 //! ```
 //!
 //! The worker runs until the process exits.  Failures are logged as `warn`

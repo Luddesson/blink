@@ -7,8 +7,8 @@ Practical commands for clean local operation.
 From repository root:
 
 ```powershell
-.\start-blink.ps1
-.\stop-blink.ps1
+.\scripts\start-blink.ps1
+.\scripts\stop-blink.ps1
 ```
 
 ## Rebuild UI Only

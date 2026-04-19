@@ -26,6 +26,17 @@ export interface PolymarketMeta {
   category: string
 }
 
+type GammaMarketMeta = {
+  image?: string
+  question?: string
+  volume_24h?: string
+  category?: string
+}
+
+function isGammaMarketMetaArray(value: unknown): value is GammaMarketMeta[] {
+  return Array.isArray(value)
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path, { signal: AbortSignal.timeout(10_000) })
   if (!res.ok) throw new Error(`HTTP ${res.status} ${path}`)
@@ -70,8 +81,8 @@ export async function fetchPolymarketMeta(tokenId: string): Promise<PolymarketMe
       console.warn(`[fetchPolymarketMeta] API returned ${res.status} for ${tokenId}`)
       return null
     }
-    const data = await res.json() as any
-    if (!Array.isArray(data) || data.length === 0) {
+    const data: unknown = await res.json()
+    if (!isGammaMarketMetaArray(data) || data.length === 0) {
       console.warn(`[fetchPolymarketMeta] Empty or non-array response for ${tokenId}:`, data)
       return null
     }

@@ -41,7 +41,7 @@
 - **Dev:** Opt-level 1 (faster iteration)
 
 ### 2. Frontend (TypeScript/React)
-**Location:** `blink-engine/web-ui/` or `blink-ui/`
+**Location:** `blink-ui/`
 
 - **Framework:** React 19.2.4 + Vite
 - **Styling:** Tailwind CSS 4.2.2
@@ -52,7 +52,7 @@
 
 #### Running Locally
 ```bash
-cd blink-engine/web-ui
+cd blink-ui
 npm run dev      # Vite dev server (hot reload)
 npm run build    # TypeScript + Vite production build
 npm run lint     # Check code quality
@@ -116,7 +116,7 @@ cargo run --bin engine
 
 ### Run the Frontend
 ```bash
-cd blink-engine/web-ui
+cd blink-ui
 npm run dev
 ```
 

@@ -8,6 +8,24 @@ interface Props {
 const MAX_LEVELS = 15
 
 function OrderBookDepth({ orderbook }: Props) {
+  const bids = useMemo(
+    () => orderbook?.bids?.slice(0, MAX_LEVELS) ?? [],
+    [orderbook],
+  )
+  const asks = useMemo(
+    () => orderbook?.asks?.slice(0, MAX_LEVELS) ?? [],
+    [orderbook],
+  )
+
+  const maxBidSize = useMemo(
+    () => Math.max(...bids.map(([, size]) => size), 0) || 1,
+    [bids],
+  )
+  const maxAskSize = useMemo(
+    () => Math.max(...asks.map(([, size]) => size), 0) || 1,
+    [asks],
+  )
+
   if (!orderbook) {
     return (
       <div className="card flex items-center justify-center h-full">
@@ -23,18 +41,6 @@ function OrderBookDepth({ orderbook }: Props) {
       </div>
     )
   }
-
-  const bids = orderbook.bids.slice(0, MAX_LEVELS)
-  const asks = orderbook.asks.slice(0, MAX_LEVELS)
-
-  const maxBidSize = useMemo(
-    () => Math.max(...bids.map(([, s]) => s), 0) || 1,
-    [bids],
-  )
-  const maxAskSize = useMemo(
-    () => Math.max(...asks.map(([, s]) => s), 0) || 1,
-    [asks],
-  )
 
   return (
     <div className="card h-full flex flex-col">

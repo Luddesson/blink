@@ -1,5 +1,6 @@
 ---
 applyTo:
+  - blink-ui/src/**
   - blink-engine/web-ui/src/**
 description: TypeScript/React conventions for the Blink web dashboard.
 ---

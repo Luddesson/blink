@@ -13,7 +13,7 @@ export default function MarketsPage() {
   const [selectedBook, setSelectedBook] = useState<OrderBookResponse | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
 
-  const markets = books?.orderbooks ?? []
+  const markets = useMemo(() => books?.orderbooks ?? [], [books])
   const tokenIds = useMemo(() => markets.map(m => m.token_id), [markets])
   const { metadata: marketMeta, loading: metaLoading } = useMarketMeta(tokenIds)
 

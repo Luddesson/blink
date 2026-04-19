@@ -43,7 +43,6 @@ export function ModeProvider({ children }: { children: ReactNode }) {
     poll()
     const id = setInterval(poll, 30_000)
     return () => clearInterval(id)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode])
 
   const setViewMode = (m: EngineMode) => {

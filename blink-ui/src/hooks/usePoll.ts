@@ -9,6 +9,11 @@ export function usePoll<T>(
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(true)
+  const fetchFnRef = useRef(fetchFn)
+
+  useEffect(() => {
+    fetchFnRef.current = fetchFn
+  }, [fetchFn])
 
   useEffect(() => {
     mountedRef.current = true
@@ -18,7 +23,7 @@ export function usePoll<T>(
 
     const run = async () => {
       try {
-        const result = await fetchFn()
+        const result = await fetchFnRef.current()
         if (mountedRef.current) { setData(result); setError(null) }
       } catch (e) {
         if (mountedRef.current) setError(String(e))
@@ -36,7 +41,6 @@ export function usePoll<T>(
       mountedRef.current = false
       clearTimeout(timer)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [intervalMs, enabled])
 
   return { data, loading, error }

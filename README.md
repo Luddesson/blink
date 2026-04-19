@@ -11,7 +11,7 @@ Unified workspace for:
 From repo root:
 
 ```powershell
-.\start-blink.ps1
+.\scripts\start-blink.ps1
 ```
 
 What this does:
@@ -24,16 +24,16 @@ What this does:
 Stop everything:
 
 ```powershell
-.\stop-blink.ps1
+.\scripts\stop-blink.ps1
 ```
 
 ## Useful Start Script Modes
 
 ```powershell
-.\start-blink.ps1 -Debug
-.\start-blink.ps1 -SkipBuild
-.\start-blink.ps1 -Watch
-.\start-blink.ps1 -Debug -Watch
+.\scripts\start-blink.ps1 -Debug
+.\scripts\start-blink.ps1 -SkipBuild
+.\scripts\start-blink.ps1 -Watch
+.\scripts\start-blink.ps1 -Debug -Watch
 ```
 
 ## Project Structure
@@ -43,8 +43,8 @@ Blink/
   blink-engine/      # Rust trading engine + web server
   blink-ui/          # React UI client
   logs/              # runtime logs / pid files
-  start-blink.ps1    # local orchestrator
-  stop-blink.ps1     # local stop helper
+  scripts/start-blink.ps1  # local orchestrator
+  scripts/stop-blink.ps1   # local stop helper
 ```
 
 ## Build & Verify

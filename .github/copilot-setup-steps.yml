@@ -29,7 +29,7 @@ steps:
 
   - name: Install Node.js dependencies (web UI)
     run: |
-      cd blink-engine/web-ui
+      cd blink-ui
       npm ci --prefer-offline
 
   - name: Install Python + uv (alpha sidecar)

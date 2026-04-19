@@ -6,7 +6,7 @@ Blink is a high-frequency **shadow-maker bot** for [Polymarket](https://polymark
 
 ## Commands
 
-All Rust commands: run from `blink-engine/`. All web commands: run from `blink-engine/web-ui/`.
+All Rust commands: run from `blink-engine/`. All web commands: run from `blink-ui/`.
 
 ### Rust
 
@@ -38,7 +38,7 @@ cargo fmt --workspace -- --check
 ### Web UI
 
 ```bash
-cd blink-engine/web-ui
+cd blink-ui
 npm run dev     # Vite dev server (hot reload)
 npm run build   # tsc + vite build
 npm run lint    # ESLint 9 + TS plugin

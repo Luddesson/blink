@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: blink-engine/web-ui
+        working-directory: blink-ui
 
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +72,7 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: blink-engine/web-ui/package-lock.json
+          cache-dependency-path: blink-ui/package-lock.json
 
       - name: Install dependencies
         run: npm ci

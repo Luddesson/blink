@@ -20,7 +20,7 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::activity_log::{ActivityLog, EntryKind, push as log_push};
-use crate::clickhouse_logger::{ClosedTradeFull, EquitySnapshot, WarehouseEvent};
+use crate::clickhouse_logger::{ClosedTradeFull, EquitySnapshot, RejectionEventRecord, WarehouseEvent};
 use crate::exit_strategy::{ExitAction, ExitConfig, evaluate_exits};
 use crate::latency_tracker::LatencyStats;
 use crate::order_book::{OrderBook, OrderBookStore};
@@ -85,7 +85,7 @@ pub struct PaperEngine {
     metadata_client: Client,
     rn1_wallet: String,
     signal_meta_cache: Arc<Mutex<HashMap<String, CachedSignalMeta>>>,
-    seen_order_ids: Arc<Mutex<HashSet<String>>>,
+    seen_order_ids: Arc<Mutex<SeenOrderIds>>,
     equity_tick: std::sync::atomic::AtomicU64,
     /// Shared subscription list — new token_ids are added here on fill so the WS client
     /// subscribes and `get_market_price()` stays live for the position's lifetime.
@@ -151,6 +151,14 @@ struct VolatilityState {
     samples: VecDeque<f64>,
     max_samples: usize,
     last_push: Instant,
+}
+
+#[derive(Debug)]
+struct SeenOrderIds {
+    ttl: Duration,
+    max_entries: usize,
+    ids: HashSet<String>,
+    insertion_order: VecDeque<(String, Instant)>,
 }
 
 #[derive(Debug, Clone)]
@@ -223,9 +231,62 @@ impl VolatilityState {
     }
 }
 
+impl SeenOrderIds {
+    fn new(ttl: Duration, max_entries: usize) -> Self {
+        let bounded_max_entries = max_entries.max(1);
+        Self {
+            ttl,
+            max_entries: bounded_max_entries,
+            ids: HashSet::with_capacity(bounded_max_entries),
+            insertion_order: VecDeque::with_capacity(bounded_max_entries),
+        }
+    }
+
+    fn from_env() -> Self {
+        let ttl_secs = std::env::var("ORDER_ID_DEDUP_TTL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(600);
+        let max_entries = std::env::var("ORDER_ID_DEDUP_CAPACITY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(4_096);
+        Self::new(Duration::from_secs(ttl_secs.max(1)), max_entries)
+    }
+
+    fn insert(&mut self, order_id: &str, now: Instant) -> bool {
+        self.evict_stale(now);
+        if self.ids.contains(order_id) {
+            return false;
+        }
+
+        let owned_order_id = order_id.to_string();
+        self.ids.insert(owned_order_id.clone());
+        self.insertion_order.push_back((owned_order_id, now));
+        self.evict_stale(now);
+        true
+    }
+
+    fn evict_stale(&mut self, now: Instant) {
+        while let Some((_, inserted_at)) = self.insertion_order.front() {
+            let expired = now.saturating_duration_since(*inserted_at) >= self.ttl;
+            let over_capacity = self.insertion_order.len() > self.max_entries;
+            if !expired && !over_capacity {
+                break;
+            }
+
+            if let Some((expired_id, _)) = self.insertion_order.pop_front() {
+                self.ids.remove(&expired_id);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RejectionAnalytics {
     pub schema_version: u32,
+    #[serde(default)]
+    pub events: Vec<RejectionEvent>,
     pub reasons: HashMap<String, Vec<i64>>,
 }
 
@@ -233,6 +294,17 @@ pub struct RejectionAnalytics {
 pub struct RejectionTrendPoint {
     pub hour_utc_epoch: i64,
     pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RejectionEvent {
+    pub timestamp_ms: i64,
+    pub reason: String,
+    pub token_id: String,
+    pub side: String,
+    pub signal_price: u64,
+    pub signal_size: u64,
+    pub signal_source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -342,7 +414,11 @@ impl PaperEngine {
             fill_latency: Arc::new(std::sync::Mutex::new(LatencyStats::new(1_000))),
             signal_queue: Arc::new(Mutex::new(BinaryHeap::new())),
             volatility_state: Arc::new(std::sync::Mutex::new(VolatilityState::new(120))),
-            rejection_analytics: Arc::new(Mutex::new(RejectionAnalytics { schema_version: 1, reasons: HashMap::new() })),
+            rejection_analytics: Arc::new(Mutex::new(RejectionAnalytics {
+                schema_version: 2,
+                events: Vec::new(),
+                reasons: HashMap::new(),
+            })),
             shadow_comparator: Arc::new(Mutex::new(ShadowComparator::default())),
             experiments: Arc::new(std::sync::Mutex::new(ExperimentSwitches {
                 schema_version: 1,
@@ -357,7 +433,7 @@ impl PaperEngine {
                 .context("failed to build reqwest HTTP client for market metadata")?,
             rn1_wallet: std::env::var("RN1_WALLET").unwrap_or_default(),
             signal_meta_cache: Arc::new(Mutex::new(HashMap::new())),
-            seen_order_ids: Arc::new(Mutex::new(HashSet::with_capacity(512))),
+            seen_order_ids: Arc::new(Mutex::new(SeenOrderIds::from_env())),
             equity_tick: std::sync::atomic::AtomicU64::new(0),
             market_subscriptions,
             ws_force_reconnect,
@@ -465,7 +541,7 @@ impl PaperEngine {
         // ── Order-ID dedup: skip if we've already processed this transaction ──
         {
             let mut seen = self.seen_order_ids.lock().await;
-            if !seen.insert(signal.order_id.clone()) {
+            if !seen.insert(&signal.order_id, Instant::now()) {
                 warn!(order_id = %signal.order_id, "⏭️  Duplicate order_id — skipping");
                 return;
             }
@@ -491,7 +567,7 @@ impl PaperEngine {
                 warn!(token_id = %signal.token_id, "⏭️  Already holding position — skipping");
                 p.skipped_orders += 1;
                 drop(p);
-                self.record_rejection("already_holding").await;
+                self.record_rejection("already_holding", &signal).await;
                 return;
             }
             // ── Per-match concentration limit: max 2 positions on same event ──
@@ -514,7 +590,7 @@ impl PaperEngine {
                         );
                         p.skipped_orders += 1;
                         drop(p);
-                        self.record_rejection("match_concentration").await;
+                        self.record_rejection("match_concentration", &signal).await;
                         return;
                     }
                 }
@@ -539,7 +615,7 @@ impl PaperEngine {
                 let mut p = self.portfolio.lock().await;
                 p.skipped_orders += 1;
                 drop(p);
-                self.record_rejection("dedup_window").await;
+                self.record_rejection("dedup_window", &signal).await;
                 return;
             }
         }
@@ -563,7 +639,7 @@ impl PaperEngine {
                     let mut p = self.portfolio.lock().await;
                     p.skipped_orders += 1;
                     drop(p);
-                    self.record_rejection("vol_gate").await;
+                    self.record_rejection("vol_gate", &signal).await;
                     return;
                 }
             }
@@ -610,7 +686,7 @@ impl PaperEngine {
                 let mut p = self.portfolio.lock().await;
                 p.skipped_orders += 1;
                 drop(p);
-                self.record_rejection("event_too_far").await;
+                self.record_rejection("event_too_far", &signal).await;
                 return;
             }
         }
@@ -651,7 +727,7 @@ impl PaperEngine {
                 min = %format!("${:.2}", min_notional),
                 "⏭️  Signal skipped — RN1 notional below minimum"
             );
-            self.record_rejection("min_notional").await;
+            self.record_rejection("min_notional", &signal).await;
             return;
         }
 
@@ -671,7 +747,7 @@ impl PaperEngine {
                 price = %format!("{:.3}", entry_price),
                 "⏭️  Signal skipped — extreme price (no edge)"
             );
-            self.record_rejection("extreme_price").await;
+            self.record_rejection("extreme_price", &signal).await;
             return;
         }
 
@@ -690,7 +766,7 @@ impl PaperEngine {
                     title = %title_str,
                     "⏭️  Signal skipped — blocked market category (esports)"
                 );
-                self.record_rejection("blocked_category").await;
+                self.record_rejection("blocked_category", &signal).await;
                 return;
             }
         }
@@ -712,7 +788,7 @@ impl PaperEngine {
                     cash_pct = %format!("{:.0}%", cash_pct * 100.0),
                     "⏭️  Signal skipped — high-fee category while cash is low"
                 );
-                self.record_rejection("high_fee_low_cash").await;
+                self.record_rejection("high_fee_low_cash", &signal).await;
                 return;
             }
         }
@@ -732,7 +808,7 @@ impl PaperEngine {
                     category = %fee_category,
                     "⏭️  Signal skipped — fee exceeds 60% of estimated edge"
                 );
-                self.record_rejection("fee_exceeds_edge").await;
+                self.record_rejection("fee_exceeds_edge", &signal).await;
                 return;
             }
         }
@@ -768,7 +844,7 @@ impl PaperEngine {
                     );
                     p.skipped_orders += 1;
                     drop(p);
-                    self.record_rejection("market_concentration").await;
+                    self.record_rejection("market_concentration", &signal).await;
                     return;
                 }
             }
@@ -800,7 +876,7 @@ impl PaperEngine {
                 }
                 p.skipped_orders += 1;
                 drop(p);
-                self.record_rejection("intraday_drawdown_pause").await;
+                self.record_rejection("intraday_drawdown_pause", &signal).await;
                 return;
             }
             drawdown_sizing_mult = if drawdown_pct <= 0.0 {
@@ -933,7 +1009,7 @@ impl PaperEngine {
                 // RN1 selling a token we don't hold — skip rather than open a short.
                 p.skipped_orders += 1;
                 drop(p);
-                self.record_rejection("sell_no_position").await;
+                self.record_rejection("sell_no_position", &signal).await;
             }
             return;
         }
@@ -953,7 +1029,7 @@ impl PaperEngine {
                         "Skipped — notional=${:.2}  cash=${:.2}", rn1_notional_usd, p.cash_usdc
                     ));
                 }
-                self.record_rejection("size_or_cash").await;
+                self.record_rejection("size_or_cash", &signal).await;
                 return;
             }
         };
@@ -980,7 +1056,7 @@ impl PaperEngine {
                         &signal.token_id, token_invested, token_cap_usdc
                     ));
                 }
-                self.record_rejection("token_concentration_cap").await;
+                self.record_rejection("token_concentration_cap", &signal).await;
                 let mut pm = self.portfolio.lock().await;
                 pm.skipped_orders += 1;
                 return;
@@ -1043,7 +1119,7 @@ impl PaperEngine {
             );
             let mut p = self.portfolio.lock().await;
             p.skipped_orders += 1;
-            self.record_rejection("size_after_throttle").await;
+            self.record_rejection("size_after_throttle", &signal).await;
             return;
         }
 
@@ -1076,7 +1152,7 @@ impl PaperEngine {
                     log_push(log, EntryKind::Skip, "Skipped — liquidity guard reject".to_string());
                 }
                 tracing::warn!(token_id = %signal.token_id, "⏭️  Liquidity guard hard-rejected signal");
-                self.record_rejection("liquidity_reject").await;
+                self.record_rejection("liquidity_reject", &signal).await;
                 return;
             }
         };
@@ -1084,7 +1160,7 @@ impl PaperEngine {
             if let Some(ref log) = self.activity {
                 log_push(log, EntryKind::Warn, format!("Liquidity guard downsized to ${:.2}", size_usdc));
             }
-            self.record_rejection("liquidity_downsize").await;
+            self.record_rejection("liquidity_downsize", &signal).await;
         }
 
         // 1C: Order book imbalance filter — avoid buying into heavy sell pressure.
@@ -1113,7 +1189,7 @@ impl PaperEngine {
                             let mut p = self.portfolio.lock().await;
                             p.skipped_orders += 1;
                             drop(p);
-                            self.record_rejection("imbalance_gate").await;
+                            self.record_rejection("imbalance_gate", &signal).await;
                             return;
                         }
                     }
@@ -1143,7 +1219,7 @@ impl PaperEngine {
                     let mut p = self.portfolio.lock().await;
                     p.skipped_orders += 1;
                     drop(p);
-                    self.record_rejection("low_confidence").await;
+                    self.record_rejection("low_confidence", &signal).await;
                     return;
                 }
             }
@@ -1181,7 +1257,7 @@ impl PaperEngine {
                 let mut p = self.portfolio.lock().await;
                 p.skipped_orders += 1;
                 drop(p);
-                self.record_rejection("dynamic_pos_cap").await;
+                self.record_rejection("dynamic_pos_cap", &signal).await;
                 return;
             }
         }
@@ -1196,7 +1272,7 @@ impl PaperEngine {
             if let Some(ref log) = self.activity {
                 log_push(log, EntryKind::Warn, format!("RISK BLOCKED: {violation}"));
             }
-            self.record_rejection("risk_blocked").await;
+            self.record_rejection(violation.analytics_key(), &signal).await;
             return;
         }
 
@@ -1222,7 +1298,7 @@ impl PaperEngine {
                 let mut p = self.portfolio.lock().await;
                 p.skipped_orders += 1;
                 drop(p);
-                self.record_rejection("fee_edge_reject").await;
+                self.record_rejection("fee_edge_reject", &signal).await;
                 return;
             }
         }
@@ -1252,7 +1328,7 @@ impl PaperEngine {
                         let mut p = self.portfolio.lock().await;
                         p.skipped_orders += 1;
                         drop(p);
-                        self.record_rejection("depth_gate").await;
+                        self.record_rejection("depth_gate", &signal).await;
                         return;
                     }
                 }
@@ -1275,7 +1351,7 @@ impl PaperEngine {
                 let mut p = self.portfolio.lock().await;
                 p.skipped_orders += 1;
                 drop(p);
-                self.record_rejection("drift_cooldown").await;
+                self.record_rejection("drift_cooldown", &signal).await;
                 return;
             }
         }
@@ -1304,7 +1380,7 @@ impl PaperEngine {
                     &signal.token_id
                 ));
             }
-            self.record_rejection("drift_abort").await;
+            self.record_rejection("drift_abort", &signal).await;
             return;
         }
 
@@ -1833,13 +1909,37 @@ impl PaperEngine {
         ((fill_price - ref_price).abs() / ref_price) * 10_000.0
     }
 
-    async fn record_rejection(&self, reason: &str) {
+    async fn record_rejection(&self, reason: &str, signal: &RN1Signal) {
+        let timestamp_ms = Utc::now().timestamp_millis();
+        let event = RejectionEvent {
+            timestamp_ms,
+            reason: reason.to_string(),
+            token_id: signal.token_id.clone(),
+            side: signal.side.to_string(),
+            signal_price: signal.price,
+            signal_size: signal.size,
+            signal_source: signal.signal_source.clone(),
+        };
         let mut rej = self.rejection_analytics.lock().await;
-        rej.schema_version = 1;
+        rej.schema_version = 2;
+        rej.events.push(event.clone());
         rej.reasons
             .entry(reason.to_string())
             .or_default()
-            .push(Utc::now().timestamp());
+            .push(timestamp_ms / 1000);
+        drop(rej);
+
+        if let Some(ref tx) = self.warehouse_tx {
+            let _ = tx.try_send(WarehouseEvent::Rejection(RejectionEventRecord {
+                timestamp_ms: timestamp_ms as u64,
+                reason: event.reason,
+                token_id: event.token_id,
+                side: event.side,
+                signal_price: event.signal_price,
+                signal_size: event.signal_size,
+                signal_source: event.signal_source,
+            }));
+        }
     }
 
     pub async fn rejection_trend_24h(&self) -> HashMap<String, Vec<RejectionTrendPoint>> {
@@ -2523,4 +2623,41 @@ fn read_json_with_fallback(path: &str) -> std::io::Result<Option<serde_json::Val
         }
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SeenOrderIds;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn seen_order_ids_rejects_duplicates_within_ttl() {
+        let start = Instant::now();
+        let mut deduper = SeenOrderIds::new(Duration::from_secs(60), 4);
+
+        assert!(deduper.insert("order-1", start));
+        assert!(!deduper.insert("order-1", start + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn seen_order_ids_evicts_oldest_entry_at_capacity() {
+        let start = Instant::now();
+        let mut deduper = SeenOrderIds::new(Duration::from_secs(60), 2);
+
+        assert!(deduper.insert("order-1", start));
+        assert!(deduper.insert("order-2", start + Duration::from_secs(1)));
+        assert!(deduper.insert("order-3", start + Duration::from_secs(2)));
+
+        assert_eq!(deduper.ids.len(), 2);
+        assert!(deduper.insert("order-1", start + Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn seen_order_ids_allows_reuse_after_ttl_expiry() {
+        let start = Instant::now();
+        let mut deduper = SeenOrderIds::new(Duration::from_secs(2), 4);
+
+        assert!(deduper.insert("order-1", start));
+        assert!(deduper.insert("order-1", start + Duration::from_secs(2)));
+    }
 }

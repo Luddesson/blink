@@ -39,7 +39,7 @@ $SSH_CMD "sudo -u blink bash -c '
 # Step 3: Rebuild web UI
 echo "[3/4] Building web UI..."
 $SSH_CMD "sudo -u blink bash -c '
-    cd $REMOTE_DIR/blink-engine/web-ui
+    cd $REMOTE_DIR/blink-ui
     npm ci --silent
     npm run build
 '"
@@ -52,4 +52,4 @@ $SSH_CMD "sudo systemctl status blink-engine --no-pager -l | head -15"
 
 echo ""
 echo "✅ Deployed successfully!"
-echo "Dashboard: http://$SERVER_IP:5173"
+echo "Engine API/UI: http://$SERVER_IP:3030"

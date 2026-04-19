@@ -1,0 +1,3354 @@
+{
+  "generatedAt": "2026-04-19T12:04:09.3377763+02:00",
+  "templates": [
+    "blink-engine/.env.example",
+    "blink-engine/.env.live.template",
+    "deploy/hetzner/.env.production.template"
+  ],
+  "summary": {
+    "totalVariables": 230,
+    "declaredAndReferenced": 88,
+    "declaredOnly": 32,
+    "referencedOnly": 110
+  },
+  "variables": [
+    {
+      "name": "ADAPTIVE_SIZING",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1082
+        }
+      ]
+    },
+    {
+      "name": "AGENT_RPC_BIND",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 63
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 46
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 492
+        }
+      ]
+    },
+    {
+      "name": "AGENT_RPC_ENABLED",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 62
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 45
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 491
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_CHROMA_DIR",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 68
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_CONFIDENCE_FLOOR",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 56
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 69
+        },
+        {
+          "path": "blink-engine/crates/engine/src/alpha_signal.rs",
+          "line": 145
+        },
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1205
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_DB_PATH",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 60
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/main.py",
+          "line": 508
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_DISCOVERY_INTERVAL_SECS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 62
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_ENABLED",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 43
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 341
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_GAMMA_LIMIT",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 65
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_MAX_CONCURRENT_POSITIONS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 48
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/alpha_signal.rs",
+          "line": 151
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_MAX_DAILY_LOSS_PCT",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 49
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/alpha_signal.rs",
+          "line": 154
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_MAX_EXPIRY_HOURS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 59
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 71
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_MAX_LLM_CALLS_PER_CYCLE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 64
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_MAX_SIGNAL_AGE_SECS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/alpha_signal.rs",
+          "line": 157
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_MAX_SINGLE_ORDER_USDC",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 70
+        },
+        {
+          "path": "blink-engine/crates/engine/src/alpha_signal.rs",
+          "line": 148
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_MIN_EDGE_BPS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 57
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 63
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_MODEL",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 59
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_REASONING_CHAIN",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 72
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_SCAN_INTERVAL_SECS",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 58
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "ALPHA_SCANNER_MAX_VOL",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 67
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_SCANNER_MIN_VOL",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 66
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_SIDECAR_URL",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 44
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 344
+        }
+      ]
+    },
+    {
+      "name": "ALPHA_TRADING_ENABLED",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 47
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/alpha_signal.rs",
+          "line": 141
+        }
+      ]
+    },
+    {
+      "name": "AUTO_POSTRUN_REVIEW",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 263
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 65
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "AUTOCLAIM_ENABLED",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 102
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/blink_twin.rs",
+          "line": 264
+        },
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 2359
+        }
+      ]
+    },
+    {
+      "name": "AUTOCLAIM_TARGET_PNL_PCT",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 105
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "AUTOCLAIM_TIER_1_PCT",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 69
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "AUTOCLAIM_TIER_2_PCT",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 70
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "AUTOCLAIM_TIER_3_PCT",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 71
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "AUTOCLAIM_TIERS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 109
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/exit_strategy.rs",
+          "line": 426
+        },
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 2571
+        }
+      ]
+    },
+    {
+      "name": "BACKTEST_DRIFT_THRESHOLD",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1457
+        }
+      ]
+    },
+    {
+      "name": "BACKTEST_FILL_WINDOW_MS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1459
+        }
+      ]
+    },
+    {
+      "name": "BACKTEST_SIZE_MULTIPLIER",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1455
+        }
+      ]
+    },
+    {
+      "name": "BACKTEST_SLIPPAGE_BPS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1461
+        }
+      ]
+    },
+    {
+      "name": "BACKTEST_STARTING_USDC",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1453
+        }
+      ]
+    },
+    {
+      "name": "BASE_MULTIPLIER",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/types.rs",
+          "line": 374
+        }
+      ]
+    },
+    {
+      "name": "BLINK_LIVE_PROFILE",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 45
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 21
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 239
+        }
+      ]
+    },
+    {
+      "name": "BLINK_RPC_URL",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 52
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 56
+        }
+      ]
+    },
+    {
+      "name": "BLINK_TWIN",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 201
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 501
+        }
+      ]
+    },
+    {
+      "name": "BLOXROUTE_AUTH_HEADER",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/tx_router.rs",
+          "line": 89
+        }
+      ]
+    },
+    {
+      "name": "BLOXROUTE_URL",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/tx_router.rs",
+          "line": 85
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_DISCOVER_ENABLED",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 326
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_discovery.rs",
+          "line": 48
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_DISCOVER_INTERVAL_SECS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_discovery.rs",
+          "line": 51
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_DISCOVER_LENSES",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_discovery.rs",
+          "line": 55
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_DISCOVER_LIMIT",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_discovery.rs",
+          "line": 58
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_DISCOVER_MAX_RESOLVE_HOURS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_signal_generator.rs",
+          "line": 51
+        },
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 1320
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_DISCOVER_PREWARM",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_discovery.rs",
+          "line": 62
+        },
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_discovery.rs",
+          "line": 65
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_ENABLED",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 323
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/tui_app.rs",
+          "line": 1172
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_POSITION_DRIFT_SHARES",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_reconciler.rs",
+          "line": 46
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_PRICE_DIVERGENCE_PCT",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_reconciler.rs",
+          "line": 42
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_RECON_ENABLED",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_reconciler.rs",
+          "line": 35
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_RECON_INTERVAL_SECS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_reconciler.rs",
+          "line": 38
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_SIGNAL_GEN_ENABLED",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_signal_generator.rs",
+          "line": 44
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_SIGNAL_GEN_INTERVAL_SECS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_signal_generator.rs",
+          "line": 47
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_SIGNAL_GEN_MIN_CONVERGENCE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_signal_generator.rs",
+          "line": 55
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_SIGNAL_GEN_MIN_NOTIONAL",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_signal_generator.rs",
+          "line": 59
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_SM_AUTO_TRACK_TOP_N",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_smart_money.rs",
+          "line": 62
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_SM_CONVERGENCE_THRESHOLD",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_smart_money.rs",
+          "line": 48
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_SM_ENABLED",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_smart_money.rs",
+          "line": 37
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_SM_FEED_MIN_PNL",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_smart_money.rs",
+          "line": 58
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_SM_MIN_WIN_RATE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_smart_money.rs",
+          "line": 52
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_SM_POLL_SECS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_smart_money.rs",
+          "line": 40
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_SM_PROFILE_CACHE_SECS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_smart_money.rs",
+          "line": 44
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_SM_SIGNAL_TYPE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/bullpen_smart_money.rs",
+          "line": 56
+        }
+      ]
+    },
+    {
+      "name": "BULLPEN_TIMEOUT_SECS",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 333
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "CASH_RESERVE_PCT",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 63
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_portfolio.rs",
+          "line": 545
+        }
+      ]
+    },
+    {
+      "name": "CLICKHOUSE_URL",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 205
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1195
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 237
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 262
+        }
+      ]
+    },
+    {
+      "name": "CLOB_API_URL",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 61
+        }
+      ]
+    },
+    {
+      "name": "CLOB_HOST",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 7
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 75
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 160
+        }
+      ]
+    },
+    {
+      "name": "CUSTODIAL_PROVIDER",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/execution_provider.rs",
+          "line": 63
+        },
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 665
+        }
+      ]
+    },
+    {
+      "name": "CUSTODIAL_PROVIDER_READY",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 666
+        }
+      ]
+    },
+    {
+      "name": "DAILY_REPORT_WEBHOOK_URL",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1296
+        }
+      ]
+    },
+    {
+      "name": "DEDUP_WINDOW_MS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 605
+        }
+      ]
+    },
+    {
+      "name": "DEPTH_GATE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1308
+        }
+      ]
+    },
+    {
+      "name": "DEPTH_GATE_MULT",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1311
+        }
+      ]
+    },
+    {
+      "name": "DISCOVERY_ENABLED",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 299
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "DISCOVERY_LENS",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 302
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "DISCOVERY_MAX_MARKETS",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 311
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "DISCOVERY_MIN_LIQUIDITY",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 305
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "DISCOVERY_MIN_VOLUME",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 308
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "DISCOVERY_REFRESH_SECS",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 314
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "DRIFT_ABORT_COOLDOWN_SECS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 137
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1342
+        }
+      ]
+    },
+    {
+      "name": "DYNAMIC_POS_CAP_BASE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1237
+        }
+      ]
+    },
+    {
+      "name": "DYNAMIC_POS_CAP_MAX",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1241
+        }
+      ]
+    },
+    {
+      "name": "DYNAMIC_POS_CAP_MIN",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1239
+        }
+      ]
+    },
+    {
+      "name": "EBPF_TELEMETRY",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 239
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 213
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 214
+        }
+      ]
+    },
+    {
+      "name": "ENTRY_DELAY_SECS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 64
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 551
+        }
+      ]
+    },
+    {
+      "name": "ETHERSCAN_API_KEY",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 291
+        }
+      ]
+    },
+    {
+      "name": "EVENT_HORIZON_HOURS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 669
+        }
+      ]
+    },
+    {
+      "name": "EXIT_SLIPPAGE_BPS",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 68
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "EXPERIMENT_AUTOCLAIM_B",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 197
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 426
+        }
+      ]
+    },
+    {
+      "name": "EXPERIMENT_DRIFT_B",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 198
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 427
+        }
+      ]
+    },
+    {
+      "name": "EXPERIMENT_SIZING_B",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 196
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 425
+        }
+      ]
+    },
+    {
+      "name": "EXTREME_PRICE_HI",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 738
+        }
+      ]
+    },
+    {
+      "name": "EXTREME_PRICE_LO",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 740
+        }
+      ]
+    },
+    {
+      "name": "FAILSAFE_COUNTDOWN_SECS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 225
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/in_play_failsafe.rs",
+          "line": 65
+        }
+      ]
+    },
+    {
+      "name": "FAILSAFE_POLL_INTERVAL_MS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 222
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/in_play_failsafe.rs",
+          "line": 60
+        }
+      ]
+    },
+    {
+      "name": "FEE_EDGE_MAX_PCT",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1281
+        }
+      ]
+    },
+    {
+      "name": "FILL_SLO_P99_US",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 189
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "FLASHBOTS_RELAY_URL",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/tx_router.rs",
+          "line": 83
+        }
+      ]
+    },
+    {
+      "name": "GAME_WATCHER_INTERVAL_MS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 230
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/game_start_watcher.rs",
+          "line": 52
+        }
+      ]
+    },
+    {
+      "name": "GAMMA_API",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 9
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "GAMMA_API_URL",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 60
+        }
+      ]
+    },
+    {
+      "name": "HEARTBEAT_INTERVAL_SECS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/heartbeat.rs",
+          "line": 117
+        }
+      ]
+    },
+    {
+      "name": "HEARTBEAT_WEBHOOK_INTERVAL_SECS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1227
+        }
+      ]
+    },
+    {
+      "name": "HEARTBEAT_WEBHOOK_URL",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1223
+        }
+      ]
+    },
+    {
+      "name": "IMBALANCE_GATE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1168
+        }
+      ]
+    },
+    {
+      "name": "IMBALANCE_THRESHOLD",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1170
+        }
+      ]
+    },
+    {
+      "name": "KEYSTORE_PASSPHRASE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 206
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1959
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 2068
+        }
+      ]
+    },
+    {
+      "name": "KEYSTORE_PATH",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 205
+        }
+      ]
+    },
+    {
+      "name": "LATENCY_WINDOW_SIZE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 187
+        }
+      ]
+    },
+    {
+      "name": "LIVE_CANARY_ALLOWED_MARKETS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 268
+        }
+      ]
+    },
+    {
+      "name": "LIVE_CANARY_DAYTIME_ONLY",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 49
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 43
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 253
+        }
+      ]
+    },
+    {
+      "name": "LIVE_CANARY_END_HOUR_UTC",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 51
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 45
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 260
+        }
+      ]
+    },
+    {
+      "name": "LIVE_CANARY_MAX_ORDER_USDC",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 47
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 41
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 245
+        }
+      ]
+    },
+    {
+      "name": "LIVE_CANARY_MAX_ORDERS_PER_SESSION",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 48
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 42
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 249
+        }
+      ]
+    },
+    {
+      "name": "LIVE_CANARY_MAX_REJECT_STREAK",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 52
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 46
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 264
+        }
+      ]
+    },
+    {
+      "name": "LIVE_CANARY_START_HOUR_UTC",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 50
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 44
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 256
+        }
+      ]
+    },
+    {
+      "name": "LIVE_MODE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 664
+        }
+      ]
+    },
+    {
+      "name": "LIVE_RECONCILE_INTERVAL_SECS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 77
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/live_engine.rs",
+          "line": 165
+        }
+      ]
+    },
+    {
+      "name": "LIVE_ROLLOUT_STAGE",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 46
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 40
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 241
+        }
+      ]
+    },
+    {
+      "name": "LIVE_TRADING",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 42
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 18
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 194
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 99
+        },
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 807
+        }
+      ]
+    },
+    {
+      "name": "LLM_BASE_URL",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 58
+        }
+      ]
+    },
+    {
+      "name": "LOG_DIR",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 64
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "LOG_LEVEL",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 253
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 172
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 129
+        }
+      ]
+    },
+    {
+      "name": "MARKETS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 20
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 169
+        }
+      ]
+    },
+    {
+      "name": "MAX_CONCURRENT_POSITIONS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 91
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 52
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 24
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/risk_manager.rs",
+          "line": 64
+        },
+        {
+          "path": "blink-engine/crates/engine/src/types.rs",
+          "line": 383
+        }
+      ]
+    },
+    {
+      "name": "MAX_DAILY_LOSS_PCT",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 87
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 51
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 26
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/risk_manager.rs",
+          "line": 59
+        }
+      ]
+    },
+    {
+      "name": "MAX_ENTRY_PRICE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/types.rs",
+          "line": 371
+        }
+      ]
+    },
+    {
+      "name": "MAX_EXPOSURE_PER_MARKET_PCT",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 822
+        }
+      ]
+    },
+    {
+      "name": "MAX_HOLD_SECS",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 33
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "MAX_INTRADAY_DRAWDOWN_PCT",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 824
+        }
+      ]
+    },
+    {
+      "name": "MAX_MULTIPLIER",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/types.rs",
+          "line": 377
+        }
+      ]
+    },
+    {
+      "name": "MAX_ORDERS_PER_SECOND",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 97
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 54
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 28
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/risk_manager.rs",
+          "line": 74
+        }
+      ]
+    },
+    {
+      "name": "MAX_POSITION_PCT",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/types.rs",
+          "line": 380
+        }
+      ]
+    },
+    {
+      "name": "MAX_POSITIONS_PER_MATCH",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 574
+        }
+      ]
+    },
+    {
+      "name": "MAX_RN1_BET_USDC",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/types.rs",
+          "line": 362
+        }
+      ]
+    },
+    {
+      "name": "MAX_SINGLE_ORDER_USDC",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 94
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 50
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 25
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/risk_manager.rs",
+          "line": 69
+        }
+      ]
+    },
+    {
+      "name": "MEV_ROUTER",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/live_engine.rs",
+          "line": 193
+        },
+        {
+          "path": "blink-engine/crates/engine/src/mev_router.rs",
+          "line": 176
+        }
+      ]
+    },
+    {
+      "name": "MIN_ENTRY_PRICE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/types.rs",
+          "line": 368
+        }
+      ]
+    },
+    {
+      "name": "MIN_MARKET_LIQUIDITY_USDC",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/types.rs",
+          "line": 365
+        }
+      ]
+    },
+    {
+      "name": "MIN_RN1_BET_USDC",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/types.rs",
+          "line": 359
+        }
+      ]
+    },
+    {
+      "name": "MIN_SIGNAL_NOTIONAL_USD",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 23
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 719
+        }
+      ]
+    },
+    {
+      "name": "MOMENTUM_GRACE_SECS",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 72
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "NEWSAPI_KEY",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 73
+        }
+      ]
+    },
+    {
+      "name": "OPENAI_API_KEY",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 53
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 52
+        }
+      ]
+    },
+    {
+      "name": "OPENAI_MODEL",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 59
+        }
+      ]
+    },
+    {
+      "name": "ORDER_ID_DEDUP_CAPACITY",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 250
+        }
+      ]
+    },
+    {
+      "name": "ORDER_ID_DEDUP_TTL_SECS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 246
+        }
+      ]
+    },
+    {
+      "name": "PAPER_ADVERSE_FILL_BPS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 179
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 702
+        }
+      ]
+    },
+    {
+      "name": "PAPER_AUTOSAVE_SECS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 38
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 771
+        }
+      ]
+    },
+    {
+      "name": "PAPER_CONFIDENCE_DISCOUNT",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 142
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 62
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1096
+        }
+      ]
+    },
+    {
+      "name": "PAPER_DEPTH_CAPTURE_RATIO",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 165
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1756
+        }
+      ]
+    },
+    {
+      "name": "PAPER_DRIFT_THRESHOLD_PCT",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_portfolio.rs",
+          "line": 32
+        }
+      ]
+    },
+    {
+      "name": "PAPER_ENTRY_SPREAD_BPS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 69
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_portfolio.rs",
+          "line": 590
+        }
+      ]
+    },
+    {
+      "name": "PAPER_EXIT_HAIRCUT_BPS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 186
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_portfolio.rs",
+          "line": 115
+        }
+      ]
+    },
+    {
+      "name": "PAPER_EXIT_SLIPPAGE_BPS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 70
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_portfolio.rs",
+          "line": 125
+        }
+      ]
+    },
+    {
+      "name": "PAPER_FILL_CHECK_INTERVAL_MS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 148
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1637
+        }
+      ]
+    },
+    {
+      "name": "PAPER_FILL_WINDOW_MS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 145
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1628
+        }
+      ]
+    },
+    {
+      "name": "PAPER_LIQUIDITY_HARD_REJECT",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 171
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1766
+        }
+      ]
+    },
+    {
+      "name": "PAPER_MAX_ORDER_USDC",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 57
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 20
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_portfolio.rs",
+          "line": 536
+        }
+      ]
+    },
+    {
+      "name": "PAPER_MAX_POSITION_PCT",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 154
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 61
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_portfolio.rs",
+          "line": 520
+        }
+      ]
+    },
+    {
+      "name": "PAPER_MIN_ORDER_FLOOR_USDC",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 158
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 59
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 22
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_portfolio.rs",
+          "line": 530
+        }
+      ]
+    },
+    {
+      "name": "PAPER_MIN_TRADE_USDC",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 161
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 58
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 21
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1107
+        },
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1751
+        },
+        {
+          "path": "blink-engine/crates/engine/src/paper_portfolio.rs",
+          "line": 525
+        }
+      ]
+    },
+    {
+      "name": "PAPER_PORTFOLIO_PATH",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 73
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "PAPER_REALISM_MODE",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 175
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 68
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1624
+        },
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1747
+        },
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 698
+        },
+        {
+          "path": "blink-engine/crates/engine/src/paper_portfolio.rs",
+          "line": 44
+        },
+        {
+          "path": "blink-engine/crates/engine/src/paper_portfolio.rs",
+          "line": 587
+        }
+      ]
+    },
+    {
+      "name": "PAPER_REJECTIONS_PATH",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 193
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1415
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 525
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 779
+        }
+      ]
+    },
+    {
+      "name": "PAPER_RESET_STATE_ON_START",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 527
+        }
+      ]
+    },
+    {
+      "name": "PAPER_SIZE_MULTIPLIER",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 152
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 60
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_portfolio.rs",
+          "line": 514
+        }
+      ]
+    },
+    {
+      "name": "PAPER_STATE_PATH",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 35
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1403
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 521
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 57
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 775
+        },
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1478
+        },
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 2546
+        },
+        {
+          "path": "blink-engine/crates/engine/src/r2_uploader.rs",
+          "line": 161
+        }
+      ]
+    },
+    {
+      "name": "PAPER_TAKER_FEE_BPS",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 183
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "PAPER_THIN_BOOK_FALLBACK_USDC",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 168
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1132
+        },
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1761
+        }
+      ]
+    },
+    {
+      "name": "PAPER_TOKEN_MAX_EXPOSURE_PCT",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 156
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1046
+        }
+      ]
+    },
+    {
+      "name": "PAPER_TRADING",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 25
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 20
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 7
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 98
+        }
+      ]
+    },
+    {
+      "name": "PAPER_WARM_STATE_PATH",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 192
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1413
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 523
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 777
+        }
+      ]
+    },
+    {
+      "name": "PENDING_ORDERS_WAL_PATH",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/live_engine.rs",
+          "line": 217
+        }
+      ]
+    },
+    {
+      "name": "POLYGON_RPC_URL",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/mev_router.rs",
+          "line": 195
+        },
+        {
+          "path": "blink-engine/crates/engine/src/tx_router.rs",
+          "line": 87
+        }
+      ]
+    },
+    {
+      "name": "POLYMARKET_API_KEY",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 223
+        }
+      ]
+    },
+    {
+      "name": "POLYMARKET_API_PASSPHRASE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 225
+        }
+      ]
+    },
+    {
+      "name": "POLYMARKET_API_SECRET",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 224
+        }
+      ]
+    },
+    {
+      "name": "POLYMARKET_FEE_RATE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_portfolio.rs",
+          "line": 99
+        }
+      ]
+    },
+    {
+      "name": "POLYMARKET_FUNDER_ADDRESS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 222
+        }
+      ]
+    },
+    {
+      "name": "POLYMARKET_ORDER_EXPIRATION",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 235
+        }
+      ]
+    },
+    {
+      "name": "POLYMARKET_ORDER_NONCE",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 231
+        }
+      ]
+    },
+    {
+      "name": "POLYMARKET_SIGNATURE_TYPE",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 35
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 227
+        }
+      ]
+    },
+    {
+      "name": "POSTRUN_REVIEW_DIR",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 266
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1787
+        }
+      ]
+    },
+    {
+      "name": "PRICE_DRIFT_ABORT_BPS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 219
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/in_play_failsafe.rs",
+          "line": 55
+        }
+      ]
+    },
+    {
+      "name": "R2_ACCESS_KEY_ID",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/r2_uploader.rs",
+          "line": 46
+        }
+      ]
+    },
+    {
+      "name": "R2_ACCOUNT_ID",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/r2_uploader.rs",
+          "line": 48
+        }
+      ]
+    },
+    {
+      "name": "R2_BUCKET",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/r2_uploader.rs",
+          "line": 49
+        }
+      ]
+    },
+    {
+      "name": "R2_SECRET_ACCESS_KEY",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/r2_uploader.rs",
+          "line": 47
+        }
+      ]
+    },
+    {
+      "name": "RN1_WALLET",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 14
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 13
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 166
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1447
+        },
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 434
+        },
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 1580
+        },
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 1657
+        },
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 1714
+        }
+      ]
+    },
+    {
+      "name": "RUST_LOG",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 85
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 63
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "SETTLEMENT_CHAIN",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 698
+        }
+      ]
+    },
+    {
+      "name": "SIGNER_PRIVATE_KEY",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 221
+        }
+      ]
+    },
+    {
+      "name": "SIZE_MULTIPLIER",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 19
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "SLIPPAGE_IMPACT_COEFF_BPS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1807
+        }
+      ]
+    },
+    {
+      "name": "SLIPPAGE_IMPACT_EXPONENT",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 1805
+        }
+      ]
+    },
+    {
+      "name": "SMART_MONEY_ENABLED",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 282
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "SMART_MONEY_MIN_TRADE_USD",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 288
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "SMART_MONEY_POLL_MS",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 291
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "SMART_MONEY_TOP_N",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 285
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "STARTING_USDC",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/execution_provider.rs",
+          "line": 66
+        }
+      ]
+    },
+    {
+      "name": "STOP_LOSS_ENABLED",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 123
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 644
+        }
+      ]
+    },
+    {
+      "name": "STOP_LOSS_PCT",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 127
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 67
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 31
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 645
+        }
+      ]
+    },
+    {
+      "name": "STOP_LOSS_SMALL_NOTIONAL_USDC",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 133
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "STOP_LOSS_SMALL_PCT",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 132
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 32
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "TAVILY_API_KEY",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 74
+        }
+      ]
+    },
+    {
+      "name": "TICK_RECORD_PATH",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 526
+        },
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 1567
+        },
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 1648
+        },
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 1705
+        }
+      ]
+    },
+    {
+      "name": "TOKEN_DECIMALS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 699
+        }
+      ]
+    },
+    {
+      "name": "TRACK_WALLETS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 370
+        },
+        {
+          "path": "blink-engine/crates/engine/src/web_server.rs",
+          "line": 1581
+        }
+      ]
+    },
+    {
+      "name": "TRADING_ENABLED",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 84
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 19
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 8
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 409
+        },
+        {
+          "path": "blink-engine/crates/engine/src/risk_manager.rs",
+          "line": 80
+        }
+      ]
+    },
+    {
+      "name": "TUI",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 28
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 100
+        }
+      ]
+    },
+    {
+      "name": "TUI_MODERN_THEME",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 32
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/tui_app.rs",
+          "line": 296
+        }
+      ]
+    },
+    {
+      "name": "TWIN_AUTOCLAIM_TARGET_PNL_PCT",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 113
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "TWIN_AUTOCLAIM_TIERS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 117
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/blink_twin.rs",
+          "line": 271
+        }
+      ]
+    },
+    {
+      "name": "VAR_THRESHOLD_PCT",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 213
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 53
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 27
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/risk_manager.rs",
+          "line": 96
+        }
+      ]
+    },
+    {
+      "name": "VAR_WINDOW_SECS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 210
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/risk_manager.rs",
+          "line": 91
+        }
+      ]
+    },
+    {
+      "name": "VOL_GATE_THRESHOLD_BPS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 632
+        }
+      ]
+    },
+    {
+      "name": "VOL_WARMUP_SECS",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/paper_engine.rs",
+          "line": 627
+        }
+      ]
+    },
+    {
+      "name": "WARM_STATE_PATH",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 74
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "WEB_UI",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 270
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 86
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 37
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 101
+        }
+      ]
+    },
+    {
+      "name": "WEB_UI_BIND",
+      "status": "declared-only",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 39
+        }
+      ],
+      "referencedIn": []
+    },
+    {
+      "name": "WEB_UI_PORT",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 272
+        },
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 38
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1165
+        }
+      ]
+    },
+    {
+      "name": "WEB_UI_STATIC_DIR",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 274
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "line": 1201
+        }
+      ]
+    },
+    {
+      "name": "WS_BROADCAST_INTERVAL_SECS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "deploy/hetzner/.env.production.template",
+          "line": 40
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 182
+        }
+      ]
+    },
+    {
+      "name": "WS_PARSE_ERROR_PREVIEW_CHARS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 259
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 178
+        }
+      ]
+    },
+    {
+      "name": "WS_RECONNECT_DEBOUNCE_MS",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 256
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 78
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 174
+        }
+      ]
+    },
+    {
+      "name": "WS_URL",
+      "status": "declared-and-referenced",
+      "declaredInTemplates": [
+        {
+          "path": "blink-engine/.env.example",
+          "line": 8
+        },
+        {
+          "path": "blink-engine/.env.live.template",
+          "line": 76
+        }
+      ],
+      "referencedIn": [
+        {
+          "path": "blink-engine/crates/engine/src/config.rs",
+          "line": 163
+        }
+      ]
+    },
+    {
+      "name": "XAI_API_KEY",
+      "status": "referenced-only",
+      "declaredInTemplates": [],
+      "referencedIn": [
+        {
+          "path": "blink-engine/alpha-sidecar/alpha_sidecar/config.py",
+          "line": 51
+        }
+      ]
+    }
+  ]
+}

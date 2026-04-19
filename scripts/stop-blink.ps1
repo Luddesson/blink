@@ -1,6 +1,6 @@
 # stop-blink.ps1 — stoppar Blink Engine + Web UI + Watchdog
-$root = $PSScriptRoot
-$logs = "$root\logs"
+$repoRoot = Split-Path $PSScriptRoot -Parent
+$logs = Join-Path $repoRoot "logs"
 
 function Kill-Tree($id) {
     Get-WmiObject Win32_Process | Where-Object { $_.ParentProcessId -eq $id } |

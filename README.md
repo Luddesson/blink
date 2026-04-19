@@ -16,10 +16,17 @@ From repo root:
 
 What this does:
 
-1. Builds the engine (release by default, smart-skip when unchanged)
-2. Installs `blink-ui` deps if missing
-3. Starts engine on `http://localhost:3030`
-4. Starts UI on `http://localhost:5173`
+1. Syncs local skills into the Claude/agent mirrors and refreshes the agent skill manifest
+2. Builds the engine (release by default, smart-skip when unchanged)
+3. Installs `blink-ui` deps if missing
+4. Starts engine on `http://localhost:3030`
+5. Starts UI on `http://localhost:5173`
+
+**Runtime port contract**
+
+- `3030` — engine-served dashboard REST/WS API
+- `5173` — local Vite dev server for `blink-ui`
+- `7878` — agent JSON-RPC control plane (`/rpc`), not the dashboard API
 
 Stop everything:
 

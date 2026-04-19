@@ -33,7 +33,7 @@ description: TypeScript/React conventions for the Blink web dashboard.
 - Always provide a `key` prop when re-rendering chart data to force a clean mount.
 
 ## API calls
-- All engine REST calls go to `http://127.0.0.1:7878`. Never hardcode port elsewhere.
+- The Blink dashboard REST/WebSocket surface is served by the engine on port `3030` (`/api`, `/ws` in dev proxy). The separate agent JSON-RPC control plane uses port `7878`.
 - Handle 503/network errors gracefully — the engine may not always be running.
 - Token IDs from the engine are strings; never coerce to numbers.
 

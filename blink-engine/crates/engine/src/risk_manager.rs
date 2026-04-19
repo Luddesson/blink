@@ -189,6 +189,21 @@ impl fmt::Display for RiskViolation {
     }
 }
 
+impl RiskViolation {
+    /// Stable analytics key used by rejection tracking and dashboards.
+    pub fn analytics_key(&self) -> &'static str {
+        match self {
+            RiskViolation::KillSwitchOff => "risk_kill_switch_off",
+            RiskViolation::CircuitBreakerTripped { .. } => "risk_circuit_breaker",
+            RiskViolation::DailyLossLimitExceeded { .. } => "risk_daily_loss_limit",
+            RiskViolation::TooManyPositions { .. } => "risk_too_many_positions",
+            RiskViolation::OrderTooLarge { .. } => "risk_order_too_large",
+            RiskViolation::RateLimitExceeded { .. } => "risk_rate_limit",
+            RiskViolation::VarBreached { .. } => "risk_var_breached",
+        }
+    }
+}
+
 // ─── RiskManager ─────────────────────────────────────────────────────────────
 
 /// Runtime risk manager — holds mutable state for daily P&L and rate limiting.
@@ -551,6 +566,60 @@ mod tests {
         let mut rm = default_rm(); // max = $20
         let err = rm.check_pre_order(25.0, 0, 100.0, 100.0).unwrap_err();
         assert!(matches!(err, RiskViolation::OrderTooLarge { .. }));
+    }
+
+    #[test]
+    fn analytics_keys_are_stable() {
+        let cases = [
+            (
+                RiskViolation::KillSwitchOff,
+                "risk_kill_switch_off",
+            ),
+            (
+                RiskViolation::CircuitBreakerTripped {
+                    reason: "manual".to_string(),
+                    tripped_at: Instant::now(),
+                },
+                "risk_circuit_breaker",
+            ),
+            (
+                RiskViolation::DailyLossLimitExceeded {
+                    loss_usdc: 12.0,
+                    limit_usdc: 10.0,
+                },
+                "risk_daily_loss_limit",
+            ),
+            (
+                RiskViolation::TooManyPositions { current: 5, max: 4 },
+                "risk_too_many_positions",
+            ),
+            (
+                RiskViolation::OrderTooLarge {
+                    size_usdc: 25.0,
+                    max_usdc: 20.0,
+                },
+                "risk_order_too_large",
+            ),
+            (
+                RiskViolation::RateLimitExceeded {
+                    orders_in_window: 3,
+                    max: 2,
+                },
+                "risk_rate_limit",
+            ),
+            (
+                RiskViolation::VarBreached {
+                    exposure_usdc: 6.0,
+                    threshold_usdc: 5.0,
+                    nav: 100.0,
+                },
+                "risk_var_breached",
+            ),
+        ];
+
+        for (violation, expected) in cases {
+            assert_eq!(violation.analytics_key(), expected);
+        }
     }
 
     #[test]

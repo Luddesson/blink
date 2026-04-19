@@ -71,7 +71,7 @@ echo "Binary: $(ls -lh "$REPO_DIR/blink-engine/target/release/engine")"
 # ── 7. Build web UI ────────────────────────────────────────────────────────
 echo "[7/8] Building web UI..."
 su - "$BLINK_USER" -c "
-    cd $REPO_DIR/blink-engine/web-ui
+    cd $REPO_DIR/blink-ui
     npm ci --silent
     npm run build
 "
@@ -117,9 +117,8 @@ ENVEOF
     chmod 600 "$ENV_FILE"
 fi
 
-# Open firewall ports
-iptables -I INPUT -p tcp --dport 5173 -j ACCEPT 2>/dev/null || true
-iptables -I INPUT -p tcp --dport 7878 -j ACCEPT 2>/dev/null || true
+# Open firewall port for the engine-served dashboard/API if desired.
+iptables -I INPUT -p tcp --dport 3030 -j ACCEPT 2>/dev/null || true
 netfilter-persistent save 2>/dev/null || true
 
 # Enable service
@@ -146,5 +145,5 @@ echo "  Next steps:"
 echo "  1. Edit config:    sudo nano $ENV_FILE"
 echo "  2. Start engine:   sudo systemctl start blink-engine"
 echo "  3. View logs:      journalctl -u blink-engine -f"
-echo "  4. Dashboard:      http://$(hostname -I | awk '{print $1}'):5173"
+echo "  4. Dashboard/API:  http://$(hostname -I | awk '{print $1}'):3030"
 echo "══════════════════════════════════════════════════════"

@@ -37,5 +37,5 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 ```bash
-cd blink-engine/web-ui && npm run dev
+cd blink-ui && npm run dev
 ```

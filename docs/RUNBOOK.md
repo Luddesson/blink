@@ -11,6 +11,12 @@ From repository root:
 .\scripts\stop-blink.ps1
 ```
 
+## Runtime Ports
+
+- `3030` — engine-served dashboard and REST/WS API
+- `5173` — local `blink-ui` Vite dev server
+- `7878` — agent JSON-RPC listener (`/rpc`) for sidecars and automation
+
 ## Rebuild UI Only
 
 ```powershell
@@ -23,6 +29,12 @@ npm run build
 ```powershell
 cd blink-engine
 cargo build --release
+```
+
+## Generate Config Registry
+
+```powershell
+.\scripts\generate-config-registry.ps1
 ```
 
 ## Clean Up Local Artifacts

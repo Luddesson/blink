@@ -54,7 +54,7 @@ Blink Engine connects to Polymarket's live WebSocket feed, maintains an in-memor
 │         ▼           (Polymarket)              channel               │
 │  ┌─────────────────────────────────┐           │               │
 │  │          Polymarket             │           ▼               │
-│  │   wss://ws-live-data.poly...    │  ┌──────────────────────┐ │
+│  │   wss://ws-subscriptions...     │  ┌──────────────────────┐ │
 │  └─────────────────────────────────┘  │   paper_engine  OR   │ │
 │                                       │    live_engine        │ │
 │                                       │                       │ │
@@ -73,7 +73,7 @@ Blink Engine connects to Polymarket's live WebSocket feed, maintains an in-memor
 │                                       └──────────────────────┘  │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  Web UI dashboard — active local dashboard on :5173        │ │
+│  │  Web UI dashboard — engine-served dashboard/API on :3030   │ │
 │  └─────────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -141,7 +141,7 @@ cargo run -p engine
 
 ```bash
 PAPER_TRADING=true WEB_UI=true cargo run -p engine
-# Web dashboard on http://localhost:5173 — no real funds used
+# Web dashboard on http://localhost:3030 — no real funds used
 ```
 
 ### 5. Run in live mode (⚠️ real money)
@@ -151,6 +151,12 @@ Ensure all live credentials are set in `.env`, then:
 ```bash
 LIVE_TRADING=true cargo run --release -p engine
 ```
+
+### Runtime ports
+
+- `3030` — engine-served dashboard plus REST/WS operator API when `WEB_UI=true`
+- `7878` — JSON-RPC control plane for sidecars/automation (`/rpc`) when agent RPC is enabled
+- `5173` — local Vite dev server from `blink-ui`; use this only during frontend development
 
 ---
 
@@ -198,7 +204,7 @@ Copy `.env.example` to `.env` and fill in all required values.
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `CLOB_HOST` | Polymarket CLOB REST API base URL | `https://clob.polymarket.com` |
-| `WS_URL` | WebSocket feed URL | `wss://ws-live-data.polymarket.com` |
+| `WS_URL` | WebSocket feed URL | `wss://ws-subscriptions-clob.polymarket.com/ws/market` |
 | `RN1_WALLET` | Lowercase hex wallet address to track | `0xabcd...` |
 | `MARKETS` | Comma-separated Polymarket token IDs | `12345,67890` |
 

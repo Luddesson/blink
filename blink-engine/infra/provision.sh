@@ -125,7 +125,7 @@ if [[ ! -f /etc/blink-engine.env ]]; then
     cat > /etc/blink-engine.env <<'ENVEOF'
 # Blink Engine environment — edit with production values
 CLOB_HOST=https://clob.polymarket.com
-WS_URL=wss://ws-live-data.polymarket.com
+WS_URL=wss://ws-subscriptions-clob.polymarket.com/ws/market
 RN1_WALLET=
 MARKETS=
 LIVE_TRADING=false

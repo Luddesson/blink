@@ -133,6 +133,13 @@ struct ActivityEntryJson {
     message: String,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct RejectionsQuery {
+    reason: Option<String>,
+    since_hours: Option<u64>,
+    limit: Option<usize>,
+}
+
 // ─── Router ─────────────────────────────────────────────────────────────────
 
 /// Builds the axum router with all API endpoints.
@@ -148,6 +155,7 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/portfolio", get(get_portfolio))
         .route("/api/history", get(get_history))
         .route("/api/activity", get(get_activity))
+        .route("/api/rejections", get(get_rejections))
         .route("/api/orderbook/{token_id}", get(get_orderbook))
         .route("/api/orderbooks", get(get_all_orderbooks))
         .route("/api/risk", get(get_risk))
@@ -1144,6 +1152,70 @@ async fn get_metrics(State(state): State<AppState>) -> Json<serde_json::Value> {
         "sortino_ratio": sortino,
         "fee_drag_pct": fee_drag,
         "fee_drag_alert": fee_alert,
+    }))
+}
+
+async fn get_rejections(
+    State(state): State<AppState>,
+    Query(params): Query<RejectionsQuery>,
+) -> Json<serde_json::Value> {
+    let Some(ref paper) = state.paper else {
+        return Json(json!({ "available": false }));
+    };
+
+    let analytics = paper.rejection_analytics_handle();
+    let analytics = analytics.lock().await;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let since_hours = params.since_hours.unwrap_or(24).clamp(1, 24 * 30);
+    let min_ts = now_ms - (since_hours as i64 * 3_600_000);
+    let limit = params.limit.unwrap_or(200).clamp(1, 5_000);
+    let reason_filter = params.reason.as_deref();
+
+    let mut filtered_events: Vec<serde_json::Value> = analytics
+        .events
+        .iter()
+        .filter(|event| event.timestamp_ms >= min_ts)
+        .filter(|event| reason_filter.map(|reason| event.reason == reason).unwrap_or(true))
+        .map(|event| {
+            json!({
+                "timestamp_ms": event.timestamp_ms,
+                "reason": event.reason,
+                "token_id": event.token_id,
+                "side": event.side,
+                "signal_price": event.signal_price,
+                "signal_size": event.signal_size,
+                "signal_source": event.signal_source,
+            })
+        })
+        .collect();
+
+    filtered_events.sort_by(|a, b| {
+        let at = a["timestamp_ms"].as_i64().unwrap_or_default();
+        let bt = b["timestamp_ms"].as_i64().unwrap_or_default();
+        bt.cmp(&at)
+    });
+    filtered_events.truncate(limit);
+
+    let mut counts_by_reason: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+    for event in analytics.events.iter().filter(|event| event.timestamp_ms >= min_ts) {
+        if reason_filter.map(|reason| event.reason == reason).unwrap_or(true) {
+            let count = counts_by_reason
+                .get(event.reason.as_str())
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            counts_by_reason.insert(event.reason.clone(), json!(count + 1));
+        }
+    }
+
+    Json(json!({
+        "available": true,
+        "schema_version": analytics.schema_version,
+        "since_hours": since_hours,
+        "reason_filter": reason_filter,
+        "limit": limit,
+        "returned": filtered_events.len(),
+        "events": filtered_events,
+        "counts_by_reason": counts_by_reason,
     }))
 }
 

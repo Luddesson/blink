@@ -133,6 +133,18 @@ pub struct ClosedTradeFull {
     pub reason:         String,
 }
 
+/// Detailed rejection event emitted by paper-engine analytics.
+#[derive(Row, Serialize, Debug, Clone)]
+pub struct RejectionEventRecord {
+    pub timestamp_ms:  u64,
+    pub reason:        String,
+    pub token_id:      String,
+    pub side:          String,
+    pub signal_price:  u64,
+    pub signal_size:   u64,
+    pub signal_source: String,
+}
+
 // ─── Envelope ────────────────────────────────────────────────────────────────
 
 /// Unified event envelope sent through the channel.
@@ -143,6 +155,7 @@ pub enum WarehouseEvent {
     Trade(TradeExecution),
     Metric(SystemMetric),
     Risk(RiskEvent),
+    Rejection(RejectionEventRecord),
     Latency(LatencySample),
     EquitySnapshot(EquitySnapshot),
     ClosedTrade(ClosedTradeFull),
@@ -248,6 +261,22 @@ impl ClickHouseLogger {
                     exposure_cents   Int64
                 ) ENGINE = MergeTree()
                 ORDER BY (event_type, timestamp_ms)",
+            )
+            .execute()
+            .await?;
+
+        self.client
+            .query(
+                "CREATE TABLE IF NOT EXISTS blink.rejection_events (
+                    timestamp_ms  UInt64,
+                    reason        String,
+                    token_id      String,
+                    side          String,
+                    signal_price  UInt64,
+                    signal_size   UInt64,
+                    signal_source String
+                ) ENGINE = MergeTree()
+                ORDER BY (reason, token_id, timestamp_ms)",
             )
             .execute()
             .await?;
@@ -360,7 +389,7 @@ impl ClickHouseLogger {
             .execute()
             .await?;
 
-        info!("ClickHouse warehouse schema ready (12 tables)");
+        info!("ClickHouse warehouse schema ready (13 tables)");
         Ok(())
     }
 
@@ -377,6 +406,7 @@ impl ClickHouseLogger {
         let mut tx_batch:  Vec<TradeExecution>     = Vec::with_capacity(BATCH_SIZE);
         let mut met_batch: Vec<SystemMetric>       = Vec::with_capacity(BATCH_SIZE);
         let mut risk_batch: Vec<RiskEvent>         = Vec::with_capacity(BATCH_SIZE);
+        let mut rej_batch:  Vec<RejectionEventRecord> = Vec::with_capacity(BATCH_SIZE);
         let mut lat_batch:  Vec<LatencySample>     = Vec::with_capacity(BATCH_SIZE);
         let mut eq_batch:   Vec<EquitySnapshot>    = Vec::with_capacity(BATCH_SIZE);
         let mut ct_batch:   Vec<ClosedTradeFull>   = Vec::with_capacity(BATCH_SIZE);
@@ -391,19 +421,20 @@ impl ClickHouseLogger {
                     WarehouseEvent::Trade(e)           => tx_batch.push(e),
                     WarehouseEvent::Metric(e)          => met_batch.push(e),
                     WarehouseEvent::Risk(e)            => risk_batch.push(e),
+                    WarehouseEvent::Rejection(e)       => rej_batch.push(e),
                     WarehouseEvent::Latency(e)         => lat_batch.push(e),
                     WarehouseEvent::EquitySnapshot(e)  => eq_batch.push(e),
                     WarehouseEvent::ClosedTrade(e)     => ct_batch.push(e),
                 }
 
                 let total = ob_batch.len() + rn1_batch.len()
-                          + tx_batch.len() + met_batch.len()
-                          + risk_batch.len() + lat_batch.len()
-                          + eq_batch.len() + ct_batch.len();
+                           + tx_batch.len() + met_batch.len()
+                           + risk_batch.len() + rej_batch.len() + lat_batch.len()
+                           + eq_batch.len() + ct_batch.len();
                 if total >= BATCH_SIZE {
                     self.flush_all(&mut ob_batch, &mut rn1_batch,
-                                   &mut tx_batch, &mut met_batch,
-                                   &mut risk_batch, &mut lat_batch,
+                                    &mut tx_batch, &mut met_batch,
+                                   &mut risk_batch, &mut rej_batch, &mut lat_batch,
                                    &mut eq_batch, &mut ct_batch).await;
                     last_flush = Instant::now();
                 }
@@ -411,13 +442,13 @@ impl ClickHouseLogger {
 
             if last_flush.elapsed() >= FLUSH_INTERVAL {
                 let total = ob_batch.len() + rn1_batch.len()
-                          + tx_batch.len() + met_batch.len()
-                          + risk_batch.len() + lat_batch.len()
-                          + eq_batch.len() + ct_batch.len();
+                           + tx_batch.len() + met_batch.len()
+                           + risk_batch.len() + rej_batch.len() + lat_batch.len()
+                           + eq_batch.len() + ct_batch.len();
                 if total > 0 {
                     self.flush_all(&mut ob_batch, &mut rn1_batch,
-                                   &mut tx_batch, &mut met_batch,
-                                   &mut risk_batch, &mut lat_batch,
+                                    &mut tx_batch, &mut met_batch,
+                                   &mut risk_batch, &mut rej_batch, &mut lat_batch,
                                    &mut eq_batch, &mut ct_batch).await;
                 }
                 last_flush = Instant::now();
@@ -434,6 +465,7 @@ impl ClickHouseLogger {
         tx:   &mut Vec<TradeExecution>,
         met:  &mut Vec<SystemMetric>,
         risk: &mut Vec<RiskEvent>,
+        rej:  &mut Vec<RejectionEventRecord>,
         lat:  &mut Vec<LatencySample>,
         eq:   &mut Vec<EquitySnapshot>,
         ct:   &mut Vec<ClosedTradeFull>,
@@ -443,6 +475,7 @@ impl ClickHouseLogger {
         self.flush_table("blink.trade_executions", tx).await;
         self.flush_table("blink.system_metrics", met).await;
         self.flush_table("blink.risk_events", risk).await;
+        self.flush_table("blink.rejection_events", rej).await;
         self.flush_table("blink.latency_samples", lat).await;
         self.flush_table("blink.equity_snapshots", eq).await;
         self.flush_table("blink.closed_trades_full", ct).await;

@@ -4,7 +4,7 @@
     "blink-trader": {
       "source": "skills/blink-trader",
       "sourceType": "local",
-      "computedHash": "b462ff5954f730476b4110f545acea3667675af5393e5f5a948799bb8fd0c2db"
+      "computedHash": "a36b2b0c75d897474e86703993eaa82c6ac13d5c5adba62f9c6d1b5772d0252b"
     },
     "bullpen-polymarket": {
       "source": "skills/bullpen-polymarket",

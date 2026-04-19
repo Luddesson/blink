@@ -5,8 +5,8 @@
 #        .\start-blink.ps1 -Watch            (auto-restart engine if it crashes)
 #        .\start-blink.ps1 -Debug -Watch     (debug + watchdog loop)
 param([switch]$Debug, [switch]$Watch, [switch]$SkipBuild)
-$root = $PSScriptRoot
-$logs = "$root\logs"
+$repoRoot = Split-Path $PSScriptRoot -Parent
+$logs = Join-Path $repoRoot "logs"
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 
 function Kill-Tree($id) {
@@ -39,22 +39,35 @@ Get-Process | Where-Object { $_.Name -eq "engine" } | ForEach-Object {
 }
 Start-Sleep 4
 
-# ── [1/4] Build Engine ────────────────────────────────────────────────────────
+# ── [0/5] Sync skills and agent manifest ─────────────────────────────────────
 Write-Host ""
-Write-Host "=== [1/4] Building engine (cargo build) ===" -ForegroundColor Cyan
-Push-Location "$root\blink-engine"
+Write-Host "=== [0/5] Syncing skills and agent manifest ===" -ForegroundColor Cyan
+$syncScript = Join-Path $PSScriptRoot "sync-skills-and-bind-agents.ps1"
+if (Test-Path $syncScript) {
+    & $syncScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: skill sync failed" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "Skill mirrors OK" -ForegroundColor Green
+}
+
+# ── [1/5] Build Engine ────────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "=== [1/5] Building engine (cargo build) ===" -ForegroundColor Cyan
+Push-Location "$repoRoot\blink-engine"
 $cargoArgs = if ($Debug) { @("build") } else { @("build", "--release") }
 $buildProfile = if ($Debug) { "debug" } else { "release" }
 
 # Smart skip: bypass cargo if binary is newer than all source files
-$binaryPath = "$root\blink-engine\target\$buildProfile\engine.exe"
+$binaryPath = "$repoRoot\blink-engine\target\$buildProfile\engine.exe"
 $needsBuild = $true
 if ($SkipBuild) {
     Write-Host "  -SkipBuild flag set — skipping cargo build" -ForegroundColor Green
     $needsBuild = $false
 } elseif (Test-Path $binaryPath) {
     $binaryTime = (Get-Item $binaryPath).LastWriteTime
-    $sourceFiles = Get-ChildItem "$root\blink-engine" -Recurse -Include "*.rs","*.toml" -File |
+    $sourceFiles = Get-ChildItem "$repoRoot\blink-engine" -Recurse -Include "*.rs","*.toml" -File |
                    Where-Object { $_.FullName -notlike "*\target\*" }
     $latestSource = ($sourceFiles | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
     if ($latestSource -and $binaryTime -gt $latestSource) {
@@ -76,11 +89,11 @@ if ($needsBuild) {
     Write-Host "Engine build skipped" -ForegroundColor Green
 }
 
-# ── [2/4] Frontend deps ───────────────────────────────────────────────────────
+# ── [2/5] Frontend deps ───────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "=== [2/4] Frontend dependencies ===" -ForegroundColor Cyan
-if (-not (Test-Path "$root\blink-ui\node_modules")) {
-    Push-Location "$root\blink-ui"
+Write-Host "=== [2/5] Frontend dependencies ===" -ForegroundColor Cyan
+if (-not (Test-Path "$repoRoot\blink-ui\node_modules")) {
+    Push-Location "$repoRoot\blink-ui"
     $p2 = Start-Process "npm" -ArgumentList "install" -NoNewWindow -Wait -PassThru
     Pop-Location
     if ($p2.ExitCode -ne 0) {
@@ -90,21 +103,21 @@ if (-not (Test-Path "$root\blink-ui\node_modules")) {
 }
 Write-Host "Frontend deps OK" -ForegroundColor Green
 
-# ── [3/4] Start Engine ────────────────────────────────────────────────────────
+# ── [3/5] Start Engine ────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "=== [3/4] Starting engine ===" -ForegroundColor Cyan
+Write-Host "=== [3/5] Starting engine ===" -ForegroundColor Cyan
 $engineLog = "$logs\engine-stdout.log"
 "" | Set-Content $engineLog
-$ep = Start-EngineProcess -rootPath $root -profile $buildProfile -engineLogPath $engineLog
+$ep = Start-EngineProcess -rootPath $repoRoot -profile $buildProfile -engineLogPath $engineLog
 $ep.Id | Out-File "$logs\engine.pid"
 
-# ── [4/4] Start Vite ──────────────────────────────────────────────────────────
+# ── [4/5] Start Vite ──────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "=== [4/4] Starting Web UI ===" -ForegroundColor Cyan
+Write-Host "=== [4/5] Starting Web UI ===" -ForegroundColor Cyan
 $viteLog = "$logs\vite-stdout.log"
 "" | Set-Content $viteLog
 $viteArgs = "-NoProfile -Command " +
-    "Set-Location '$root\blink-ui'; " +
+    "Set-Location '$repoRoot\blink-ui'; " +
     "npm run dev >> '$viteLog' 2>&1"
 $vp = Start-Process powershell -ArgumentList $viteArgs -WindowStyle Hidden -PassThru
 $vp.Id | Out-File "$logs\vite.pid"
@@ -165,7 +178,7 @@ if ($Watch) {
             Write-Host "[$ts] Engine not responding — restart #$restartCount" -ForegroundColor Yellow
 
             # Check for panic sentinel file
-            $panicFile = "$root\blink-engine\logs\paper_portfolio_state.json.panic"
+            $panicFile = "$repoRoot\blink-engine\logs\paper_portfolio_state.json.panic"
             if (Test-Path $panicFile) {
                 $panicMsg = Get-Content $panicFile -Raw
                 Write-Host "  PANIC detected: $panicMsg" -ForegroundColor Red

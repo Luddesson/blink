@@ -1,6 +1,6 @@
 ---
 description: React/TypeScript conventions for the Blink web dashboard.
-globs: ["blink-engine/web-ui/src/**"]
+globs: ["blink-ui/src/**", "blink-engine/web-ui/src/**"]
 alwaysApply: false
 ---
 
@@ -23,7 +23,7 @@ alwaysApply: false
 - Monetary values: `$X.XX` (2dp). Prices as decimals (`0.65`), not percentages.
 
 ## API
-- All engine REST calls to `http://127.0.0.1:7878`. Never hardcode port elsewhere.
+- Dashboard REST/WebSocket traffic is served by the engine on port `3030`; agent JSON-RPC is a separate surface on `7878`.
 - Handle 503/network errors — engine may not be running.
 
 ## Quality

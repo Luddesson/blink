@@ -1,0 +1,169 @@
+{
+  "generatedAt": "2026-04-19T09:46:34.8331289+02:00",
+  "sourceRoot": "skills",
+  "mirrorRoots": [
+    ".claude/skills",
+    ".agents/skills"
+  ],
+  "bindingMode": "shared-skill-catalog",
+  "skills": [
+    {
+      "name": "blink-trader",
+      "source": "skills/blink-trader",
+      "sourceHash": "a36b2b0c75d897474e86703993eaa82c6ac13d5c5adba62f9c6d1b5772d0252b",
+      "lockHash": "a36b2b0c75d897474e86703993eaa82c6ac13d5c5adba62f9c6d1b5772d0252b",
+      "lockVerified": true,
+      "mirrors": [
+        {
+          "path": ".claude/skills/blink-trader",
+          "hash": "a36b2b0c75d897474e86703993eaa82c6ac13d5c5adba62f9c6d1b5772d0252b"
+        },
+        {
+          "path": ".agents/skills/blink-trader",
+          "hash": "a36b2b0c75d897474e86703993eaa82c6ac13d5c5adba62f9c6d1b5772d0252b"
+        }
+      ],
+      "mirrorsVerified": true
+    },
+    {
+      "name": "bullpen-polymarket",
+      "source": "skills/bullpen-polymarket",
+      "sourceHash": "9c567fa4ce74a0546f9b407b150f3abc9f8e1e439dd3efa4b0972280b49c88be",
+      "lockHash": "9c567fa4ce74a0546f9b407b150f3abc9f8e1e439dd3efa4b0972280b49c88be",
+      "lockVerified": true,
+      "mirrors": [
+        {
+          "path": ".claude/skills/bullpen-polymarket",
+          "hash": "9c567fa4ce74a0546f9b407b150f3abc9f8e1e439dd3efa4b0972280b49c88be"
+        },
+        {
+          "path": ".agents/skills/bullpen-polymarket",
+          "hash": "9c567fa4ce74a0546f9b407b150f3abc9f8e1e439dd3efa4b0972280b49c88be"
+        }
+      ],
+      "mirrorsVerified": true
+    },
+    {
+      "name": "evm-swiss-knife",
+      "source": "skills/evm-swiss-knife",
+      "sourceHash": "33195ee80944db9d1e55950457b0464ecc2edf53266ea1d46060ab117c8a7b59",
+      "lockHash": null,
+      "lockVerified": null,
+      "mirrors": [
+        {
+          "path": ".claude/skills/evm-swiss-knife",
+          "hash": "33195ee80944db9d1e55950457b0464ecc2edf53266ea1d46060ab117c8a7b59"
+        },
+        {
+          "path": ".agents/skills/evm-swiss-knife",
+          "hash": "33195ee80944db9d1e55950457b0464ecc2edf53266ea1d46060ab117c8a7b59"
+        }
+      ],
+      "mirrorsVerified": true
+    },
+    {
+      "name": "market-sentiment",
+      "source": "skills/market-sentiment",
+      "sourceHash": "4e436bd8296b576a4d17b9349edd9299a5f99e8b0fd79666e6979ba91a87f3b6",
+      "lockHash": null,
+      "lockVerified": null,
+      "mirrors": [
+        {
+          "path": ".claude/skills/market-sentiment",
+          "hash": "4e436bd8296b576a4d17b9349edd9299a5f99e8b0fd79666e6979ba91a87f3b6"
+        },
+        {
+          "path": ".agents/skills/market-sentiment",
+          "hash": "4e436bd8296b576a4d17b9349edd9299a5f99e8b0fd79666e6979ba91a87f3b6"
+        }
+      ],
+      "mirrorsVerified": true
+    },
+    {
+      "name": "trading-strategist",
+      "source": "skills/trading-strategist",
+      "sourceHash": "595cea6aa3298c617ed41b2eca4ac119f4ab5795a20b1a41950cf65624dcca6f",
+      "lockHash": null,
+      "lockVerified": null,
+      "mirrors": [
+        {
+          "path": ".claude/skills/trading-strategist",
+          "hash": "595cea6aa3298c617ed41b2eca4ac119f4ab5795a20b1a41950cf65624dcca6f"
+        },
+        {
+          "path": ".agents/skills/trading-strategist",
+          "hash": "595cea6aa3298c617ed41b2eca4ac119f4ab5795a20b1a41950cf65624dcca6f"
+        }
+      ],
+      "mirrorsVerified": true
+    }
+  ],
+  "agents": [
+    {
+      "name": "aura-architect",
+      "path": "Blink-agents/aura-architect",
+      "availableSkills": [
+        "blink-trader",
+        "bullpen-polymarket",
+        "evm-swiss-knife",
+        "market-sentiment",
+        "trading-strategist"
+      ]
+    },
+    {
+      "name": "meridian-api-sync",
+      "path": "Blink-agents/meridian-api-sync",
+      "availableSkills": [
+        "blink-trader",
+        "bullpen-polymarket",
+        "evm-swiss-knife",
+        "market-sentiment",
+        "trading-strategist"
+      ]
+    },
+    {
+      "name": "nexus-automator",
+      "path": "Blink-agents/nexus-automator",
+      "availableSkills": [
+        "blink-trader",
+        "bullpen-polymarket",
+        "evm-swiss-knife",
+        "market-sentiment",
+        "trading-strategist"
+      ]
+    },
+    {
+      "name": "qsigma-quant",
+      "path": "Blink-agents/qsigma-quant",
+      "availableSkills": [
+        "blink-trader",
+        "bullpen-polymarket",
+        "evm-swiss-knife",
+        "market-sentiment",
+        "trading-strategist"
+      ]
+    },
+    {
+      "name": "sentinel-risk",
+      "path": "Blink-agents/sentinel-risk",
+      "availableSkills": [
+        "blink-trader",
+        "bullpen-polymarket",
+        "evm-swiss-knife",
+        "market-sentiment",
+        "trading-strategist"
+      ]
+    },
+    {
+      "name": "wraith-stealth",
+      "path": "Blink-agents/wraith-stealth",
+      "availableSkills": [
+        "blink-trader",
+        "bullpen-polymarket",
+        "evm-swiss-knife",
+        "market-sentiment",
+        "trading-strategist"
+      ]
+    }
+  ]
+}

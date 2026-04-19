@@ -218,9 +218,10 @@ Data-driven from 817-trade simulation:
 
 ### Current Engine Status
 - **183 tests passing** (173 engine + 10 tee-vault)
-- Paper trading mode active on port 3030
+- Paper trading dashboard/API active on port 3030
 - Sharpe ratio ~16.5, Sortino ~50
-- Web UI on port 5173 (Vite dev server)
+- Web UI dev server on port 5173 (Vite)
+- Agent JSON-RPC control plane on port 7878
 
 ### What Needs to Happen Next — GO LIVE
 

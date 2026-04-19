@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { lazy, Suspense, useCallback, useState } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { useEngineSocket } from './hooks/useEngineSocket'
 import { usePoll } from './hooks/usePoll'
@@ -29,14 +29,14 @@ import CommandPalette from './components/CommandPalette'
 import HelpSheet from './components/HelpSheet'
 import { ToastProvider } from './components/ui'
 
-import MarketsPage from './pages/MarketsPage'
-import HistoryPage from './pages/HistoryPage'
-import BullpenPage from './pages/BullpenPage'
-import PerformancePage from './pages/PerformancePage'
-import ConfigPage from './pages/ConfigPage'
-import AlphaPage from './pages/AlphaPage'
-
 import type { RiskSummary } from './types'
+
+const MarketsPage = lazy(() => import('./pages/MarketsPage'))
+const HistoryPage = lazy(() => import('./pages/HistoryPage'))
+const BullpenPage = lazy(() => import('./pages/BullpenPage'))
+const PerformancePage = lazy(() => import('./pages/PerformancePage'))
+const ConfigPage = lazy(() => import('./pages/ConfigPage'))
+const AlphaPage = lazy(() => import('./pages/AlphaPage'))
 
 const EMPTY_RISK: RiskSummary = {
   trading_enabled: true,
@@ -52,6 +52,14 @@ const pageTransition = {
   animate: { opacity: 1, y: 0 },
   exit: { opacity: 0, y: -8 },
   transition: { duration: 0.22, ease: [0.2, 0, 0, 1] as [number, number, number, number] },
+}
+
+function PageFallback() {
+  return (
+    <div className="flex-1 flex items-center justify-center p-4 text-xs text-[color:var(--color-text-muted)]">
+      Loading view...
+    </div>
+  )
 }
 
 export default function App() {
@@ -197,12 +205,36 @@ export default function App() {
               </main>
             )}
 
-            {activeTab === 'markets' && <MarketsPage />}
-            {activeTab === 'history' && <HistoryPage />}
-            {activeTab === 'intelligence' && <BullpenPage />}
-            {activeTab === 'performance' && <PerformancePage portfolio={portfolio} positions={positions} />}
-            {activeTab === 'config' && <ConfigPage risk={risk} connected={connected} />}
-            {activeTab === 'alpha' && <AlphaPage />}
+            {activeTab === 'markets' && (
+              <Suspense fallback={<PageFallback />}>
+                <MarketsPage />
+              </Suspense>
+            )}
+            {activeTab === 'history' && (
+              <Suspense fallback={<PageFallback />}>
+                <HistoryPage />
+              </Suspense>
+            )}
+            {activeTab === 'intelligence' && (
+              <Suspense fallback={<PageFallback />}>
+                <BullpenPage />
+              </Suspense>
+            )}
+            {activeTab === 'performance' && (
+              <Suspense fallback={<PageFallback />}>
+                <PerformancePage portfolio={portfolio} positions={positions} />
+              </Suspense>
+            )}
+            {activeTab === 'config' && (
+              <Suspense fallback={<PageFallback />}>
+                <ConfigPage risk={risk} connected={connected} />
+              </Suspense>
+            )}
+            {activeTab === 'alpha' && (
+              <Suspense fallback={<PageFallback />}>
+                <AlphaPage />
+              </Suspense>
+            )}
           </motion.div>
         </AnimatePresence>
 

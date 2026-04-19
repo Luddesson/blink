@@ -1,4 +1,10 @@
 {
+  "env": {
+    "BLINK_SSH_HOST": "blink",
+    "BLINK_SSH_KEY": "$HOME/.ssh/blink_hetzner",
+    "BLINK_SSH_CONFIG": "deploy/ssh/blink-ssh-config",
+    "BLINK_HOST": "http://localhost:3030"
+  },
   "hooks": {
     "PostToolUse": [
       {

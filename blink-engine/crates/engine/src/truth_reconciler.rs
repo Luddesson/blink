@@ -30,6 +30,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
 use crate::order_executor::OrderStatus;
@@ -49,7 +50,7 @@ const DRIFT_ALERT_THRESHOLD_PCT: f64 = 5.0; // 5 %
 // ─── Fill Lifecycle ───────────────────────────────────────────────────────────
 
 /// Tracks where a submitted order is in its exchange lifecycle.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FillLifecycle {
     /// Sent to exchange; exchange acknowledged (order_id received) but the
     /// fill has not yet been confirmed — **no local state has been recorded**.
@@ -68,6 +69,62 @@ pub enum FillLifecycle {
 }
 
 // ─── Pending Order ────────────────────────────────────────────────────────────
+
+/// Serializable snapshot of a [`PendingOrder`] for WAL persistence.
+///
+/// `Instant` is not serializable, so `submitted_at_unix_secs` (Unix timestamp)
+/// is stored instead.  On restore, `submitted_at` is set to `Instant::now()`
+/// so age-based stale detection counts from process restart — conservative and
+/// correct (the order will be re-queried immediately on the next reconcile pass).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingOrderWal {
+    pub exchange_order_id:    String,
+    pub token_id:             String,
+    pub side:                 OrderSide,
+    pub expected_size_usdc:   f64,
+    pub expected_size_shares: f64,
+    pub submitted_price:      f64,
+    pub submitted_at_unix_secs: u64,
+    pub lifecycle:            FillLifecycle,
+    pub check_count:          u32,
+}
+
+impl From<&PendingOrder> for PendingOrderWal {
+    fn from(p: &PendingOrder) -> Self {
+        let submitted_at_unix_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_sub(p.submitted_at.elapsed().as_secs());
+        Self {
+            exchange_order_id:    p.exchange_order_id.clone(),
+            token_id:             p.token_id.clone(),
+            side:                 p.side,
+            expected_size_usdc:   p.expected_size_usdc,
+            expected_size_shares: p.expected_size_shares,
+            submitted_price:      p.submitted_price,
+            submitted_at_unix_secs,
+            lifecycle:            p.lifecycle.clone(),
+            check_count:          p.check_count,
+        }
+    }
+}
+
+impl From<PendingOrderWal> for PendingOrder {
+    fn from(w: PendingOrderWal) -> Self {
+        Self {
+            exchange_order_id:    w.exchange_order_id,
+            token_id:             w.token_id,
+            side:                 w.side,
+            expected_size_usdc:   w.expected_size_usdc,
+            expected_size_shares: w.expected_size_shares,
+            submitted_price:      w.submitted_price,
+            submitted_at:         Instant::now(), // restart age from now — conservative
+            lifecycle:            w.lifecycle,
+            check_count:          w.check_count,
+        }
+    }
+}
 
 /// An order submitted to the exchange that is awaiting reconciliation.
 ///

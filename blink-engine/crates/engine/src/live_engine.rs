@@ -16,7 +16,7 @@ use crate::order_executor::OrderExecutor;
 use crate::order_signer::{sign_order_with_vault_policy, OrderParams, OrderSigningPolicy};
 use crate::paper_portfolio::{drift_threshold, PaperPortfolio, STARTING_BALANCE_USDC};
 use crate::risk_manager::{RiskConfig, RiskManager};
-use crate::truth_reconciler::{PendingOrder, process_order_status, ReconciliationOutcome};
+use crate::truth_reconciler::{PendingOrder, PendingOrderWal, process_order_status, ReconciliationOutcome};
 use crate::types::{OrderSide, RN1Signal, TimeInForce};
 
 pub struct LiveEngine {
@@ -40,6 +40,9 @@ pub struct LiveEngine {
     pub failsafe_metrics: std::sync::Mutex<FailsafeMetrics>,
     canary_policy: CanaryPolicy,
     canary_state: std::sync::Mutex<CanaryState>,
+    /// Path to the pending-orders WAL file. Written atomically after every
+    /// insert/remove so that crash recovery can reconcile against the exchange.
+    wal_path: String,
 }
 
 /// Point-in-time snapshot of live SLO metrics for dashboards and alerting.
@@ -192,7 +195,100 @@ impl LiveEngine {
             failsafe_metrics: std::sync::Mutex::new(FailsafeMetrics::default()),
             canary_policy,
             canary_state: std::sync::Mutex::new(CanaryState::default()),
+            wal_path: std::env::var("PENDING_ORDERS_WAL_PATH")
+                .unwrap_or_else(|_| "logs/live_pending_orders_wal.json".to_string()),
         })
+    }
+
+    /// Atomically persist the current `pending_orders` map to the WAL file.
+    ///
+    /// Writes to `<wal_path>.tmp` then renames to avoid partial reads on crash.
+    /// Called after every insert and remove from `pending_orders`.
+    async fn persist_wal(&self) {
+        let entries: Vec<PendingOrderWal> = self
+            .pending_orders
+            .lock()
+            .await
+            .values()
+            .map(PendingOrderWal::from)
+            .collect();
+
+        let json = match serde_json::to_string_pretty(&entries) {
+            Ok(j) => j,
+            Err(e) => { error!("WAL serialize failed: {e}"); return; }
+        };
+
+        let tmp = format!("{}.tmp", self.wal_path);
+        if let Err(e) = std::fs::write(&tmp, &json) {
+            error!("WAL write to {tmp} failed: {e}");
+            return;
+        }
+        if let Err(e) = std::fs::rename(&tmp, &self.wal_path) {
+            error!("WAL rename {tmp} → {} failed: {e}", self.wal_path);
+        }
+    }
+
+    /// Load pending orders from WAL on startup and run immediate reconciliation
+    /// against the exchange. Returns the number of orders recovered.
+    ///
+    /// Must be called before `spawn_reconciliation_worker` and before accepting
+    /// any new signals. In dry-run mode this is a no-op.
+    pub async fn startup_reconcile(&self) -> usize {
+        if self.executor.dry_run {
+            return 0;
+        }
+
+        let wal_json = match std::fs::read_to_string(&self.wal_path) {
+            Ok(s) if !s.trim().is_empty() => s,
+            Ok(_) => return 0,  // empty file
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return 0,
+            Err(e) => {
+                error!("Failed to read WAL {}: {e}", self.wal_path);
+                return 0;
+            }
+        };
+
+        let wal_entries: Vec<PendingOrderWal> = match serde_json::from_str(&wal_json) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("WAL parse error (will ignore and start fresh): {e}");
+                return 0;
+            }
+        };
+
+        if wal_entries.is_empty() {
+            return 0;
+        }
+
+        warn!(
+            count = wal_entries.len(),
+            "🔄 WAL recovery: found pending orders from previous session — reconciling with exchange"
+        );
+        if let Some(ref log) = self.activity {
+            log_push(log, EntryKind::Warn,
+                format!("WAL RECOVERY: {} pending orders from previous session — reconciling", wal_entries.len()));
+        }
+
+        // Load WAL entries into pending_orders, then run a full reconciliation pass.
+        {
+            let mut map = self.pending_orders.lock().await;
+            for entry in wal_entries {
+                let order_id = entry.exchange_order_id.clone();
+                map.insert(order_id, PendingOrder::from(entry));
+            }
+        }
+
+        let recovered = self.pending_orders.lock().await.len();
+
+        // Run reconciliation immediately — don't wait for the periodic worker.
+        self.run_reconciliation_pass().await;
+
+        // Persist updated state (some orders may have been resolved above).
+        self.persist_wal().await;
+
+        let remaining = self.pending_orders.lock().await.len();
+        info!(recovered, remaining, "WAL startup reconciliation complete");
+        recovered
     }
 
     pub fn spawn_reconciliation_worker(self: Arc<Self>) {
@@ -432,6 +528,7 @@ impl LiveEngine {
                     entry_price,
                 ),
             );
+            self.persist_wal().await;
             info!(
                 token_id      = %signal.token_id,
                 expected_usdc = size_usdc,
@@ -658,6 +755,7 @@ impl LiveEngine {
                         }
                     }
                     self.pending_orders.lock().await.remove(&order_id);
+                    self.persist_wal().await;
                 }
 
                 // ── Exchange did not fill ──────────────────────────────────
@@ -681,6 +779,7 @@ impl LiveEngine {
                     resolved += 1;
                     self.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner()).no_fills += 1;
                     self.pending_orders.lock().await.remove(&order_id);
+                    self.persist_wal().await;
                 }
 
                 // ── Stale order alert ──────────────────────────────────────

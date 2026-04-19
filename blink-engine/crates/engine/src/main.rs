@@ -817,6 +817,15 @@ async fn main() -> Result<()> {
         )?);
         live_for_web = Some(Arc::clone(&live));
         live_for_shutdown = Some(Arc::clone(&live));
+
+        // Recover any pending orders from the WAL left over from a previous
+        // session (crash or ungraceful shutdown) and reconcile against the
+        // exchange before accepting new signals.
+        let recovered = live.startup_reconcile().await;
+        if recovered > 0 {
+            tracing::warn!(recovered, "Startup WAL recovery complete — check logs for outcomes");
+        }
+
         Arc::clone(&live).spawn_reconciliation_worker();
 
         // Spawn heartbeat — keeps the Polymarket session alive every 8s.

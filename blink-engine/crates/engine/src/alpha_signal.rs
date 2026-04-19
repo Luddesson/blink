@@ -423,3 +423,121 @@ impl AlphaAnalytics {
         self.realized_pnl_usdc / total as f64
     }
 }
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_analytics() -> AlphaAnalytics {
+        AlphaAnalytics::default()
+    }
+
+    #[test]
+    fn win_rate_zero_when_no_trades() {
+        let a = make_analytics();
+        assert_eq!(a.win_rate_pct(), 0.0);
+    }
+
+    #[test]
+    fn win_rate_100_when_all_wins() {
+        let mut a = make_analytics();
+        a.win_count = 3;
+        a.loss_count = 0;
+        assert!((a.win_rate_pct() - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn win_rate_50_when_equal_wins_losses() {
+        let mut a = make_analytics();
+        a.win_count = 2;
+        a.loss_count = 2;
+        assert!((a.win_rate_pct() - 50.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn avg_pnl_zero_when_no_trades() {
+        let a = make_analytics();
+        assert_eq!(a.avg_pnl_per_trade(), 0.0);
+    }
+
+    #[test]
+    fn avg_pnl_correct() {
+        let mut a = make_analytics();
+        a.win_count = 1;
+        a.loss_count = 1;
+        a.realized_pnl_usdc = 10.0;
+        assert!((a.avg_pnl_per_trade() - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn record_accept_increments_both_counters() {
+        let mut a = make_analytics();
+        a.record_accept();
+        a.record_accept();
+        assert_eq!(a.signals_received, 2);
+        assert_eq!(a.signals_accepted, 2);
+        assert_eq!(a.signals_rejected, 0);
+    }
+
+    #[test]
+    fn record_reject_increments_correctly() {
+        let mut a = make_analytics();
+        a.record_reject("low_confidence");
+        a.record_reject("low_confidence");
+        a.record_reject("stale_signal");
+        assert_eq!(a.signals_received, 3);
+        assert_eq!(a.signals_rejected, 3);
+        assert_eq!(a.signals_accepted, 0);
+        assert_eq!(*a.reject_reasons.get("low_confidence").unwrap(), 2);
+        assert_eq!(*a.reject_reasons.get("stale_signal").unwrap(), 1);
+    }
+
+    #[test]
+    fn record_close_tracks_best_worst() {
+        let mut a = make_analytics();
+        a.record_close("id-1", 5.0);
+        a.record_close("id-2", -3.0);
+        assert!((a.best_trade_pnl - 5.0).abs() < 1e-9);
+        assert!((a.worst_trade_pnl - (-3.0)).abs() < 1e-9);
+        assert_eq!(a.win_count, 1);
+        assert_eq!(a.loss_count, 1);
+    }
+
+    #[test]
+    fn signal_history_ring_buffer_caps_at_50() {
+        let mut a = make_analytics();
+        for i in 0..60 {
+            a.record_signal(AlphaSignalRecord {
+                timestamp: String::new(),
+                analysis_id: format!("id-{i}"),
+                token_id: "t".into(),
+                market_question: String::new(),
+                side: "BUY".into(),
+                confidence: 0.8,
+                reasoning: String::new(),
+                recommended_price: 0.5,
+                recommended_size_usdc: 5.0,
+                status: "accepted".into(),
+                position_id: None,
+                realized_pnl: None,
+                unrealized_pnl: None,
+                entry_price: None,
+                current_price: None,
+            });
+        }
+        assert_eq!(a.signal_history.len(), 50);
+        // Oldest should be evicted, newest retained
+        assert_eq!(a.signal_history.back().unwrap().analysis_id, "id-59");
+    }
+
+    #[test]
+    fn alpha_risk_config_defaults_are_conservative() {
+        let cfg = AlphaRiskConfig::default();
+        assert!(!cfg.enabled, "Alpha must default to disabled");
+        assert!(cfg.confidence_floor >= 0.60, "Confidence floor must be ≥ 60%");
+        assert!(cfg.max_single_order_usdc <= 10.0, "Max order must be ≤ $10 for safety");
+        assert!(cfg.max_concurrent_positions <= 5, "Max positions must be ≤ 5");
+    }
+}

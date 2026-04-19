@@ -581,4 +581,67 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].local_size, 0.0);
     }
+
+    // ── WAL serialization ────────────────────────────────────────────────────
+
+    #[test]
+    fn wal_roundtrip_preserves_fields() {
+        let order = make_order(75.5, 0.65);
+        let wal = PendingOrderWal::from(&order);
+
+        assert_eq!(wal.exchange_order_id, "order-123");
+        assert_eq!(wal.token_id, "token-abc");
+        assert_eq!(wal.side, OrderSide::Buy);
+        assert!((wal.expected_size_usdc - 75.5).abs() < 1e-9);
+        assert!((wal.submitted_price - 0.65).abs() < 1e-9);
+        assert!(wal.submitted_at_unix_secs > 0);
+        assert_eq!(wal.check_count, 0);
+    }
+
+    #[test]
+    fn wal_json_roundtrip() {
+        let order = make_order(50.0, 0.50);
+        let wal = PendingOrderWal::from(&order);
+        let json = serde_json::to_string(&wal).expect("serialize WAL entry");
+        let restored: PendingOrderWal = serde_json::from_str(&json).expect("deserialize WAL entry");
+
+        assert_eq!(restored.exchange_order_id, wal.exchange_order_id);
+        assert_eq!(restored.token_id, wal.token_id);
+        assert_eq!(restored.side, wal.side);
+        assert!((restored.expected_size_usdc - wal.expected_size_usdc).abs() < 1e-9);
+        assert_eq!(restored.submitted_at_unix_secs, wal.submitted_at_unix_secs);
+    }
+
+    #[test]
+    fn wal_vec_json_roundtrip() {
+        let orders: Vec<PendingOrderWal> = vec![
+            PendingOrderWal::from(&make_order(100.0, 0.40)),
+            PendingOrderWal::from(&make_order(200.0, 0.60)),
+        ];
+        let json = serde_json::to_string_pretty(&orders).expect("serialize WAL vec");
+        let restored: Vec<PendingOrderWal> = serde_json::from_str(&json).expect("deserialize WAL vec");
+        assert_eq!(restored.len(), 2);
+        assert!((restored[0].expected_size_usdc - 100.0).abs() < 1e-9);
+        assert!((restored[1].expected_size_usdc - 200.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn wal_to_pending_order_restores_instant() {
+        let order = make_order(80.0, 0.55);
+        let wal = PendingOrderWal::from(&order);
+        let restored = PendingOrder::from(wal);
+
+        assert_eq!(restored.exchange_order_id, "order-123");
+        assert!((restored.expected_size_usdc - 80.0).abs() < 1e-9);
+        // submitted_at is reset to Instant::now() on restore — just verify it's recent
+        assert!(restored.submitted_at.elapsed().as_secs() < 5);
+    }
+
+    #[test]
+    fn empty_wal_vec_roundtrip() {
+        let orders: Vec<PendingOrderWal> = vec![];
+        let json = serde_json::to_string(&orders).expect("serialize empty WAL");
+        let restored: Vec<PendingOrderWal> = serde_json::from_str(&json).expect("deserialize empty WAL");
+        assert!(restored.is_empty());
+    }
 }

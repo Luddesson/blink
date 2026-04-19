@@ -447,3 +447,102 @@ impl Config {
         Ok(())
     }
 }
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_paper_config() -> Config {
+        Config {
+            clob_host: "https://clob.polymarket.com".into(),
+            ws_url: "wss://ws.polymarket.com/ws/market".into(),
+            rn1_wallet: "0x".to_string() + &"a".repeat(40),
+            markets: vec![],
+            log_level: "info".into(),
+            ws_reconnect_debounce_ms: 1500,
+            ws_parse_error_preview_chars: 120,
+            ws_broadcast_interval_secs: 1,
+            latency_window_size: 2000,
+            live_trading: false,
+            signer_private_key: String::new(),
+            funder_address: String::new(),
+            api_key: String::new(),
+            api_secret: String::new(),
+            api_passphrase: String::new(),
+            polymarket_signature_type: 0,
+            polymarket_order_nonce: 0,
+            polymarket_order_expiration: 0,
+            live_profile: String::new(),
+            live_rollout_stage: 1,
+            live_canary_max_order_usdc: 5.0,
+            live_canary_max_orders_per_session: 10,
+            live_canary_daytime_only: false,
+            live_canary_start_hour_utc: 8,
+            live_canary_end_hour_utc: 22,
+            live_canary_max_reject_streak: 3,
+            live_canary_allowed_markets: vec![],
+            alpha_enabled: false,
+            alpha_sidecar_url: "http://127.0.0.1:7879".into(),
+        }
+    }
+
+    #[test]
+    fn validate_paper_passes_with_valid_wallet() {
+        let cfg = minimal_paper_config();
+        assert!(cfg.validate_for_paper_trading().is_ok());
+    }
+
+    #[test]
+    fn validate_paper_fails_with_empty_wallet() {
+        let mut cfg = minimal_paper_config();
+        cfg.rn1_wallet = String::new();
+        let err = cfg.validate_for_paper_trading().unwrap_err();
+        assert!(err.to_string().contains("RN1_WALLET"));
+    }
+
+    #[test]
+    fn validate_paper_fails_with_malformed_wallet() {
+        let mut cfg = minimal_paper_config();
+        cfg.rn1_wallet = "not_an_address".into();
+        let err = cfg.validate_for_paper_trading().unwrap_err();
+        assert!(err.to_string().contains("RN1_WALLET"));
+    }
+
+    #[test]
+    fn validate_paper_fails_with_empty_clob_host() {
+        let mut cfg = minimal_paper_config();
+        cfg.clob_host = String::new();
+        let err = cfg.validate_for_paper_trading().unwrap_err();
+        assert!(err.to_string().contains("CLOB_HOST"));
+    }
+
+    #[test]
+    fn validate_paper_fails_with_empty_ws_url() {
+        let mut cfg = minimal_paper_config();
+        cfg.ws_url = String::new();
+        let err = cfg.validate_for_paper_trading().unwrap_err();
+        assert!(err.to_string().contains("WS_URL"));
+    }
+
+    #[test]
+    fn validate_paper_collects_all_errors() {
+        let mut cfg = minimal_paper_config();
+        cfg.rn1_wallet = String::new();
+        cfg.clob_host = String::new();
+        cfg.ws_url = String::new();
+        let err = cfg.validate_for_paper_trading().unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("RN1_WALLET"), "missing RN1_WALLET in: {msg}");
+        assert!(msg.contains("CLOB_HOST"), "missing CLOB_HOST in: {msg}");
+        assert!(msg.contains("WS_URL"), "missing WS_URL in: {msg}");
+    }
+
+    #[test]
+    fn validate_live_profile_skips_when_not_live() {
+        let cfg = minimal_paper_config();
+        // live_trading = false, so contract validation is a no-op
+        assert!(cfg.validate_live_profile_contract().is_ok());
+    }
+}

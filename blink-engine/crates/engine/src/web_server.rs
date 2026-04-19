@@ -290,7 +290,7 @@ pub async fn run_web_server(
     let router = build_router(state.clone(), static_dir);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
-        .expect("Failed to bind web UI address");
+        .unwrap_or_else(|e| panic!("Failed to bind web UI on {addr}: {e}"));
     tracing::info!(addr, broadcast_interval_secs, "Web UI server listening");
 
     // Portfolio cache refresher — properly awaits the tokio Mutex every 2s so
@@ -358,9 +358,9 @@ async fn get_health(State(state): State<AppState>) -> Json<serde_json::Value> {
 }
 
 async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let subs = state.market_subscriptions.lock().unwrap().clone();
+    let subs = state.market_subscriptions.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let risk_status = if let Some(ref risk) = state.risk {
-        let r = risk.lock().unwrap();
+        let r = risk.lock().unwrap_or_else(|e| e.into_inner());
         if r.is_circuit_breaker_tripped() {
             "CIRCUIT_BREAKER".to_string()
         } else if !r.config().trading_enabled {
@@ -534,7 +534,7 @@ async fn get_history(
 
 async fn get_activity(State(state): State<AppState>) -> Json<serde_json::Value> {
     let entries: Vec<ActivityEntryJson> = {
-        let log = state.activity_log.lock().unwrap();
+        let log = state.activity_log.lock().unwrap_or_else(|e| e.into_inner());
         log.iter().rev().take(100).map(|e| {
             ActivityEntryJson {
                 timestamp: e.timestamp.clone(),
@@ -573,7 +573,7 @@ async fn get_orderbook(
 }
 
 async fn get_all_orderbooks(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let subs = state.market_subscriptions.lock().unwrap().clone();
+    let subs = state.market_subscriptions.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
     // Build token→title map from open positions
     let title_map: std::collections::HashMap<String, String> = if let Some(ref pe) = state.paper {
@@ -630,7 +630,7 @@ async fn get_risk(State(state): State<AppState>) -> Json<serde_json::Value> {
     let Some(ref risk) = state.risk else {
         return Json(json!({"error": "Risk manager not available"}));
     };
-    let r = risk.lock().unwrap();
+    let r = risk.lock().unwrap_or_else(|e| e.into_inner());
     let cfg = r.config();
     let stop_loss_enabled = std::env::var("STOP_LOSS_ENABLED").map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false);
     let stop_loss_pct = std::env::var("STOP_LOSS_PCT").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
@@ -740,7 +740,7 @@ async fn get_twin(State(state): State<AppState>) -> impl IntoResponse {
     let Some(ref twin_lock) = state.twin_snapshot else {
         return (StatusCode::NOT_FOUND, Json(json!({"error": "Twin not available"}))).into_response();
     };
-    let snap = twin_lock.lock().unwrap();
+    let snap = twin_lock.lock().unwrap_or_else(|e| e.into_inner());
     match snap.as_ref() {
         Some(t) => Json(json!({
             "generation": t.generation,
@@ -766,8 +766,8 @@ async fn get_latency(State(state): State<AppState>) -> Json<serde_json::Value> {
     let Some(ref tracker) = state.latency else {
         return Json(json!({"error": "Latency tracker not available"}));
     };
-    let signal_summary = tracker.signal_age.lock().unwrap().summary();
-    let msg_rate = tracker.msgs_per_sec.lock().unwrap().per_second();
+    let signal_summary = tracker.signal_age.lock().unwrap_or_else(|e| e.into_inner()).summary();
+    let msg_rate = tracker.msgs_per_sec.lock().unwrap_or_else(|e| e.into_inner()).per_second();
     Json(json!({
         "signal_age": signal_summary,
         "ws_msg_per_sec": msg_rate,
@@ -821,7 +821,7 @@ async fn get_live_portfolio(State(state): State<AppState>) -> Json<serde_json::V
     let pending_count = live.pending_orders_count().await;
     let (daily_pnl, cb_tripped, max_daily_loss_pct, trading_enabled) =
         if let Some(ref risk) = state.risk {
-            let r = risk.lock().unwrap();
+            let r = risk.lock().unwrap_or_else(|e| e.into_inner());
             (r.daily_pnl(), r.is_circuit_breaker_tripped(), r.config().max_daily_loss_pct, r.config().trading_enabled)
         } else {
             (0.0, false, 0.1, false)
@@ -855,7 +855,7 @@ async fn post_reset_circuit_breaker(State(state): State<AppState>) -> Json<serde
     let Some(ref risk) = state.risk else {
         return Json(json!({ "error": "Risk manager not available" }));
     };
-    risk.lock().unwrap().reset_circuit_breaker();
+    risk.lock().unwrap_or_else(|e| e.into_inner()).reset_circuit_breaker();
     tracing::warn!("Circuit breaker manually reset via API");
     Json(json!({ "ok": true, "circuit_breaker_tripped": false }))
 }
@@ -867,7 +867,7 @@ async fn post_update_config(
     let Some(ref risk) = state.risk else {
         return Json(json!({ "error": "Risk manager not available" }));
     };
-    let mut rm = risk.lock().unwrap();
+    let mut rm = risk.lock().unwrap_or_else(|e| e.into_inner());
     let cfg = rm.config_mut();
     let mut changed = Vec::new();
 
@@ -923,7 +923,7 @@ async fn post_sell_position(
     // Record realized P&L from the close in the risk manager
     if let Some(ref risk) = state.risk {
         if let Some(last_trade) = p.closed_trades.last() {
-            risk.lock().unwrap().record_close(last_trade.realized_pnl);
+            risk.lock().unwrap_or_else(|e| e.into_inner()).record_close(last_trade.realized_pnl);
         }
     }
 
@@ -1038,7 +1038,7 @@ async fn build_snapshot(state: &AppState) -> Result<String, ()> {
 
     // Risk status
     if let Some(ref risk) = state.risk {
-        let r = risk.lock().unwrap();
+        let r = risk.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = r.config();
         snapshot["risk"] = json!({
             "trading_enabled": cfg.trading_enabled,
@@ -1053,7 +1053,7 @@ async fn build_snapshot(state: &AppState) -> Result<String, ()> {
 
     // Recent activity (last 5 entries)
     {
-        let log = state.activity_log.lock().unwrap();
+        let log = state.activity_log.lock().unwrap_or_else(|e| e.into_inner());
         let recent: Vec<serde_json::Value> = log.iter().rev().take(5).map(|e| {
             json!({
                 "timestamp": e.timestamp,
@@ -1150,7 +1150,7 @@ async fn get_fill_window(State(state): State<AppState>) -> Json<serde_json::Valu
     let Some(ref paper) = state.paper else {
         return Json(json!({ "available": false }));
     };
-    let snap = paper.fill_window.lock().unwrap().clone();
+    let snap = paper.fill_window.lock().unwrap_or_else(|e| e.into_inner()).clone();
     match snap {
         None => Json(json!({ "available": false, "reason": "no active fill window" })),
         Some(s) => Json(json!({
@@ -1328,7 +1328,7 @@ async fn get_market_url(
 ) -> Json<serde_json::Value> {
     // Check cache first.
     {
-        let cache = state.slug_cache.lock().unwrap();
+        let cache = state.slug_cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(url) = cache.get(&token_id) {
             return Json(json!({ "url": url, "cached": true }));
         }
@@ -1378,7 +1378,7 @@ async fn get_market_url(
 
                     if let Some(slug) = slug {
                         let url = format!("https://polymarket.com/event/{slug}");
-                        state.slug_cache.lock().unwrap().insert(token_id, url.clone());
+                        state.slug_cache.lock().unwrap_or_else(|e| e.into_inner()).insert(token_id, url.clone());
                         Json(json!({ "url": url, "cached": false }))
                     } else {
                         Json(json!({ "url": null, "error": "slug not found in Gamma response" }))
@@ -1839,7 +1839,7 @@ async fn get_alpha_status(State(state): State<AppState>) -> impl IntoResponse {
         vec![]
     };
 
-    let a = analytics.lock().unwrap();
+    let a = analytics.lock().unwrap_or_else(|e| e.into_inner());
 
     // Update unrealized P&L for open AI positions in signal records
     // (done inline to avoid extra lock acquisitions)
@@ -1910,7 +1910,7 @@ async fn get_alpha_calibration(State(state): State<AppState>) -> impl IntoRespon
         })).into_response();
     };
 
-    let a = analytics.lock().unwrap();
+    let a = analytics.lock().unwrap_or_else(|e| e.into_inner());
     match &a.calibration {
         Some(data) => Json(json!({
             "enabled": true,

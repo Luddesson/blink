@@ -497,7 +497,7 @@ async fn main() -> Result<()> {
             Arc::clone(&market_subscriptions),
             Arc::clone(&ws_force_reconnect),
             warehouse_tx.clone(),
-        );
+        )?;
         paper_inner.discovery_store = Some(Arc::clone(&discovery_store));
         paper_inner.convergence_store = convergence_store.clone();
         let paper = Arc::new(paper_inner);
@@ -544,9 +544,9 @@ async fn main() -> Result<()> {
                     let summary = p.execution_summary().await;
                     let metrics = p.experiment_metrics().await;
                     let switches = p.experiment_switches();
-                    *rt.lock().unwrap() = trend;
-                    *es.lock().unwrap() = summary;
-                    *ex.lock().unwrap() = (metrics, switches);
+                    *rt.lock().unwrap_or_else(|e| e.into_inner()) = trend;
+                    *es.lock().unwrap_or_else(|e| e.into_inner()) = summary;
+                    *ex.lock().unwrap_or_else(|e| e.into_inner()) = (metrics, switches);
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
             });
@@ -584,7 +584,7 @@ async fn main() -> Result<()> {
                 tokio::spawn(async move {
                     loop {
                         let status = p_status.risk_status();
-                        *rs_update.lock().unwrap() = status;
+                        *rs_update.lock().unwrap_or_else(|e| e.into_inner()) = status;
                         tokio::time::sleep(Duration::from_millis(500)).await;
                     }
                 });
@@ -773,7 +773,7 @@ async fn main() -> Result<()> {
                         Ok(()) => tracing::info!("autosave: portfolio saved"),
                         Err(e) => tracing::error!(err = %e, "autosave: save_portfolio FAILED"),
                     }
-                    let subs = subs_save.lock().unwrap().clone();
+                    let subs = subs_save.lock().unwrap_or_else(|e| e.into_inner()).clone();
                     let _ = ps.save_warm_state(&wsp, &subs, &psp).await;
                     let _ = ps.save_rejections(&rsp).await;
                 }
@@ -788,10 +788,10 @@ async fn main() -> Result<()> {
         let handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             while let Some(signal) = handle.block_on(signal_rx.recv()) {
-                latency.lock().unwrap().record(signal.detected_at.elapsed());
+                latency.lock().unwrap_or_else(|e| e.into_inner()).record(signal.detected_at.elapsed());
                 if tp.load(Ordering::Relaxed) { continue; }
                 {
-                    let mut subs = subs_for_signals.lock().unwrap();
+                    let mut subs = subs_for_signals.lock().unwrap_or_else(|e| e.into_inner());
                     if !subs.contains(&signal.token_id) {
                         subs.push(signal.token_id.clone());
                         ws_reconnect_for_signals.store(true, Ordering::Relaxed);
@@ -833,7 +833,7 @@ async fn main() -> Result<()> {
                     let ok  = hb_metrics.ok_count.load(std::sync::atomic::Ordering::Relaxed);
                     let err = hb_metrics.fail_count.load(std::sync::atomic::Ordering::Relaxed);
                     {
-                        let mut m = l.failsafe_metrics.lock().unwrap();
+                        let mut m = l.failsafe_metrics.lock().unwrap_or_else(|e| e.into_inner());
                         m.heartbeat_ok_count   = ok;
                         m.heartbeat_fail_count = err;
                     }
@@ -879,14 +879,14 @@ async fn main() -> Result<()> {
                 loop {
                     // Sleep until next UTC midnight.
                     let now = chrono::Utc::now();
-                    let tomorrow = (now + chrono::Duration::days(1)).date_naive().and_hms_opt(0, 0, 0).unwrap();
+                    let tomorrow = (now + chrono::Duration::days(1)).date_naive().and_hms_opt(0, 0, 0).expect("infallible: midnight 00:00:00 is always valid");
                     let until_midnight = chrono::NaiveDateTime::signed_duration_since(tomorrow, now.naive_utc());
                     let secs = until_midnight.num_seconds().max(1) as u64;
                     tracing::info!(secs_until_reset = secs, "Daily risk reset scheduled");
                     tokio::time::sleep(Duration::from_secs(secs)).await;
 
                     if sd.load(Ordering::Relaxed) { break; }
-                    risk_for_reset.lock().unwrap().reset_daily();
+                    risk_for_reset.lock().unwrap_or_else(|e| e.into_inner()).reset_daily();
                     tracing::info!("🔄 Daily risk counters reset (UTC midnight)");
                 }
             });
@@ -931,7 +931,7 @@ async fn main() -> Result<()> {
                             break;
                         }
                         let status = l.risk_status();
-                        *rs_update.lock().unwrap() = status;
+                        *rs_update.lock().unwrap_or_else(|e| e.into_inner()) = status;
                         tokio::time::sleep(Duration::from_millis(500)).await;
                     }
                 });
@@ -986,7 +986,7 @@ async fn main() -> Result<()> {
         let handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             while let Some(signal) = handle.block_on(signal_rx.recv()) {
-                latency.lock().unwrap().record(signal.detected_at.elapsed());
+                latency.lock().unwrap_or_else(|e| e.into_inner()).record(signal.detected_at.elapsed());
                 if tp.load(Ordering::Relaxed) { continue; }
                 let l = Arc::clone(&live);
                 let t_opt = twin_opt.clone();
@@ -1005,7 +1005,7 @@ async fn main() -> Result<()> {
         let mut signal_rx = signal_rx;
         tokio::spawn(async move {
             while let Some(signal) = signal_rx.recv().await {
-                latency.lock().unwrap().record(signal.detected_at.elapsed());
+                latency.lock().unwrap_or_else(|e| e.into_inner()).record(signal.detected_at.elapsed());
                 tracing::warn!(token_id = %signal.token_id, "RN1 signal — read-only");
             }
         })
@@ -1264,7 +1264,7 @@ async fn main() -> Result<()> {
                     let tomorrow = (now + chrono::Duration::days(1))
                         .date_naive()
                         .and_hms_opt(0, 0, 0)
-                        .unwrap();
+                        .expect("infallible: midnight 00:00:00 is always valid");
                     let until_midnight = tomorrow.and_utc().signed_duration_since(now);
                     let sleep_secs = until_midnight.num_seconds().max(60) as u64;
                     tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
@@ -1372,7 +1372,7 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|_| "logs/paper_warm_state.json".to_string());
             let rejection_state_path = std::env::var("PAPER_REJECTIONS_PATH")
                 .unwrap_or_else(|_| "logs/paper_rejections.json".to_string());
-            let subs = market_subscriptions.lock().unwrap().clone();
+            let subs = market_subscriptions.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let _ = paper.save_warm_state(&warm_state_path, &subs, &paper_state_path).await;
             let _ = paper.save_rejections(&rejection_state_path).await;
         }

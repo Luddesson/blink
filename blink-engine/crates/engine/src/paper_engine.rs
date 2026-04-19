@@ -10,6 +10,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::Context as _;
 use chrono::Utc;
 use chrono::Datelike;
 use reqwest::Client;
@@ -314,7 +315,7 @@ impl PaperEngine {
     ///
     /// Pass `Some(log)` to feed a TUI activity panel; pass `None` for plain
     /// terminal output.
-    pub fn new(book_store: Arc<OrderBookStore>, activity: Option<ActivityLog>, market_subscriptions: Arc<std::sync::Mutex<Vec<String>>>, ws_force_reconnect: Arc<std::sync::atomic::AtomicBool>, warehouse_tx: Option<crossbeam_channel::Sender<WarehouseEvent>>) -> Self {
+    pub fn new(book_store: Arc<OrderBookStore>, activity: Option<ActivityLog>, market_subscriptions: Arc<std::sync::Mutex<Vec<String>>>, ws_force_reconnect: Arc<std::sync::atomic::AtomicBool>, warehouse_tx: Option<crossbeam_channel::Sender<WarehouseEvent>>) -> anyhow::Result<Self> {
         if activity.is_none() {
             // Only print the text banner when not in TUI mode.
             println!();
@@ -331,7 +332,7 @@ impl PaperEngine {
             log_push(log, EntryKind::Engine,
                 format!("Paper trading started — balance ${:.2} USDC", STARTING_BALANCE_USDC));
         }
-        Self {
+        Ok(Self {
             portfolio: Arc::new(Mutex::new(PaperPortfolio::new())),
             book_store,
             activity,
@@ -352,7 +353,7 @@ impl PaperEngine {
             metadata_client: Client::builder()
                 .timeout(Duration::from_secs(5))
                 .build()
-                .expect("reqwest client"),
+                .context("failed to build reqwest HTTP client for market metadata")?,
             rn1_wallet: std::env::var("RN1_WALLET").unwrap_or_default(),
             signal_meta_cache: Arc::new(Mutex::new(HashMap::new())),
             seen_order_ids: Arc::new(Mutex::new(HashSet::with_capacity(512))),
@@ -366,7 +367,7 @@ impl PaperEngine {
             session_start_nav: Arc::new(std::sync::Mutex::new(None)),
             warehouse_tx,
             engine_started_at: Instant::now(),
-        }
+        })
     }
 
     pub fn twin_health_handle(&self) -> Arc<Mutex<TwinHealth>> {
@@ -378,12 +379,12 @@ impl PaperEngine {
     }
 
     pub fn risk_status(&self) -> String {
-        self.risk.lock().unwrap().status_line()
+        self.risk.lock().unwrap_or_else(|e| e.into_inner()).status_line()
     }
 
     /// Returns the current global volatility in basis points (coefficient of variation × 10 000).
     pub fn vol_bps(&self) -> f64 {
-        self.volatility_state.lock().unwrap().volatility_bps()
+        self.volatility_state.lock().unwrap_or_else(|e| e.into_inner()).volatility_bps()
     }
 
     pub async fn load_portfolio_if_present(&self, path: &str) -> std::io::Result<bool> {
@@ -520,7 +521,7 @@ impl PaperEngine {
         }
 
         // Compute vol_bps once — reused for gating (1B) and adaptive sizing (2A).
-        let vol_bps = self.volatility_state.lock().unwrap().volatility_bps();
+        let vol_bps = self.volatility_state.lock().unwrap_or_else(|e| e.into_inner()).volatility_bps();
 
         // 2C: Soft dedup window — skip if we filled this (token, side) recently.
         {
@@ -528,7 +529,7 @@ impl PaperEngine {
                 .ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(10_000);
             let dedup_key = format!("{}:{}", signal.token_id, signal.side);
             let blocked = {
-                let mut rf = self.recent_fills.lock().unwrap();
+                let mut rf = self.recent_fills.lock().unwrap_or_else(|e| e.into_inner());
                 rf.retain(|_, t: &mut Instant| t.elapsed().as_millis() < dedup_window_ms as u128);
                 rf.contains_key(&dedup_key)
             };
@@ -774,7 +775,7 @@ impl PaperEngine {
             // 3B: intraday drawdown
             let day_of_year = chrono::Utc::now().ordinal();
             let session_nav = {
-                let mut ssn = self.session_start_nav.lock().unwrap();
+                let mut ssn = self.session_start_nav.lock().unwrap_or_else(|e| e.into_inner());
                 match *ssn {
                     None => { *ssn = Some((nav, day_of_year)); nav }
                     Some((_, d)) if d != day_of_year => { *ssn = Some((nav, day_of_year)); nav }
@@ -919,7 +920,7 @@ impl PaperEngine {
                     signal_source: pos.signal_source.clone(),
                     analysis_id: pos.analysis_id.clone(),
                 });
-                self.risk.lock().unwrap().record_close(net_realized_pnl);
+                self.risk.lock().unwrap_or_else(|e| e.into_inner()).record_close(net_realized_pnl);
                 if let Some(ref log) = self.activity {
                     log_push(log, EntryKind::Fill, format!(
                         "RN1 EXIT: closed BUY @{:.3} (entry={:.3})  pnl={:+.3}  fee={:.4}  dur={}s",
@@ -1186,7 +1187,7 @@ impl PaperEngine {
 
         // ── Risk check ────────────────────────────────────────────────────
         let position_count = {let p = self.portfolio.lock().await; p.positions.len()};
-        if let Err(violation) = self.risk.lock().unwrap().check_pre_order(
+        if let Err(violation) = self.risk.lock().unwrap_or_else(|e| e.into_inner()).check_pre_order(
             size_usdc, position_count,
             current_nav, STARTING_BALANCE_USDC,
         ) {
@@ -1266,7 +1267,7 @@ impl PaperEngine {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(30);
         {
-            let mut cooldowns = self.drift_abort_cooldown.lock().unwrap();
+            let mut cooldowns = self.drift_abort_cooldown.lock().unwrap_or_else(|e| e.into_inner());
             // Evict expired entries
             cooldowns.retain(|_, t| t.elapsed().as_secs() < cooldown_secs);
             if cooldowns.contains_key(&signal.token_id) {
@@ -1311,7 +1312,7 @@ impl PaperEngine {
         if vwap_price > 0.0 {
             entry_price = vwap_price.clamp(0.001, 0.999);
         }
-        let variant = if self.experiments.lock().unwrap().sizing_variant_b { "B" } else { "A" };
+        let variant = if self.experiments.lock().unwrap_or_else(|e| e.into_inner()).sizing_variant_b { "B" } else { "A" };
 
         // ── Record virtual fill ───────────────────────────────────────
         self.fill_latency
@@ -1338,17 +1339,17 @@ impl PaperEngine {
             )
         };
         // Record fill in risk manager for VaR tracking (does not affect daily P&L).
-        self.risk.lock().unwrap().record_fill(size_usdc);
+        self.risk.lock().unwrap_or_else(|e| e.into_inner()).record_fill(size_usdc);
 
         // 2C: Mark this (token, side) as recently filled to prevent tranche re-entry.
         {
             let dedup_key = format!("{}:{}", signal.token_id, signal.side);
-            self.recent_fills.lock().unwrap().insert(dedup_key, Instant::now());
+            self.recent_fills.lock().unwrap_or_else(|e| e.into_inner()).insert(dedup_key, Instant::now());
         }
 
         // Ensure this token is subscribed in the WS feed so get_market_price() stays live.
         {
-            let mut subs = self.market_subscriptions.lock().unwrap();
+            let mut subs = self.market_subscriptions.lock().unwrap_or_else(|e| e.into_inner());
             if !subs.contains(&signal.token_id) {
                 subs.push(signal.token_id.clone());
                 self.ws_force_reconnect.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1566,12 +1567,12 @@ impl PaperEngine {
         let countdown = Duration::from_millis(countdown_ms);
 
         if countdown_ms == 0 {
-            self.fill_window.lock().unwrap().take();
+            self.fill_window.lock().unwrap_or_else(|e| e.into_inner()).take();
             return true;
         }
 
         let started_at = Instant::now();
-        self.fill_window.lock().unwrap().replace(FillWindowSnapshot::new(
+        self.fill_window.lock().unwrap_or_else(|e| e.into_inner()).replace(FillWindowSnapshot::new(
             token_id.to_string(),
             side,
             entry_price,
@@ -1586,8 +1587,8 @@ impl PaperEngine {
             if let Some(current) = self.get_market_price(token_id) {
                 let drift = (current - entry_price).abs() / entry_price;
                 let drift_pct = drift * 100.0;
-                self.volatility_state.lock().unwrap().push(current);
-                self.fill_window.lock().unwrap().replace(FillWindowSnapshot {
+                self.volatility_state.lock().unwrap_or_else(|e| e.into_inner()).push(current);
+                self.fill_window.lock().unwrap_or_else(|e| e.into_inner()).replace(FillWindowSnapshot {
                     token_id: token_id.to_string(),
                     side,
                     entry_price,
@@ -1604,11 +1605,11 @@ impl PaperEngine {
                         drift_pct    = %format!("{:.2}%", drift * 100.0),
                         "🚨 Fill window abort: price drifted"
                     );
-                    self.fill_window.lock().unwrap().take();
+                    self.fill_window.lock().unwrap_or_else(|e| e.into_inner()).take();
                     return false;
                 }
             } else {
-                self.fill_window.lock().unwrap().replace(FillWindowSnapshot {
+                self.fill_window.lock().unwrap_or_else(|e| e.into_inner()).replace(FillWindowSnapshot {
                     token_id: token_id.to_string(),
                     side,
                     entry_price,
@@ -1619,7 +1620,7 @@ impl PaperEngine {
                 });
             }
         }
-        self.fill_window.lock().unwrap().take();
+        self.fill_window.lock().unwrap_or_else(|e| e.into_inner()).take();
         true
     }
 
@@ -1630,7 +1631,7 @@ impl PaperEngine {
         base_check_ms: u64,
         reference_price: f64,
     ) -> (u64, u64) {
-        let vol_bps = self.volatility_state.lock().unwrap().volatility_bps();
+        let vol_bps = self.volatility_state.lock().unwrap_or_else(|e| e.into_inner()).volatility_bps();
         let drift_mult = if let Some(mid) = self.get_market_price(_token_id) {
             ((mid - reference_price).abs() / reference_price).clamp(0.0, 0.05)
         } else {
@@ -1930,11 +1931,11 @@ impl PaperEngine {
     }
 
     pub fn experiment_switches(&self) -> ExperimentSwitches {
-        self.experiments.lock().unwrap().clone()
+        self.experiments.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn set_experiment_switches(&self, switches: ExperimentSwitches) {
-        *self.experiments.lock().unwrap() = switches;
+        *self.experiments.lock().unwrap_or_else(|e| e.into_inner()) = switches;
     }
 
     pub fn experiment_switches_handle(&self) -> Arc<std::sync::Mutex<ExperimentSwitches>> {
@@ -1950,7 +1951,7 @@ impl PaperEngine {
         let books = self.book_store.all_snapshots();
         let rejections = self.rejection_analytics.lock().await.clone();
         let comparator = self.shadow_comparator.lock().await.clone();
-        let experiments = self.experiments.lock().unwrap().clone();
+        let experiments = self.experiments.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let mut state = WarmState {
             schema_version: 1,
             saved_at_ms: Utc::now().timestamp_millis(),
@@ -1983,12 +1984,12 @@ impl PaperEngine {
         }
         self.book_store.restore_snapshots(&state.order_books);
         {
-            let mut subs = market_subscriptions.lock().unwrap();
+            let mut subs = market_subscriptions.lock().unwrap_or_else(|e| e.into_inner());
             *subs = state.market_subscriptions.clone();
         }
         *self.rejection_analytics.lock().await = state.rejection_analytics;
         *self.shadow_comparator.lock().await = state.comparator;
-        *self.experiments.lock().unwrap() = state.experiments;
+        *self.experiments.lock().unwrap_or_else(|e| e.into_inner()) = state.experiments;
         Ok(true)
     }
 
@@ -2217,7 +2218,7 @@ impl PaperEngine {
                     .map(|ndt| ndt.and_utc().timestamp()))
                 // Date-only "YYYY-MM-DD" → midnight UTC
                 .or_else(|| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
-                    .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()))
+                    .map(|d| d.and_hms_opt(0, 0, 0).expect("infallible: midnight 00:00:00 is always valid").and_utc().timestamp()))
         };
 
         // Try all known Polymarket field name variants (snake_case AND camelCase)
@@ -2245,7 +2246,7 @@ impl PaperEngine {
     ///
     /// Call at UTC midnight via a scheduled task.
     pub fn reset_daily_risk(&self) {
-        self.risk.lock().unwrap().reset_daily();
+        self.risk.lock().unwrap_or_else(|e| e.into_inner()).reset_daily();
         if let Some(ref log) = self.activity {
             log_push(log, EntryKind::Engine,
                 "🌅 Daily risk counters reset (UTC midnight)".to_string());
@@ -2257,7 +2258,7 @@ impl PaperEngine {
         let mut enabled = std::env::var("AUTOCLAIM_ENABLED")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(true);
-        if self.experiments.lock().unwrap().autoclaim_variant_b {
+        if self.experiments.lock().unwrap_or_else(|e| e.into_inner()).autoclaim_variant_b {
             enabled = !enabled;
         }
         if !enabled {
@@ -2426,7 +2427,7 @@ impl PaperEngine {
 
         // Update risk manager with total realized P&L.
         if total_realized.abs() > f64::EPSILON {
-            self.risk.lock().unwrap().record_close(total_realized);
+            self.risk.lock().unwrap_or_else(|e| e.into_inner()).record_close(total_realized);
         }
 
         // Log summary per action type.

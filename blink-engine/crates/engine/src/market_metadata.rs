@@ -29,7 +29,7 @@ impl MetadataFetcher {
             client: Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
-                .expect("Failed to create HTTP client"),
+                .unwrap_or_else(|e| panic!("Failed to create HTTP client for market metadata: {e}")),
             cache: Arc::new(RwLock::new(HashMap::new())),
             cache_ttl: Duration::from_secs(300), // 5 minutes
             gamma_api_url: "https://gamma-api.polymarket.com".to_string(),
@@ -40,7 +40,7 @@ impl MetadataFetcher {
     pub async fn fetch(&self, token_id: &str) -> Result<MarketMetadata, String> {
         // Check cache first
         {
-            let cache = self.cache.read().unwrap();
+            let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = cache.get(token_id) {
                 if entry.cached_at.elapsed() < self.cache_ttl {
                     tracing::debug!("Cache hit for token {}", token_id);
@@ -55,7 +55,7 @@ impl MetadataFetcher {
         
         // Update cache
         {
-            let mut cache = self.cache.write().unwrap();
+            let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
             cache.insert(token_id.to_string(), CacheEntry {
                 metadata: metadata.clone(),
                 cached_at: Instant::now(),
@@ -133,7 +133,7 @@ impl MetadataFetcher {
                 .or_else(|| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").ok()
                     .map(|ndt| ndt.and_utc().timestamp()))
                 .or_else(|| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
-                    .map(|d| d.and_hms_opt(23, 59, 59).unwrap().and_utc().timestamp()))
+                    .map(|d| d.and_hms_opt(23, 59, 59).expect("infallible: 23:59:59 is always valid").and_utc().timestamp()))
         };
 
         // game_start_date / gameStartTime = actual game kickoff (sports markets)
@@ -165,7 +165,7 @@ impl MetadataFetcher {
     
     /// Clear expired cache entries
     pub fn cleanup_cache(&self) {
-        let mut cache = self.cache.write().unwrap();
+        let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
         cache.retain(|_, entry| entry.cached_at.elapsed() < self.cache_ttl);
     }
 }

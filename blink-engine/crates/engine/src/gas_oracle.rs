@@ -81,7 +81,7 @@ impl GasOracle {
     pub async fn suggest_priority_fee_gwei(&self) -> u64 {
         // Fast path: return cached value if still fresh.
         {
-            let cache = self.cache.lock().unwrap();
+            let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(ts) = cache.last_fetch {
                 if ts.elapsed() < CACHE_TTL {
                     return cache.suggested_fee;
@@ -94,7 +94,7 @@ impl GasOracle {
             Ok(fee) => fee,
             Err(e) => {
                 warn!("GasOracle fetch failed, using cached/default: {e}");
-                self.cache.lock().unwrap().suggested_fee
+                self.cache.lock().unwrap_or_else(|e| e.into_inner()).suggested_fee
             }
         }
     }
@@ -130,7 +130,7 @@ impl GasOracle {
         debug!(gas_gwei, "Fetched current gas price from Polygonscan");
 
         let fee = {
-            let mut cache = self.cache.lock().unwrap();
+            let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.base_fees.push(gas_gwei);
             if cache.base_fees.len() > WINDOW_SIZE {
                 cache.base_fees.remove(0);
@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn default_fee_without_api_key() {
         let oracle = GasOracle::new(None);
-        let cache = oracle.cache.lock().unwrap();
+        let cache = oracle.cache.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(cache.suggested_fee, DEFAULT_PRIORITY_FEE_GWEI);
     }
 
@@ -184,21 +184,21 @@ mod tests {
     fn moving_average_calculation() {
         let oracle = GasOracle::new(None);
         {
-            let mut cache = oracle.cache.lock().unwrap();
+            let mut cache = oracle.cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.base_fees = vec![10, 20, 30];
             let sum: u64 = cache.base_fees.iter().sum();
             let avg = sum / cache.base_fees.len() as u64;
             let suggested = avg + avg / 5; // 20 + 4 = 24
             cache.suggested_fee = suggested;
         }
-        let cache = oracle.cache.lock().unwrap();
+        let cache = oracle.cache.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(cache.suggested_fee, 24); // avg(10,20,30)=20, +20%=24
     }
 
     #[test]
     fn window_eviction() {
         let oracle = GasOracle::new(None);
-        let mut cache = oracle.cache.lock().unwrap();
+        let mut cache = oracle.cache.lock().unwrap_or_else(|e| e.into_inner());
         for i in 0..30 {
             cache.base_fees.push(i);
             if cache.base_fees.len() > WINDOW_SIZE {

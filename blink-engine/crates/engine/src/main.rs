@@ -317,13 +317,28 @@ async fn main() -> Result<()> {
         info!(sidecar_url = %config.alpha_sidecar_url, "Alpha pipeline enabled");
     }
 
-    // ── Task: Ctrl-C sets shutdown flag ───────────────────────────────────
+    // ── Task: Ctrl-C / SIGTERM set shutdown flag ──────────────────────────
     {
         let sd = Arc::clone(&shutdown);
         tokio::spawn(async move {
             let _ = tokio::signal::ctrl_c().await;
-            info!("Ctrl-C received");
+            info!("Ctrl-C received — initiating graceful shutdown");
             sd.store(true, Ordering::Relaxed);
+        });
+    }
+    #[cfg(unix)]
+    {
+        let sd = Arc::clone(&shutdown);
+        tokio::spawn(async move {
+            use tokio::signal::unix::{signal, SignalKind};
+            match signal(SignalKind::terminate()) {
+                Ok(mut stream) => {
+                    stream.recv().await;
+                    info!("SIGTERM received — initiating graceful shutdown");
+                    sd.store(true, Ordering::Relaxed);
+                }
+                Err(e) => tracing::warn!("Failed to register SIGTERM handler: {e}"),
+            }
         });
     }
 

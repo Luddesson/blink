@@ -933,15 +933,60 @@ impl LiveEngine {
         );
     }
 
-    /// Graceful shutdown: log and persist state.
+    /// Graceful shutdown sequence (SIGTERM / Ctrl-C path).
+    ///
+    /// Order of operations:
+    /// 1. Trip circuit breaker — blocks any new order from being submitted.
+    /// 2. Cancel all open exchange orders.
+    /// 3. Run a final reconciliation pass — capture fills that arrived before
+    ///    the cancel was processed.
+    /// 4. Flush the WAL — persist the post-cancel pending-order state so that
+    ///    a subsequent restart can reconcile any remainder.
+    /// 5. Log final portfolio snapshot.
+    ///
+    /// Called with a 30-second timeout from `main`.  If it exceeds the timeout
+    /// the engine exits anyway — the WAL ensures recovery on next start.
     pub async fn graceful_shutdown(&self) {
-        info!("Live engine graceful shutdown initiated");
-        // Save portfolio state
-        let p = self.portfolio.lock().await;
-        let nav = p.nav();
-        let positions = p.positions.len();
-        drop(p);
-        info!(nav = %format!("{:.2}", nav), positions, "Live engine shutdown — final state");
+        info!("🛑 Live engine graceful shutdown initiated");
+
+        if let Some(ref log) = self.activity {
+            log_push(log, EntryKind::Engine, "GRACEFUL SHUTDOWN: starting (cancel + reconcile + WAL flush)".to_string());
+        }
+
+        // 1. Trip circuit breaker — no new orders during shutdown.
+        self.risk.lock_or_recover().trip_circuit_breaker("graceful_shutdown");
+
+        // 2. Cancel all open exchange orders.
+        if !self.executor.dry_run {
+            match self.executor.cancel_all_orders().await {
+                Ok(()) => info!("Graceful shutdown: exchange cancel-all succeeded"),
+                Err(e) => warn!("Graceful shutdown: cancel_all_orders failed (will still reconcile): {e}"),
+            }
+        }
+
+        // 3. Final reconciliation — capture fills that arrived before cancel.
+        self.run_reconciliation_pass().await;
+
+        // 4. Flush WAL with post-reconcile state.
+        self.persist_wal().await;
+
+        // 5. Log final state.
+        let (nav, positions, pending) = {
+            let p = self.portfolio.lock().await;
+            (p.nav(), p.positions.len(), self.pending_orders.lock().await.len())
+        };
+        info!(
+            nav = %format!("{:.2}", nav),
+            positions,
+            pending_orders = pending,
+            "🛑 Live engine shutdown complete"
+        );
+        if let Some(ref log) = self.activity {
+            log_push(log, EntryKind::Engine, format!(
+                "GRACEFUL SHUTDOWN: complete — NAV={:.2} positions={} pending={}",
+                nav, positions, pending
+            ));
+        }
     }
 }
 

@@ -42,6 +42,8 @@ tee-vault          = { path = "crates/tee-vault" }
 bpf-probes         = { path = "crates/bpf-probes" }
 axum               = { version = "0.8", features = ["ws"] }
 tower-http         = { version = "0.6", features = ["cors", "fs"] }
+hdrhistogram       = { version = "7", default-features = true }
+lru                = "0.12"
 
 [profile.release]
 opt-level     = 3

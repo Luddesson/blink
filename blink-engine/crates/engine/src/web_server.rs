@@ -1506,6 +1506,9 @@ async fn get_metrics(State(state): State<AppState>) -> Json<serde_json::Value> {
         }
     };
     let uptime_secs = state.started_at.elapsed().as_secs();
+    // TODO: Wire render_prom() into a dedicated /metrics endpoint returning text/plain.
+    // For now, include the hot metrics in the existing JSON endpoint.
+    let _hot_prom = crate::hot_metrics::render_prom();
     Json(json!({
         "available": true,
         "signals_rejected_last_60s": total_recent,
@@ -1515,6 +1518,12 @@ async fn get_metrics(State(state): State<AppState>) -> Json<serde_json::Value> {
         "sortino_ratio": sortino,
         "fee_drag_pct": fee_drag,
         "fee_drag_alert": fee_alert,
+        "hot_signals_in": crate::hot_metrics::counters().signals_in.load(std::sync::atomic::Ordering::Relaxed),
+        "hot_dedup_hits": crate::hot_metrics::counters().dedup_hits.load(std::sync::atomic::Ordering::Relaxed),
+        "hot_submits_ack": crate::hot_metrics::counters().submits_ack.load(std::sync::atomic::Ordering::Relaxed),
+        "hot_submits_rejected": crate::hot_metrics::counters().submits_rejected.load(std::sync::atomic::Ordering::Relaxed),
+        "hot_partial_fills": crate::hot_metrics::counters().partial_fills.load(std::sync::atomic::Ordering::Relaxed),
+        "hot_full_fills": crate::hot_metrics::counters().full_fills.load(std::sync::atomic::Ordering::Relaxed),
     }))
 }
 

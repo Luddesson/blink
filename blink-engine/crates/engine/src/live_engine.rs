@@ -10,6 +10,7 @@ use tracing::{error, info, warn};
 
 use crate::activity_log::{push as log_push, ActivityLog, EntryKind};
 use crate::config::Config;
+use crate::hot_metrics::{HotStage, StageTimer};
 use crate::mev_router::MevRouter;
 use crate::order_book::OrderBookStore;
 use crate::order_executor::OrderExecutor;
@@ -388,6 +389,8 @@ impl LiveEngine {
     }
 
     pub async fn handle_signal(&self, signal: RN1Signal) {
+        // ── Stage: Enrich (intent classification + price extraction) ────────
+        let _enrich_timer = StageTimer::start(HotStage::Enrich);
         self.sync_risk_closes_from_portfolio().await;
         self.run_reconciliation_pass().await;
 
@@ -422,6 +425,11 @@ impl LiveEngine {
             p.skipped_orders += 1;
             return;
         }
+
+        drop(_enrich_timer);
+
+        // ── Stage: Sizing ─────────────────────────────────────────────────
+        let _sizing_timer = StageTimer::start(HotStage::Sizing);
 
         // 1. Calculate entry_price, rn1_shares, rn1_notional_usd
         let entry_price = signal.price as f64 / 1_000.0;
@@ -458,6 +466,11 @@ impl LiveEngine {
             (size, nav, open)
         };
 
+        drop(_sizing_timer);
+
+        // ── Stage: Risk ───────────────────────────────────────────────────
+        let _risk_timer = StageTimer::start(HotStage::Risk);
+
         // 3. Risk check — BEFORE doing anything real
         let size_usdc = match size_usdc {
             Some(s) => s,
@@ -490,6 +503,11 @@ impl LiveEngine {
             return;
         }
 
+        drop(_risk_timer);
+
+        // ── Stage: Drift ──────────────────────────────────────────────────
+        let _drift_timer = StageTimer::start(HotStage::Drift);
+
         // 4. Fill window check — same as PaperEngine
         let filled = self
             .check_fill_window(&signal.token_id, entry_price, signal.side)
@@ -498,6 +516,11 @@ impl LiveEngine {
             // Abort like PaperEngine
             return;
         }
+
+        drop(_drift_timer);
+
+        // ── Stage: Sign ───────────────────────────────────────────────────
+        let _sign_timer = StageTimer::start(HotStage::Sign);
 
         // 5. Build and sign (or dry-run)
         let params = OrderParams {
@@ -528,6 +551,7 @@ impl LiveEngine {
                 .expect("vault is Some; guarded by is_none() check above");
             let mut policy = self.signing_policy;
             policy.nonce = self.nonce_counter.fetch_add(1, Ordering::Relaxed);
+            drop(_sign_timer);
             match sign_order_with_vault_policy(vault.as_ref(), &params, policy) {
                 Ok(signed) => match self.executor.submit_order(&signed, TimeInForce::Gtc).await {
                     Ok(resp) => {
@@ -754,6 +778,8 @@ impl LiveEngine {
     }
 
     async fn run_reconciliation_pass(&self) {
+        let _reconcile_start = std::time::Instant::now();
+        let _reconcile_timer = StageTimer::start(HotStage::Reconcile);
         self.sync_risk_closes_from_portfolio().await;
 
         let pending_ids: Vec<String> = self.pending_orders.lock().await.keys().cloned().collect();
@@ -901,6 +927,14 @@ impl LiveEngine {
                 fills_recorded, pending, "Reconciliation pass completed"
             );
         }
+
+        // Update reconcile lag counter
+        crate::hot_metrics::counters()
+            .reconcile_lag_ms_last
+            .store(
+                _reconcile_start.elapsed().as_millis() as i64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
     }
 
     async fn check_fill_window(&self, token_id: &str, entry_price: f64, _side: OrderSide) -> bool {

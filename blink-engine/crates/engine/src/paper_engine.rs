@@ -606,6 +606,10 @@ impl PaperEngine {
             }
         }
 
+        // ── Stage: Enrich (metadata lookup happens at line ~784) ────────────
+        // Enrich timer starts here; it drops when enrich_signal_metadata completes.
+        let _enrich_timer = crate::hot_metrics::StageTimer::start(crate::hot_metrics::HotStage::Enrich);
+
         // ── Order-ID dedup: skip if we've already processed this transaction ──
         {
             let mut seen = self.seen_order_ids.lock().await;
@@ -782,6 +786,7 @@ impl PaperEngine {
         };
         let mut signal = prio_signal.signal;
         self.enrich_signal_metadata(&mut signal).await;
+        drop(_enrich_timer);
         let queue_delay_ms = prio_signal.queued_at.elapsed().as_millis() as u64;
 
         // ── Event horizon rule ──────────────────────────────────────────
@@ -822,6 +827,8 @@ impl PaperEngine {
         }
 
         // Convert scaled integers back to f64 for human-readable logic.
+        // ── Stage: Sizing ─────────────────────────────────────────────────
+        let _sizing_timer = crate::hot_metrics::StageTimer::start(crate::hot_metrics::HotStage::Sizing);
         let mut entry_price = signal.price as f64 / 1_000.0;
         let rn1_shares = signal.size as f64 / 1_000.0;
         let rn1_notional_usd = rn1_shares * entry_price;

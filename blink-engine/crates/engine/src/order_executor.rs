@@ -135,6 +135,8 @@ impl OrderExecutor {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             }
 
+            crate::hot_metrics::counters().submits_started.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let _submit_timer = crate::hot_metrics::StageTimer::start(crate::hot_metrics::HotStage::Submit);
             // Rebuild auth headers each attempt: POLY-TIMESTAMP must be fresh.
             let headers = build_auth_headers(
                 &self.api_key,
@@ -181,6 +183,10 @@ impl OrderExecutor {
             let parsed: OrderResponse =
                 serde_json::from_str(&text).context("failed to parse POST /order response")?;
 
+            drop(_submit_timer);
+            let _ack_timer = crate::hot_metrics::StageTimer::start(crate::hot_metrics::HotStage::Ack);
+
+            drop(_ack_timer);
             if !parsed.success {
                 let msg = parsed.error_msg.as_deref().unwrap_or("");
                 if msg.to_lowercase().contains("transient") {
@@ -189,6 +195,9 @@ impl OrderExecutor {
                 }
                 // Non-transient application error — no point retrying.
                 error!(error = ?parsed.error_msg, "❌ POST /order rejected by exchange");
+                crate::hot_metrics::counters().submits_rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                crate::hot_metrics::counters().submits_ack.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
 
             return Ok(parsed);

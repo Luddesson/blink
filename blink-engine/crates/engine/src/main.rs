@@ -74,6 +74,8 @@ async fn main() -> Result<()> {
         Err(_) => eprintln!("Warning: .env has a formatting issue"),
     }
 
+    engine::hot_metrics::spawn_periodic_logger();
+
     // ── Panic hook — save portfolio state before dying ───────────────────
     {
         let state_path = std::env::var("PAPER_STATE_PATH")

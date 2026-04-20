@@ -864,6 +864,7 @@ mod tests {
             side: 0,
             signature_type: 0,
             signature: "0xdeadbeef".to_string(),
+            client_order_id: None,
         }
     }
 

@@ -181,6 +181,16 @@ async fn main() -> Result<()> {
     // ── Config ────────────────────────────────────────────────────────────
     let config = Config::from_env()?;
     info!(paper_mode, tui_mode, rn1_wallet = %config.rn1_wallet, "Configuration loaded");
+    let execution_profile = engine::execution_profile::ExecutionProfile::from_env();
+    let exec_knobs = execution_profile.knobs();
+    info!(
+        profile = %execution_profile,
+        pretrade_gate_stale_ms = exec_knobs.pretrade_gate_stale_ms,
+        pretrade_gate_drift_bps = exec_knobs.pretrade_gate_drift_bps,
+        max_concurrent_per_token = exec_knobs.max_concurrent_per_token,
+        post_only = exec_knobs.post_only,
+        "ExecutionProfile selected (BLINK_EXECUTION_PROFILE)"
+    );
     config.validate_live_profile_contract()?;
     if paper_mode {
         config.validate_for_paper_trading()?;
@@ -1051,6 +1061,7 @@ async fn main() -> Result<()> {
             Arc::clone(&book_store),
             Some(activity.clone()),
             Arc::clone(&strategy_controller),
+            execution_profile,
         )?);
         live_for_web = Some(Arc::clone(&live));
         live_for_shutdown = Some(Arc::clone(&live));

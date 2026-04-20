@@ -110,19 +110,31 @@ pub struct GateConfig {
 }
 
 impl GateConfig {
+    /// Reads the gate config using the active [`ExecutionProfile`] for
+    /// defaults. Per-knob env vars still override when set.
     pub fn from_env() -> Self {
+        Self::from_profile_and_env(crate::execution_profile::ExecutionProfile::from_env())
+    }
+
+    /// Resolve gate config from a specific execution profile. Per-knob env
+    /// overrides (`BLINK_GATE_STALE_MS`, `BLINK_GATE_MAX_DRIFT_BPS`,
+    /// `BLINK_GATE_POST_ONLY`) still win when present.
+    pub fn from_profile_and_env(
+        profile: crate::execution_profile::ExecutionProfile,
+    ) -> Self {
+        let knobs = profile.knobs();
         let stale_ms = std::env::var("BLINK_GATE_STALE_MS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(800_u32);
+            .unwrap_or(knobs.pretrade_gate_stale_ms);
         let max_drift_bps = std::env::var("BLINK_GATE_MAX_DRIFT_BPS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(80_u16);
+            .unwrap_or(knobs.pretrade_gate_drift_bps);
         let post_only = std::env::var("BLINK_GATE_POST_ONLY")
             .ok()
             .map(|v| !matches!(v.to_lowercase().as_str(), "false" | "0"))
-            .unwrap_or(true);
+            .unwrap_or(knobs.post_only);
         Self {
             stale_ms,
             max_drift_bps,

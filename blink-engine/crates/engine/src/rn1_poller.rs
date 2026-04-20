@@ -22,9 +22,13 @@ use crate::activity_log::{push as log_push, ActivityLog, EntryKind};
 use crate::config::Config;
 use crate::types::{OrderSide, RN1Signal};
 
-/// How often to poll for new RN1 trades.
-const POLL_INTERVAL: Duration = Duration::from_millis(1200);
-const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(2000);
+/// Fallback defaults — override with env vars RN1_POLL_INTERVAL_MS /
+/// RN1_IDLE_POLL_INTERVAL_MS / RN1_POLL_BURST_MS.
+const DEFAULT_POLL_INTERVAL_MS: u64 = 400;
+const DEFAULT_IDLE_POLL_INTERVAL_MS: u64 = 1500;
+const DEFAULT_BURST_INTERVAL_MS: u64 = 100;
+/// Number of rapid-burst polls triggered after detecting a new signal.
+const BURST_POLL_COUNT: u32 = 5;
 const ERROR_BACKOFF_MAX: Duration = Duration::from_secs(5);
 const CIRCUIT_BREAKER_THRESHOLD: u32 = 10;
 const CIRCUIT_BREAKER_COOLDOWN: Duration = Duration::from_secs(30);
@@ -151,6 +155,28 @@ pub async fn run_rn1_poller(
     activity: Option<ActivityLog>,
     diagnostics: Rn1PollDiagnosticsHandle,
 ) {
+    // ── Env-configurable poll cadence ─────────────────────────────────────
+    let poll_interval = Duration::from_millis(
+        std::env::var("RN1_POLL_INTERVAL_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_POLL_INTERVAL_MS),
+    );
+    let idle_poll_interval = Duration::from_millis(
+        std::env::var("RN1_IDLE_POLL_INTERVAL_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_IDLE_POLL_INTERVAL_MS),
+    );
+    let burst_interval = Duration::from_millis(
+        std::env::var("RN1_POLL_BURST_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_BURST_INTERVAL_MS),
+    );
+    let primary_mode =
+        std::env::var("RN1_PRIMARY_MODE").unwrap_or_else(|_| "resilience".to_string());
+
     let client = Client::builder()
         .timeout(Duration::from_secs(8))
         .connect_timeout(Duration::from_secs(5))
@@ -167,8 +193,9 @@ pub async fn run_rn1_poller(
     let mut total_polls: u64 = 0;
     let mut total_entries_seen: u64 = 0;
     let mut idle_cycles: u32 = 0;
+    let mut burst_remaining: u32 = 0;
     let mut last_ts: i64 = 0; // track newest timestamp to seed on first poll
-    let mut next_interval = POLL_INTERVAL;
+    let mut next_interval = poll_interval;
     let mut metrics_last_logged = Instant::now();
 
     let rn1_short = if wallet.len() >= 10 {
@@ -177,14 +204,22 @@ pub async fn run_rn1_poller(
         &wallet
     };
 
-    info!(rn1_wallet = %wallet, wallet_weight, "RN1 poller started (data-api, no auth) — every {}ms", POLL_INTERVAL.as_millis());
+    info!(
+        rn1_wallet = %wallet,
+        wallet_weight,
+        mode = %primary_mode,
+        poll_ms = poll_interval.as_millis(),
+        idle_ms = idle_poll_interval.as_millis(),
+        burst_ms = burst_interval.as_millis(),
+        "RN1 poller started (data-api, no auth) — mode={primary_mode}"
+    );
     if let Some(ref log) = activity {
         log_push(
             log,
             EntryKind::Engine,
             format!(
-                "RN1 poller started — tracking {rn1_short}… (weight={wallet_weight:.2}) every {}ms",
-                POLL_INTERVAL.as_millis()
+                "RN1 poller started — tracking {rn1_short}… (weight={wallet_weight:.2}) mode={primary_mode} poll={}ms burst={}ms",
+                poll_interval.as_millis(), burst_interval.as_millis()
             ),
         );
     }
@@ -319,16 +354,21 @@ pub async fn run_rn1_poller(
                     "poll cycle"
                 );
 
-                if new_signals_this_cycle == 0 {
+                if new_signals_this_cycle > 0 {
+                    // New signal: burst mode — rapid polls to catch follow-up trades
+                    idle_cycles = 0;
+                    burst_remaining = BURST_POLL_COUNT;
+                    next_interval = burst_interval;
+                } else if burst_remaining > 0 {
+                    burst_remaining -= 1;
+                    next_interval = burst_interval;
+                } else {
                     idle_cycles = idle_cycles.saturating_add(1);
                     if idle_cycles >= 5 {
-                        next_interval = IDLE_POLL_INTERVAL;
+                        next_interval = idle_poll_interval;
                     } else {
-                        next_interval = POLL_INTERVAL;
+                        next_interval = poll_interval;
                     }
-                } else {
-                    idle_cycles = 0;
-                    next_interval = POLL_INTERVAL;
                 }
                 {
                     let mut d = diagnostics.lock().unwrap();
@@ -384,11 +424,11 @@ pub async fn run_rn1_poller(
                     consecutive_errors = 0;
                     // Reset to normal interval after cooldown; `continue` skips
                     // the bottom-of-loop sleep so next iteration uses this value.
-                    next_interval = POLL_INTERVAL; // read after `continue` at loop bottom
+                    next_interval = poll_interval; // reset after circuit-breaker cooldown
                     continue;
                 }
 
-                let backoff_ms = (POLL_INTERVAL.as_millis() as u64)
+                let backoff_ms = (poll_interval.as_millis() as u64)
                     .saturating_mul(1_u64 << consecutive_errors.min(4))
                     .min(ERROR_BACKOFF_MAX.as_millis() as u64);
                 next_interval = Duration::from_millis(backoff_ms);

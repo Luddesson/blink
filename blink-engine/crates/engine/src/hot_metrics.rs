@@ -170,6 +170,23 @@ pub struct HotCounters {
     pub signal_per_token_workers_active: AtomicU64,
     pub signal_pertoken_overflow_dropped: AtomicU64,
     pub signal_dispatcher_dropped: AtomicU64,
+    // ─── Phase 3 fill/cancel/GC counters ─────────────────────────────────────
+    /// SubmitUnknown orders resolved to Acked (venue confirmed order live).
+    pub submit_unknown_resolved_acked_total: AtomicU64,
+    /// SubmitUnknown orders resolved to Rejected (venue never saw order).
+    pub submit_unknown_resolved_rejected_total: AtomicU64,
+    /// Total `find_order_by_client_id` lookup attempts.
+    pub submit_unknown_lookup_attempts_total: AtomicU64,
+    /// Cancel requests confirmed by the exchange.
+    pub cancel_success_total: AtomicU64,
+    /// Cancel requests rejected by the exchange.
+    pub cancel_reject_total: AtomicU64,
+    /// Delta size (milliUSDC) of the most recent partial fill update.
+    pub fills_delta_size_last: AtomicI64,
+    /// Full-fill ratio in per-mille: full*1000/(full+partial).
+    pub partial_fill_ratio_permille: AtomicI64,
+    /// Terminal entries evicted from the store by the GC sweep.
+    pub router_gc_evicted_total: AtomicU64,
 }
 
 impl HotCounters {
@@ -207,6 +224,14 @@ impl HotCounters {
             signal_per_token_workers_active: AtomicU64::new(0),
             signal_pertoken_overflow_dropped: AtomicU64::new(0),
             signal_dispatcher_dropped: AtomicU64::new(0),
+            submit_unknown_resolved_acked_total: AtomicU64::new(0),
+            submit_unknown_resolved_rejected_total: AtomicU64::new(0),
+            submit_unknown_lookup_attempts_total: AtomicU64::new(0),
+            cancel_success_total: AtomicU64::new(0),
+            cancel_reject_total: AtomicU64::new(0),
+            fills_delta_size_last: AtomicI64::new(0),
+            partial_fill_ratio_permille: AtomicI64::new(0),
+            router_gc_evicted_total: AtomicU64::new(0),
         }
     }
 }
@@ -360,6 +385,22 @@ pub fn render_prom() -> String {
     let submit_p99_ms = submit_p99_ns / 1_000_000;
     out.push_str(&format!(
         "# TYPE blink_http_submit_p99_ms gauge\nblink_http_submit_p99_ms {submit_p99_ms}\n"
+    ));
+
+    // Phase 3 counters
+    counter!(out, "blink_submit_unknown_resolved_acked_total",    c.submit_unknown_resolved_acked_total.load(Ordering::Relaxed));
+    counter!(out, "blink_submit_unknown_resolved_rejected_total", c.submit_unknown_resolved_rejected_total.load(Ordering::Relaxed));
+    counter!(out, "blink_submit_unknown_lookup_attempts_total",   c.submit_unknown_lookup_attempts_total.load(Ordering::Relaxed));
+    counter!(out, "blink_cancel_success_total",                   c.cancel_success_total.load(Ordering::Relaxed));
+    counter!(out, "blink_cancel_reject_total",                    c.cancel_reject_total.load(Ordering::Relaxed));
+    counter!(out, "blink_router_gc_evicted_total",                c.router_gc_evicted_total.load(Ordering::Relaxed));
+    let fills_delta = c.fills_delta_size_last.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        "# TYPE blink_fills_delta_size_last gauge\nblink_fills_delta_size_last {fills_delta}\n"
+    ));
+    let ratio = c.partial_fill_ratio_permille.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        "# TYPE blink_partial_fill_ratio_permille gauge\nblink_partial_fill_ratio_permille {ratio}\n"
     ));
 
     for &stage in HotStage::ALL {

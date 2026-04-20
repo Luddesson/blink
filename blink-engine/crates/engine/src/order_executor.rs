@@ -74,6 +74,27 @@ pub struct OrderStatus {
     pub size_matched: Option<String>,
 }
 
+/// Entry returned from `GET /orders` list endpoint.
+///
+/// Used for SubmitUnknown recovery — fields match the Polymarket CLOB v2 schema.
+///
+/// ## ASSUMPTION (verifiable)
+/// Field names match the Polymarket CLOB REST API v2 JSON response for `GET /orders`.
+/// Verify with: `curl -H "POLY-API-KEY: ..." "https://clob.polymarket.com/orders?client_order_id=blk-1"`
+#[derive(Debug, Deserialize, Clone)]
+pub struct OrderSearchEntry {
+    pub id: String,
+    pub status: String,
+    #[serde(rename = "clientOrderId")]
+    pub client_order_id: Option<String>,
+    #[serde(rename = "sizeMatched")]
+    pub size_matched: Option<String>,
+    #[serde(rename = "remainingAmount")]
+    pub remaining_amount: Option<String>,
+    #[serde(rename = "price")]
+    pub price: Option<String>,
+}
+
 // ─── Executor ────────────────────────────────────────────────────────────────
 
 /// HTTP client for Polymarket CLOB order management.
@@ -587,6 +608,88 @@ impl OrderExecutor {
         }
     }
 
+    /// Searches for an order by `client_order_id`.
+    ///
+    /// **Primary path**: `GET /orders?client_order_id=<id>` — Polymarket CLOB
+    /// supports this query parameter (verify against live API; see ASSUMPTION on
+    /// `OrderSearchEntry`).
+    ///
+    /// **Fallback path**: `GET /orders?status=live&limit=200` then scan results
+    /// client-side when the primary call returns an empty list.
+    #[instrument(skip(self), fields(client_id))]
+    pub async fn find_order_by_client_id(
+        &self,
+        client_id: &str,
+    ) -> Result<Option<OrderSearchEntry>> {
+        if self.dry_run {
+            info!("DRY-RUN: would GET /orders?client_order_id={client_id}");
+            return Ok(None);
+        }
+
+        // Primary: query by client_order_id directly.
+        let path = format!("/orders?client_order_id={client_id}");
+        let url = format!("{}{}", self.base_url, path);
+        let headers = build_auth_headers(
+            &self.api_key,
+            &self.api_secret,
+            &self.passphrase,
+            &self.maker_address,
+            "GET",
+            &path,
+            "",
+        )?;
+        let mut req = self.client.get(&url);
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+        let resp = req
+            .send()
+            .await
+            .context("GET /orders?client_order_id network error")?;
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            anyhow::bail!(
+                "GET /orders?client_order_id={client_id} returned {status}: {text}"
+            );
+        }
+
+        let entries = parse_order_list(&text);
+        if let Some(found) = entries
+            .into_iter()
+            .find(|e| e.client_order_id.as_deref() == Some(client_id))
+        {
+            return Ok(Some(found));
+        }
+
+        // Fallback: scan recent live orders client-side.
+        let fb_path = "/orders?status=live&limit=200";
+        let fb_url = format!("{}{}", self.base_url, fb_path);
+        let fb_headers = build_auth_headers(
+            &self.api_key,
+            &self.api_secret,
+            &self.passphrase,
+            &self.maker_address,
+            "GET",
+            fb_path,
+            "",
+        )?;
+        let mut fb_req = self.client.get(&fb_url);
+        for (k, v) in fb_headers {
+            fb_req = fb_req.header(k, v);
+        }
+        let fb_resp = fb_req
+            .send()
+            .await
+            .context("GET /orders?status=live network error")?;
+        let fb_text = fb_resp.text().await.unwrap_or_default();
+
+        Ok(parse_order_list(&fb_text)
+            .into_iter()
+            .find(|e| e.client_order_id.as_deref() == Some(client_id)))
+    }
+
     /// Fetches the current status of an order.  `GET /order/{order_id}`
     #[instrument(skip(self), fields(order_id))]
     pub async fn get_order_status(&self, order_id: &str) -> Result<OrderStatus> {
@@ -621,6 +724,23 @@ impl OrderExecutor {
 }
 
 // ─── HMAC-SHA256 auth headers ────────────────────────────────────────────────
+
+/// Parses a Polymarket order-list response that may be a bare JSON array or
+/// wrapped in `{"data": [...]}`.
+fn parse_order_list(text: &str) -> Vec<OrderSearchEntry> {
+    if text.trim_start().starts_with('[') {
+        serde_json::from_str(text).unwrap_or_default()
+    } else {
+        #[derive(serde::Deserialize)]
+        struct Envelope {
+            #[serde(default)]
+            data: Vec<OrderSearchEntry>,
+        }
+        serde_json::from_str::<Envelope>(text)
+            .map(|e| e.data)
+            .unwrap_or_default()
+    }
+}
 
 /// Builds Polymarket L2 authentication headers.
 ///

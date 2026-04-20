@@ -259,6 +259,7 @@ impl LiveEngine {
             Arc::clone(&self.order_router.store),
             Arc::clone(&self.order_router.counters),
             exec,
+            None, // TODO Phase 4: wire RouterFillHook to risk manager
         );
     }
 

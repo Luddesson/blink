@@ -6,6 +6,7 @@
 //! price level, matching Polymarket's delta protocol.
 
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -107,6 +108,8 @@ impl OrderBook {
 /// by [`DashMap`]; no external locking is required.
 pub struct OrderBookStore {
     books: DashMap<String, OrderBook>,
+    /// Per-token last-update timestamp — used by the freshness gate.
+    last_updated: DashMap<String, Instant>,
 }
 
 impl OrderBookStore {
@@ -114,7 +117,19 @@ impl OrderBookStore {
     pub fn new() -> Self {
         Self {
             books: DashMap::new(),
+            last_updated: DashMap::new(),
         }
+    }
+
+    /// Returns the age of the most recent book update for `token_id`, in
+    /// milliseconds (capped at `u32::MAX`), or `None` if the token is unknown.
+    pub fn get_snapshot_age_ms(&self, token_id: &str) -> Option<u32> {
+        self.last_updated
+            .get(token_id)
+            .map(|r| {
+                let ms = r.elapsed().as_millis();
+                if ms > u32::MAX as u128 { u32::MAX } else { ms as u32 }
+            })
     }
 
     /// Returns the current mid-price (×1 000) for a token, or `None` if the
@@ -151,6 +166,8 @@ impl OrderBookStore {
         &self,
         token_id: &str,
     ) -> dashmap::mapref::one::RefMut<'_, String, OrderBook> {
+        self.last_updated
+            .insert(token_id.to_string(), Instant::now());
         self.books
             .entry(token_id.to_string())
             .or_insert_with(OrderBook::new)
@@ -175,6 +192,7 @@ impl OrderBookStore {
                 let mut book = self.get_or_create(key);
                 book.apply_bids_delta(&bid_levels);
                 book.apply_asks_delta(&ask_levels);
+                self.last_updated.insert(key.to_string(), Instant::now());
 
                 tracing::debug!(
                     key,
@@ -239,8 +257,11 @@ impl OrderBookStore {
     /// Restores books from snapshots.
     pub fn restore_snapshots(&self, snapshots: &[(String, OrderBook)]) {
         self.books.clear();
+        self.last_updated.clear();
+        let now = Instant::now();
         for (token, book) in snapshots {
             self.books.insert(token.clone(), book.clone());
+            self.last_updated.insert(token.clone(), now);
         }
     }
 

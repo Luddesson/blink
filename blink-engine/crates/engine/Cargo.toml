@@ -41,6 +41,8 @@ lru               = { workspace = true }
 
 [features]
 default = []
+# Keep the legacy 6×500 ms fill-window active (for tests that depend on the old timer).
+legacy-fill-window = []
 # Enable io_uring network backend (Linux production only).
 # Off by default — uses tokio on all platforms including Windows/macOS.
 io_uring = ["dep:tokio-uring"]

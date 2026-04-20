@@ -17,14 +17,19 @@ use crate::order_executor::OrderExecutor;
 use crate::order_router::reconciler::spawn_reconciler;
 use crate::order_router::{OrderIntent, OrderRouter};
 use crate::order_signer::{sign_order_for_intent_with_vault, OrderParams, OrderSigningPolicy};
-use crate::paper_portfolio::{drift_threshold, PaperPortfolio, STARTING_BALANCE_USDC};
+use crate::paper_portfolio::{PaperPortfolio, STARTING_BALANCE_USDC};
+#[cfg(feature = "legacy-fill-window")]
+use crate::paper_portfolio::drift_threshold;
+use crate::pretrade_gate::{GateConfig, GateDecision, PretradeGate};
 use crate::risk_manager::{RiskConfig, RiskManager};
 use crate::strategy::{StrategyController, StrategySnapshot};
 use crate::timed_mutex::TimedMutex;
 use crate::truth_reconciler::{
     process_order_status, PendingOrder, PendingOrderWal, ReconciliationOutcome,
 };
-use crate::types::{OrderSide, RN1Signal, TimeInForce};
+use crate::types::{RN1Signal, TimeInForce};
+#[cfg(feature = "legacy-fill-window")]
+use crate::types::OrderSide;
 
 // ─── Lock Hierarchy ──────────────────────────────────────────────────────────
 // Two mutex flavours are used.  Always acquire in the order listed below;
@@ -70,6 +75,7 @@ pub struct LiveEngine {
     wal_path: String,
     strategy_controller: Arc<StrategyController>,
     pub order_router: OrderRouter,
+    pretrade_gate: PretradeGate,
 }
 
 /// Point-in-time snapshot of live SLO metrics for dashboards and alerting.
@@ -217,7 +223,7 @@ impl LiveEngine {
 
         Ok(Self {
             portfolio: Arc::new(Mutex::new(PaperPortfolio::new())),
-            book_store,
+            book_store: Arc::clone(&book_store),
             activity,
             executor,
             vault,
@@ -236,6 +242,7 @@ impl LiveEngine {
                 .unwrap_or_else(|_| "logs/live_pending_orders_wal.json".to_string()),
             strategy_controller,
             order_router: OrderRouter::new(),
+            pretrade_gate: PretradeGate::new(book_store),
         })
     }
 
@@ -521,16 +528,47 @@ impl LiveEngine {
 
         drop(_risk_timer);
 
-        // ── Stage: Drift ──────────────────────────────────────────────────
+        // ── Stage: Drift (FreshnessGate) ─────────────────────────────────
         let _drift_timer = StageTimer::start(HotStage::Drift);
 
-        // 4. Fill window check — same as PaperEngine
-        let filled = self
-            .check_fill_window(&signal.token_id, entry_price, signal.side)
-            .await;
-        if !filled {
-            // Abort like PaperEngine
-            return;
+        let gate_cfg = GateConfig::from_env();
+        let price_gate = (entry_price * 1_000.0).round() as u64;
+        let gate_result = self.pretrade_gate.check(
+            &signal.token_id,
+            signal.side,
+            price_gate,
+            gate_cfg.stale_ms,
+            gate_cfg.max_drift_bps,
+            gate_cfg.post_only,
+        );
+        match gate_result {
+            GateDecision::Proceed => {
+                crate::hot_metrics::counters()
+                    .gate_proceed
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            GateDecision::SkipStale => {
+                crate::hot_metrics::counters()
+                    .gate_skip_stale
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                warn!(token_id = %signal.token_id, "⛔ Gate: stale book snapshot — signal dropped");
+                return;
+            }
+            GateDecision::SkipDrift { bps } => {
+                crate::hot_metrics::counters()
+                    .gate_skip_drift
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.failsafe_metrics.lock_or_recover().trigger_count += 1;
+                warn!(token_id = %signal.token_id, drift_bps = bps, "⛔ Gate: drift too large — signal dropped");
+                return;
+            }
+            GateDecision::SkipPostOnlyCross => {
+                crate::hot_metrics::counters()
+                    .gate_skip_post_only
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                warn!(token_id = %signal.token_id, "⛔ Gate: post-only cross — signal dropped");
+                return;
+            }
         }
 
         drop(_drift_timer);
@@ -969,6 +1007,7 @@ impl LiveEngine {
             );
     }
 
+    #[cfg(feature = "legacy-fill-window")]
     async fn check_fill_window(&self, token_id: &str, entry_price: f64, _side: OrderSide) -> bool {
         for check in 0_u8..6 {
             sleep(Duration::from_millis(500)).await;
@@ -996,6 +1035,7 @@ impl LiveEngine {
         true
     }
 
+    #[cfg(feature = "legacy-fill-window")]
     fn get_market_price(&self, token_id: &str) -> Option<f64> {
         self.book_store
             .get_mid_price(token_id)

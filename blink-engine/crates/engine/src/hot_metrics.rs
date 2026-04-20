@@ -159,6 +159,17 @@ pub struct HotCounters {
     pub ws_dedup_wins: AtomicU64,
     /// Deduped duplicates where the REST path had published first.
     pub rest_dedup_wins: AtomicU64,
+    // ─── Pre-trade gate counters (Phase 3) ───────────────────────────────────
+    pub gate_proceed: AtomicU64,
+    pub gate_skip_stale: AtomicU64,
+    pub gate_skip_drift: AtomicU64,
+    pub gate_skip_post_only: AtomicU64,
+    // ─── Signal pipeline counters (Phase 3) ──────────────────────────────────
+    pub signal_worker_queue_depth_max: AtomicU64,
+    pub signal_dispatcher_backlog: AtomicU64,
+    pub signal_per_token_workers_active: AtomicU64,
+    pub signal_pertoken_overflow_dropped: AtomicU64,
+    pub signal_dispatcher_dropped: AtomicU64,
 }
 
 impl HotCounters {
@@ -187,6 +198,15 @@ impl HotCounters {
             pending_orders_count: AtomicI64::new(0),
             ws_dedup_wins: AtomicU64::new(0),
             rest_dedup_wins: AtomicU64::new(0),
+            gate_proceed: AtomicU64::new(0),
+            gate_skip_stale: AtomicU64::new(0),
+            gate_skip_drift: AtomicU64::new(0),
+            gate_skip_post_only: AtomicU64::new(0),
+            signal_worker_queue_depth_max: AtomicU64::new(0),
+            signal_dispatcher_backlog: AtomicU64::new(0),
+            signal_per_token_workers_active: AtomicU64::new(0),
+            signal_pertoken_overflow_dropped: AtomicU64::new(0),
+            signal_dispatcher_dropped: AtomicU64::new(0),
         }
     }
 }
@@ -296,6 +316,28 @@ pub fn render_prom() -> String {
     counter!(out, "blink_router_reconcile_sweeps_total", c.router_reconcile_sweeps.load(Ordering::Relaxed));
     counter!(out, "blink_dedup_ws_wins_total",          c.ws_dedup_wins.load(Ordering::Relaxed));
     counter!(out, "blink_dedup_rest_wins_total",        c.rest_dedup_wins.load(Ordering::Relaxed));
+
+    // Pre-trade gate counters
+    counter!(out, "blink_gate_proceed_total",           c.gate_proceed.load(Ordering::Relaxed));
+    counter!(out, "blink_gate_skip_stale_total",        c.gate_skip_stale.load(Ordering::Relaxed));
+    counter!(out, "blink_gate_skip_drift_total",        c.gate_skip_drift.load(Ordering::Relaxed));
+    counter!(out, "blink_gate_skip_post_only_total",    c.gate_skip_post_only.load(Ordering::Relaxed));
+
+    // Signal pipeline counters
+    counter!(out, "blink_signal_pertoken_overflow_dropped_total", c.signal_pertoken_overflow_dropped.load(Ordering::Relaxed));
+    counter!(out, "blink_signal_dispatcher_dropped_total",        c.signal_dispatcher_dropped.load(Ordering::Relaxed));
+    let workers_active = c.signal_per_token_workers_active.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        "# TYPE blink_signal_per_token_workers_active gauge\nblink_signal_per_token_workers_active {workers_active}\n"
+    ));
+    let worker_queue_depth_max = c.signal_worker_queue_depth_max.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        "# TYPE blink_signal_worker_queue_depth_max gauge\nblink_signal_worker_queue_depth_max {worker_queue_depth_max}\n"
+    ));
+    let dispatcher_backlog = c.signal_dispatcher_backlog.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        "# TYPE blink_signal_dispatcher_backlog gauge\nblink_signal_dispatcher_backlog {dispatcher_backlog}\n"
+    ));
     let pending = c.pending_orders_count.load(Ordering::Relaxed);
     out.push_str(&format!(
         "# TYPE blink_router_pending_orders_count gauge\nblink_router_pending_orders_count {pending}\n"

@@ -16,6 +16,7 @@ use chrono::Utc;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
+#[cfg(feature = "legacy-fill-window")]
 use tokio::time::sleep;
 use tracing::{info, warn};
 
@@ -29,6 +30,7 @@ use crate::order_book::{OrderBook, OrderBookStore};
 use crate::paper_portfolio::{
     drift_threshold, polymarket_taker_fee_with_rate, PaperPortfolio, STARTING_BALANCE_USDC,
 };
+use crate::pretrade_gate::{GateConfig, GateDecision, PretradeGate};
 use crate::risk_manager::{RiskConfig, RiskManager};
 use crate::strategy::{StrategyController, StrategyMode, StrategySnapshot};
 use crate::timed_mutex::TimedMutex;
@@ -129,6 +131,7 @@ pub struct PaperEngine {
     engine_started_at: Instant,
     strategy_controller: Arc<StrategyController>,
     strategy_mode_explicit_env: bool,
+    pretrade_gate: PretradeGate,
 }
 
 /// Snapshot of the currently active fill window, if any.
@@ -395,6 +398,7 @@ pub struct WarmState {
 }
 
 impl FillWindowSnapshot {
+    #[cfg(feature = "legacy-fill-window")]
     fn new(token_id: String, side: OrderSide, entry_price: f64, countdown: Duration) -> Self {
         Self {
             token_id,
@@ -452,7 +456,7 @@ impl PaperEngine {
         }
         Ok(Self {
             portfolio: Arc::new(Mutex::new(PaperPortfolio::new())),
-            book_store,
+            book_store: Arc::clone(&book_store),
             activity,
             risk: Arc::new(TimedMutex::new(
                 "risk",
@@ -494,6 +498,7 @@ impl PaperEngine {
             engine_started_at: Instant::now(),
             strategy_controller,
             strategy_mode_explicit_env,
+            pretrade_gate: PretradeGate::new(book_store),
         })
     }
 
@@ -1698,9 +1703,46 @@ impl PaperEngine {
             }
         }
 
-        let filled = self
-            .check_fill_window(&signal.token_id, entry_price, signal.side)
-            .await;
+        // ── FreshnessGate (replaces fixed fill window) ─────────────────
+        let gate_cfg = GateConfig::from_env();
+        let price_gate = (entry_price * 1_000.0).round() as u64;
+        let gate_result = self.pretrade_gate.check(
+            &signal.token_id,
+            signal.side,
+            price_gate,
+            gate_cfg.stale_ms,
+            gate_cfg.max_drift_bps,
+            gate_cfg.post_only,
+        );
+        let filled = match gate_result {
+            GateDecision::Proceed => {
+                crate::hot_metrics::counters()
+                    .gate_proceed
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                true
+            }
+            GateDecision::SkipStale => {
+                crate::hot_metrics::counters()
+                    .gate_skip_stale
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                warn!(token_id = %signal.token_id, "⛔ Gate: stale book snapshot — signal dropped");
+                false
+            }
+            GateDecision::SkipDrift { bps } => {
+                crate::hot_metrics::counters()
+                    .gate_skip_drift
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                warn!(token_id = %signal.token_id, drift_bps = bps, "⛔ Gate: drift too large — signal dropped");
+                false
+            }
+            GateDecision::SkipPostOnlyCross => {
+                crate::hot_metrics::counters()
+                    .gate_skip_post_only
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                warn!(token_id = %signal.token_id, "⛔ Gate: post-only cross — signal dropped");
+                false
+            }
+        };
 
         if !filled {
             // Record this token in the abort cooldown map
@@ -2038,6 +2080,7 @@ impl PaperEngine {
     ///
     /// Defaults to **immediate fill** (0 ms) for ultra-low-latency paper mode.
     /// Set `PAPER_FILL_WINDOW_MS > 0` to re-enable timed drift checks.
+    #[cfg(feature = "legacy-fill-window")]
     async fn check_fill_window(&self, token_id: &str, entry_price: f64, side: OrderSide) -> bool {
         let realism_mode = std::env::var("PAPER_REALISM_MODE")
             .ok()
@@ -2144,6 +2187,7 @@ impl PaperEngine {
         true
     }
 
+    #[cfg(feature = "legacy-fill-window")]
     fn adaptive_fill_policy(
         &self,
         _token_id: &str,

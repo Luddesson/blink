@@ -992,6 +992,17 @@ async fn main() -> Result<()> {
                     let worker_handle = tokio::runtime::Handle::current();
                     tokio::task::spawn_blocking(move || {
                         while let Some(sig) = worker_handle.block_on(rx.recv()) {
+                            // Measure QueueWait from enqueue to worker pickup.
+                            let _qw_worker = engine::hot_metrics::StageTimer::from_instant(
+                                engine::hot_metrics::HotStage::QueueWait,
+                                sig.enqueued_at,
+                            );
+                            tracing::debug!(
+                                intent_id = sig.intent_id,
+                                token_id = %sig.token_id,
+                                "signal_pipeline: worker processing signal"
+                            );
+                            drop(_qw_worker);
                             let p = Arc::clone(&paper_worker);
                             if let Some(twin) = twin_worker.clone() {
                                 worker_handle.block_on(async {
@@ -1002,6 +1013,21 @@ async fn main() -> Result<()> {
                             }
                         }
                     });
+                }
+
+                // Deadline check — drop signals older than 50 ms before queuing.
+                let elapsed_ms = signal.enqueued_at.elapsed().as_millis() as u64;
+                if elapsed_ms > 50 {
+                    engine::hot_metrics::counters()
+                        .signal_dispatcher_dropped
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    tracing::warn!(
+                        intent_id = signal.intent_id,
+                        token_id = %signal.token_id,
+                        elapsed_ms,
+                        "signal_pipeline: dispatcher deadline exceeded, signal dropped"
+                    );
+                    continue;
                 }
 
                 if let Some(tx) = token_senders.get(&token_id) {
@@ -1277,6 +1303,16 @@ async fn main() -> Result<()> {
                     let worker_handle = tokio::runtime::Handle::current();
                     tokio::task::spawn_blocking(move || {
                         while let Some(sig) = worker_handle.block_on(rx.recv()) {
+                            let _qw_worker = engine::hot_metrics::StageTimer::from_instant(
+                                engine::hot_metrics::HotStage::QueueWait,
+                                sig.enqueued_at,
+                            );
+                            tracing::debug!(
+                                intent_id = sig.intent_id,
+                                token_id = %sig.token_id,
+                                "signal_pipeline: worker processing signal"
+                            );
+                            drop(_qw_worker);
                             let l = Arc::clone(&live_worker);
                             if let Some(twin) = twin_worker.clone() {
                                 worker_handle.block_on(async {
@@ -1287,6 +1323,20 @@ async fn main() -> Result<()> {
                             }
                         }
                     });
+                }
+
+                let elapsed_ms = signal.enqueued_at.elapsed().as_millis() as u64;
+                if elapsed_ms > 50 {
+                    engine::hot_metrics::counters()
+                        .signal_dispatcher_dropped
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    tracing::warn!(
+                        intent_id = signal.intent_id,
+                        token_id = %signal.token_id,
+                        elapsed_ms,
+                        "signal_pipeline: dispatcher deadline exceeded, signal dropped"
+                    );
+                    continue;
                 }
 
                 if let Some(tx) = token_senders.get(&token_id) {

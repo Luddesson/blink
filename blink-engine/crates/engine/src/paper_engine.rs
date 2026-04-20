@@ -1821,6 +1821,9 @@ impl PaperEngine {
         // Record fill in risk manager for VaR tracking (does not affect daily P&L).
         self.risk.lock_or_recover().record_fill(size_usdc);
 
+        // TODO Phase 5: paper through router
+        // (RouterFillHook::on_full_fill wired here once paper engine routes through OrderRouter)
+
         // 2C: Mark this (token, side) as recently filled to prevent tranche re-entry.
         {
             let dedup_key = format!("{}:{}", signal.token_id, signal.side);

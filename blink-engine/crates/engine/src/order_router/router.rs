@@ -1,8 +1,9 @@
 //! `OrderRouter` — async submit actor with per-market queues and worker pool.
 
+use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use tokio::sync::mpsc;
@@ -20,6 +21,14 @@ use super::state::{OrderState, PendingOrder};
 const INBOUND_DEPTH: usize = 4_096;
 const WORKER_QUEUE_DEPTH: usize = 128;
 const SUBMIT_WORKERS: usize = 8;
+/// How long a terminal entry is retained in the store before GC evicts it.
+const TERMINAL_RETENTION: Duration = Duration::from_secs(120);
+/// GC sweep interval.
+const GC_INTERVAL: Duration = Duration::from_secs(30);
+/// Soft cap on live store size; overflow forces eviction of oldest terminals.
+const STORE_SOFT_CAP: usize = 10_000;
+/// Ring-buffer size for recent evictions (debug / observability).
+const TERMINAL_RING_CAP: usize = 100;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -60,6 +69,14 @@ impl Default for RouterCounters {
 
 // ─── OrderRouter ──────────────────────────────────────────────────────────────
 
+/// Record of a recently evicted terminal order (debug / observability).
+#[derive(Debug, Clone)]
+pub struct TerminalRingEntry {
+    pub intent_id: u64,
+    pub state: OrderState,
+    pub terminal_at: Instant,
+}
+
 pub struct OrderRouter {
     inbound_tx: mpsc::Sender<OrderIntent>,
     inbound_rx: tokio::sync::Mutex<Option<mpsc::Receiver<OrderIntent>>>,
@@ -68,6 +85,8 @@ pub struct OrderRouter {
     /// Shared lock-free admission gate. Installed once via
     /// [`OrderRouter::set_risk_gate`] during engine startup.
     gate: OnceLock<Arc<StreamRiskGate>>,
+    /// Bounded ring buffer of recently GC'd terminal entries.
+    pub terminal_ring: Arc<Mutex<VecDeque<TerminalRingEntry>>>,
 }
 
 impl OrderRouter {
@@ -79,6 +98,7 @@ impl OrderRouter {
             store: Arc::new(DashMap::new()),
             counters: Arc::new(RouterCounters::default()),
             gate: OnceLock::new(),
+            terminal_ring: Arc::new(Mutex::new(VecDeque::with_capacity(TERMINAL_RING_CAP))),
         }
     }
 
@@ -238,6 +258,19 @@ impl OrderRouter {
                 rr = (rr + 1) % SUBMIT_WORKERS;
             }
         });
+
+        // ── Terminal-state GC sweeper ───────────────────────────────────────
+        let s_gc = Arc::clone(&store);
+        let ring_gc = Arc::clone(&self.terminal_ring);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(GC_INTERVAL);
+            // First tick fires immediately; skip it so the store has time to fill.
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                gc_sweep(&s_gc, &ring_gc);
+            }
+        });
     }
 
     pub fn pending_count(&self) -> usize {
@@ -326,6 +359,81 @@ impl Default for OrderRouter {
 }
 
 // ─── Submit worker ────────────────────────────────────────────────────────────
+
+/// Evicts terminal `PendingOrder` entries older than `TERMINAL_RETENTION`.
+///
+/// If the store exceeds `STORE_SOFT_CAP`, additionally evicts the oldest
+/// terminal entries until back under the cap. Every eviction increments
+/// `router_gc_evicted_total` and is pushed into the `terminal_ring` (capped
+/// at `TERMINAL_RING_CAP`).
+fn gc_sweep(
+    store: &PendingOrderStore,
+    ring: &Mutex<VecDeque<TerminalRingEntry>>,
+) {
+    // Collect candidates: (intent_id, state, terminal_at) for terminal entries.
+    let mut terminals: Vec<(u64, OrderState, Instant)> = store
+        .iter()
+        .filter_map(|e| {
+            let p = e.value();
+            p.terminal_at
+                .filter(|_| p.state.is_terminal())
+                .map(|ts| (p.intent_id, p.state.clone(), ts))
+        })
+        .collect();
+
+    // Oldest terminal first.
+    terminals.sort_by_key(|(_, _, ts)| *ts);
+
+    let now = Instant::now();
+    let mut evicted = 0u64;
+
+    // Phase 1: drop anything past retention.
+    for (intent_id, state, terminal_at) in terminals.iter() {
+        if now.duration_since(*terminal_at) > TERMINAL_RETENTION {
+            if store.remove(intent_id).is_some() {
+                push_ring(ring, TerminalRingEntry {
+                    intent_id: *intent_id,
+                    state: state.clone(),
+                    terminal_at: *terminal_at,
+                });
+                evicted += 1;
+            }
+        }
+    }
+
+    // Phase 2: soft-cap enforcement (oldest terminal first, already sorted).
+    if store.len() > STORE_SOFT_CAP {
+        for (intent_id, state, terminal_at) in terminals.iter() {
+            if store.len() <= STORE_SOFT_CAP {
+                break;
+            }
+            if store.remove(intent_id).is_some() {
+                push_ring(ring, TerminalRingEntry {
+                    intent_id: *intent_id,
+                    state: state.clone(),
+                    terminal_at: *terminal_at,
+                });
+                evicted += 1;
+            }
+        }
+    }
+
+    if evicted > 0 {
+        hot_metrics::counters()
+            .router_gc_evicted_total
+            .fetch_add(evicted, Ordering::Relaxed);
+        info!(evicted, remaining = store.len(), "OrderRouter GC sweep");
+    }
+}
+
+fn push_ring(ring: &Mutex<VecDeque<TerminalRingEntry>>, entry: TerminalRingEntry) {
+    if let Ok(mut g) = ring.lock() {
+        if g.len() >= TERMINAL_RING_CAP {
+            g.pop_front();
+        }
+        g.push_back(entry);
+    }
+}
 
 async fn submit_one(
     intent: OrderIntent,

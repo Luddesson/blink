@@ -4,6 +4,14 @@
 //! authentication headers.  When `dry_run` is `true` (which is always the case
 //! when `Config::live_trading == false`), order submission is logged but no
 //! real HTTP request is sent.
+//!
+//! ## Environment knobs (submit path)
+//!
+//! | Variable                  | Default | Description                                  |
+//! |---------------------------|---------|----------------------------------------------|
+//! | `BLINK_SUBMIT_TIMEOUT_MS` | `2000`  | HTTP total timeout for order submission (ms) |
+//! | `BLINK_CONNECT_TIMEOUT_MS`| `500`   | TCP connect timeout (ms)                     |
+//! | `BLINK_SUBMIT_MAX_ATTEMPTS`| `2`    | Max submit attempts before giving up         |
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -22,6 +30,21 @@ use crate::types::TimeInForce;
 type HmacSha256 = Hmac<Sha256>;
 
 // ─── Public types ────────────────────────────────────────────────────────────
+
+/// Outcome of [`OrderExecutor::submit_order`].
+///
+/// Returned as `Ok(SubmitOutcome)` rather than `Err` so the caller can
+/// distinguish a *definitive* failure (bad auth, malformed order) from a
+/// *timeout* where the order may already be live on the exchange.
+#[derive(Debug)]
+pub enum SubmitOutcome {
+    /// Exchange acknowledged the order.
+    Success(OrderResponse),
+    /// All attempts timed out.  The order **may or may not** have been placed.
+    /// Park the intent in `SubmitUnknown` state and reconcile via
+    /// `GET /order/{id}` — do **not** blindly re-submit.
+    Unknown,
+}
 
 /// Response from `POST /order`.
 #[derive(Debug, Deserialize)]
@@ -74,12 +97,44 @@ impl OrderExecutor {
     /// Constructs an executor from [`Config`].
     ///
     /// `dry_run` is set to `!config.live_trading` automatically.
+    ///
+    /// Client settings are tunable via env vars (see module-level docs).
     pub fn from_config(config: &Config) -> Result<Self> {
+        let submit_timeout_ms = std::env::var("BLINK_SUBMIT_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(2000);
+        let connect_timeout_ms = std::env::var("BLINK_CONNECT_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(500);
+
+        let client = Client::builder()
+            // Total request timeout (covers connect + TLS + send + recv).
+            .timeout(Duration::from_millis(submit_timeout_ms))
+            // Fail fast on unreachable hosts — 500 ms is generous for colocated infra.
+            .connect_timeout(Duration::from_millis(connect_timeout_ms))
+            // HTTP/2 connection keep-alive pings (PING frame every 10 s).
+            .http2_keep_alive_interval(Duration::from_secs(10))
+            // TCP keep-alive probes so the NIC doesn't silently drop idle conns.
+            .tcp_keepalive(Some(Duration::from_secs(30)))
+            // Connection pool: up to 64 idle connections per host.
+            .pool_max_idle_per_host(64)
+            // Evict idle connections after 90 s of inactivity.
+            .pool_idle_timeout(Duration::from_secs(90))
+            // Disable Nagle's algorithm — critical for low-latency HFT submits.
+            .tcp_nodelay(true)
+            .build()
+            .context("failed to build reqwest HTTP client")?;
+
+        tracing::info!(
+            submit_timeout_ms,
+            connect_timeout_ms,
+            "OrderExecutor HTTP client initialised (HFT-tuned)"
+        );
+
         Ok(Self {
-            client: Client::builder()
-                .timeout(Duration::from_secs(10))
-                .build()
-                .context("failed to build reqwest HTTP client")?,
+            client,
             base_url: "https://clob.polymarket.com".to_string(),
             maker_address: config.funder_address.clone(),
             api_key: config.api_key.clone(),
@@ -93,14 +148,21 @@ impl OrderExecutor {
 
     /// Submits a signed order to `POST /order`.
     ///
-    /// Returns the exchange's [`OrderResponse`].  In dry-run mode the order is
-    /// logged and a synthetic success response is returned instead.
+    /// Returns [`SubmitOutcome::Success`] on exchange acknowledgement.  On
+    /// final timeout returns [`SubmitOutcome::Unknown`] — the caller **must
+    /// not** blindly retry; reconcile via `GET /order/{id}` instead.
+    ///
+    /// Retry policy (configurable via env):
+    /// - Max attempts: `BLINK_SUBMIT_MAX_ATTEMPTS` (default 2)
+    /// - Backoff: 50 ms, 150 ms (HFT-safe — avoids queuing behind stale fills)
+    /// - Retryable: timeout, connect error, 5xx, 429
+    /// - Non-retryable: 4xx (except 429) → immediate `Err`
     #[instrument(skip(self, order), fields(token_id = %order.token_id, side = order.side, dry_run = self.dry_run))]
     pub async fn submit_order(
         &self,
         order: &SignedOrder,
         time_in_force: TimeInForce,
-    ) -> Result<OrderResponse> {
+    ) -> Result<SubmitOutcome> {
         let body = build_order_body(order, &self.maker_address, time_in_force);
         let body_json = serde_json::to_string(&body).context("failed to serialise order body")?;
 
@@ -109,34 +171,50 @@ impl OrderExecutor {
                 body = %body_json,
                 "DRY-RUN: would POST /order (live_trading=false)"
             );
-            return Ok(OrderResponse {
+            return Ok(SubmitOutcome::Success(OrderResponse {
                 success: true,
                 order_id: Some("dry-run".to_string()),
                 status: Some("dry_run".to_string()),
                 error_msg: None,
-            });
+            }));
         }
 
+        let max_attempts = std::env::var("BLINK_SUBMIT_MAX_ATTEMPTS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(2);
+
+        // HFT backoff schedule (ms): 50, 150 — stays well under 500 ms total.
+        const BACKOFF_MS: &[u64] = &[50, 150];
+
         let url = format!("{}/order", self.base_url);
-        const MAX_ATTEMPTS: u32 = 4;
-        const BASE_DELAY_MS: u64 = 200;
-
         let mut last_err: Option<anyhow::Error> = None;
+        let mut timed_out_all = false;
 
-        for attempt in 0..MAX_ATTEMPTS {
+        for attempt in 0..max_attempts {
             if attempt > 0 {
-                let delay_ms = BASE_DELAY_MS * 2_u64.pow(attempt - 1);
+                let delay_ms = BACKOFF_MS
+                    .get((attempt - 1) as usize)
+                    .copied()
+                    .unwrap_or(150);
                 warn!(
                     attempt,
                     delay_ms,
                     error = ?last_err,
-                    "POST /order transient error — retrying"
+                    "POST /order transient — retrying"
                 );
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             }
 
-            crate::hot_metrics::counters().submits_started.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let _submit_timer = crate::hot_metrics::StageTimer::start(crate::hot_metrics::HotStage::Submit);
+            crate::hot_metrics::counters()
+                .submits_started
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            crate::hot_metrics::counters()
+                .http_submit_inflight
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let _submit_timer =
+                crate::hot_metrics::StageTimer::start(crate::hot_metrics::HotStage::Submit);
+
             // Rebuild auth headers each attempt: POLY-TIMESTAMP must be fresh.
             let headers = build_auth_headers(
                 &self.api_key,
@@ -159,23 +237,50 @@ impl OrderExecutor {
 
             let resp = match req.send().await {
                 Ok(r) => r,
-                Err(e) if e.is_timeout() || e.is_connect() => {
-                    last_err = Some(anyhow::anyhow!("POST /order network error: {e}"));
+                Err(e) if e.is_timeout() => {
+                    crate::hot_metrics::counters()
+                        .http_submit_inflight
+                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    timed_out_all = true;
+                    last_err = Some(anyhow::anyhow!("POST /order timeout: {e}"));
                     continue;
                 }
-                Err(e) => return Err(anyhow::anyhow!("POST /order network error: {e}")),
+                Err(e) if e.is_connect() => {
+                    crate::hot_metrics::counters()
+                        .http_submit_inflight
+                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    timed_out_all = false;
+                    last_err = Some(anyhow::anyhow!("POST /order connect error: {e}"));
+                    continue;
+                }
+                Err(e) => {
+                    crate::hot_metrics::counters()
+                        .http_submit_inflight
+                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    return Err(anyhow::anyhow!("POST /order network error: {e}"));
+                }
             };
+
+            crate::hot_metrics::counters()
+                .http_submit_inflight
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            timed_out_all = false;
 
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
 
-            // Rate-limited or server-side error → retryable.
+            // Rate-limited (429) or server error (5xx) → retryable.
             if status.as_u16() == 429 || status.is_server_error() {
                 last_err = Some(anyhow::anyhow!("POST /order returned {status}: {text}"));
                 continue;
             }
 
-            // Any other non-2xx is a permanent client error.
+            // Non-idempotent 4xx client error — retrying would be wrong.
+            if status.is_client_error() {
+                anyhow::bail!("POST /order rejected (HTTP {status}): {text}");
+            }
+
+            // Any remaining non-2xx is unexpected — surface immediately.
             if !status.is_success() {
                 anyhow::bail!("POST /order returned {status}: {text}");
             }
@@ -184,27 +289,47 @@ impl OrderExecutor {
                 serde_json::from_str(&text).context("failed to parse POST /order response")?;
 
             drop(_submit_timer);
-            let _ack_timer = crate::hot_metrics::StageTimer::start(crate::hot_metrics::HotStage::Ack);
-
+            let _ack_timer =
+                crate::hot_metrics::StageTimer::start(crate::hot_metrics::HotStage::Ack);
             drop(_ack_timer);
+
             if !parsed.success {
                 let msg = parsed.error_msg.as_deref().unwrap_or("");
                 if msg.to_lowercase().contains("transient") {
                     last_err = Some(anyhow::anyhow!("POST /order transient error: {msg}"));
                     continue;
                 }
-                // Non-transient application error — no point retrying.
                 error!(error = ?parsed.error_msg, "❌ POST /order rejected by exchange");
-                crate::hot_metrics::counters().submits_rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::hot_metrics::counters()
+                    .submits_rejected
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             } else {
-                crate::hot_metrics::counters().submits_ack.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::hot_metrics::counters()
+                    .submits_ack
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
 
-            return Ok(parsed);
+            return Ok(SubmitOutcome::Success(parsed));
         }
 
-        Err(last_err
-            .unwrap_or_else(|| anyhow::anyhow!("POST /order failed after {MAX_ATTEMPTS} attempts")))
+        // All attempts exhausted.
+        if timed_out_all {
+            // Every attempt timed out: we cannot know whether the last attempt
+            // reached the exchange.  Return Unknown so the caller can park the
+            // intent without re-submitting (which could double-fill).
+            warn!(
+                max_attempts,
+                "POST /order: all attempts timed out — returning SubmitOutcome::Unknown"
+            );
+            crate::hot_metrics::counters()
+                .submit_unknown
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(SubmitOutcome::Unknown)
+        } else {
+            Err(last_err.unwrap_or_else(|| {
+                anyhow::anyhow!("POST /order failed after {max_attempts} attempts")
+            }))
+        }
     }
 
     // ─── Cancellation ────────────────────────────────────────────────────────

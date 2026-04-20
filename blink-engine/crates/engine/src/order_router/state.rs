@@ -35,9 +35,12 @@ pub struct PendingOrder {
     pub intent_id: u64,
     pub order_id: Option<String>,
     pub client_order_id: String,
+    pub market_id: String,
     pub token_id: String,
     pub side: OrderSide,
     pub size_usdc: f64,
+    /// Integer-scaled size (USDC × 1_000) used by the risk gate.
+    pub size_u64: u64,
     pub entry_price: f64,
     pub state: OrderState,
     pub submit_attempts: u32,
@@ -48,9 +51,11 @@ pub struct PendingOrder {
 impl PendingOrder {
     pub fn new(
         intent_id: u64,
+        market_id: String,
         token_id: String,
         side: OrderSide,
         size_usdc: f64,
+        size_u64: u64,
         entry_price: f64,
     ) -> Self {
         let now = Instant::now();
@@ -58,9 +63,11 @@ impl PendingOrder {
             intent_id,
             order_id: None,
             client_order_id: format!("blk-{intent_id}"),
+            market_id,
             token_id,
             side,
             size_usdc,
+            size_u64,
             entry_price,
             state: OrderState::Created,
             submit_attempts: 0,

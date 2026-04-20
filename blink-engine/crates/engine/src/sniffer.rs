@@ -77,12 +77,14 @@ impl Sniffer {
             event_end_time: None,
             source_wallet: self.rn1_wallet.clone(),
             wallet_weight: 1.0,
-            signal_source: "rn1".to_string(),
+            signal_source: "ws".to_string(),
             analysis_id: None,
             intent_id: crate::types::next_intent_id(),
-            market_id: None, // TODO: hydrate market_id from WS order event (market field is condition_id)
+            // WS order.market is the condition_id (market-level ID).
+            market_id: Some(order.market.clone()),
             source_order_id: Some(order.order_id.clone()),
             source_seq: None,
+            // Overwritten to Instant::now() in ws_client right before channel send.
             enqueued_at: Instant::now(),
         }
     }

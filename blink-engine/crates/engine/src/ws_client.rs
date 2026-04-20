@@ -34,6 +34,7 @@ use crate::{
     activity_log::{push as log_push, ActivityLog, EntryKind},
     buffer_pool::BufferPool,
     config::Config,
+    hot_metrics::{counters as hot_counters, HotStage, StageTimer},
     order_book::OrderBookStore,
     sniffer::Sniffer,
     tick_recorder::{now_ms, TickRecord},
@@ -46,7 +47,8 @@ use crate::{
 const PING_INTERVAL: Duration = Duration::from_secs(10);
 /// Conservative initial backoff prevents Cloudflare rate-limiting after an RST.
 const INITIAL_BACKOFF: Duration = Duration::from_millis(1_000);
-const MAX_BACKOFF: Duration = Duration::from_secs(30);
+/// Capped at 5s for HFT: shorter reconnect window, fewer missed events.
+const MAX_BACKOFF: Duration = Duration::from_secs(5);
 /// If we receive no data at all (neither market events nor pong replies) for
 /// this long, the connection is considered dead and we force a reconnect.
 #[allow(dead_code)] // reserved for pong watchdog
@@ -122,9 +124,18 @@ pub async fn run_ws(
     let buffer_pool = BufferPool::default(); // 64 buffers, 8KB each
     let mut backoff = INITIAL_BACKOFF;
     let mut consecutive_failures: u32 = 0;
+    let mut last_disconnect_at: Option<std::time::Instant> = None;
 
     loop {
         info!(url = %config.ws_url, consecutive_failures, "Connecting to WebSocket feed");
+        // Increment reconnect counter and record gap since last disconnect.
+        hot_counters().ws_reconnects_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(dis) = last_disconnect_at {
+            hot_counters().ws_gap_ms_last.store(
+                dis.elapsed().as_millis() as i64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
         if let Some(ref hm) = health_metrics {
             hm.reconnect_attempts.fetch_add(1, Ordering::Relaxed);
         }
@@ -193,6 +204,7 @@ pub async fn run_ws(
         {
             Ok(()) => {
                 ws_live.store(false, Ordering::Relaxed);
+                last_disconnect_at = Some(std::time::Instant::now());
                 // Even after a clean close, pause briefly so Cloudflare doesn't
                 // see us as a connection-churning bot.
                 let pause = jittered(Duration::from_secs(5));
@@ -209,6 +221,7 @@ pub async fn run_ws(
             }
             Err(err) => {
                 ws_live.store(false, Ordering::Relaxed);
+                last_disconnect_at = Some(std::time::Instant::now());
                 let session_secs = session_start.elapsed().as_secs();
 
                 // Reset backoff if we had a sustained successful connection,
@@ -366,7 +379,8 @@ async fn connect_and_run(
                         return Err(anyhow::anyhow!("WebSocket read error: {err}"));
                     }
                     Some(Ok(msg)) => {
-                        _last_data_at = Instant::now();
+                        let frame_received_at = std::time::Instant::now();
+                        _last_data_at = frame_received_at;
                         handle_message(
                             msg,
                             book_store,
@@ -378,6 +392,7 @@ async fn connect_and_run(
                             config.ws_parse_error_preview_chars,
                             health_metrics,
                             buffer_pool,
+                            frame_received_at,
                         );
                     }
                 }
@@ -481,6 +496,7 @@ mod tests {
             120,
             None,
             &buffer_pool,
+            std::time::Instant::now(),
         );
 
         let best_bid = store
@@ -527,6 +543,7 @@ mod tests {
             120,
             None,
             &buffer_pool,
+            std::time::Instant::now(),
         );
 
         let best_bid = store
@@ -557,6 +574,7 @@ fn handle_message(
     parse_error_preview_chars: usize,
     health_metrics: Option<&Arc<WsHealthMetrics>>,
     buffer_pool: &BufferPool,
+    frame_received_at: std::time::Instant,
 ) {
     match msg {
         Message::Text(text) => {
@@ -609,7 +627,9 @@ fn handle_message(
                         return;
                     }
                     book_store.apply_update(&event);
-                    if let Some(signal) = sniffer.check_order_event(&event) {
+                    if let Some(mut signal) = sniffer.check_order_event(&event) {
+                        let _detect = StageTimer::from_instant(HotStage::Detect, frame_received_at);
+                        signal.enqueued_at = std::time::Instant::now();
                         if let Err(err) = signal_tx.try_send(signal) {
                             warn!(error = %err, "RN1 signal channel full — signal dropped");
                         }
@@ -641,7 +661,9 @@ fn handle_message(
                                     }
                                 }
                                 book_store.apply_update(&event);
-                                if let Some(signal) = sniffer.check_order_event(&event) {
+                                if let Some(mut signal) = sniffer.check_order_event(&event) {
+                                    let _detect = StageTimer::from_instant(HotStage::Detect, frame_received_at);
+                                    signal.enqueued_at = std::time::Instant::now();
                                     if let Err(send_err) = signal_tx.try_send(signal) {
                                         warn!(error = %send_err, "RN1 signal channel full — signal dropped");
                                     }

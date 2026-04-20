@@ -5,9 +5,19 @@
 //! `"0.65"` → `650`, `"1500"` → `1_500_000`.
 
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
+
+static INTENT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Returns the next monotonic intent ID for signal tracking.
+/// Called at signal ingress from each producer (sniffer, rn1_poller, etc.).
+#[inline]
+pub fn next_intent_id() -> u64 {
+    INTENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
 
 // ─── Order Side ─────────────────────────────────────────────────────────────
 
@@ -237,6 +247,17 @@ pub struct RN1Signal {
     pub signal_source: String,
     /// Analysis ID from the alpha sidecar (for position→signal correlation).
     pub analysis_id: Option<String>,
+    /// Monotonic ID generated at ingress; used for cross-system signal correlation.
+    pub intent_id: u64,
+    /// Polymarket condition_id / market id, if available from the signal source.
+    pub market_id: Option<String>,
+    /// Upstream wallet/trade id from the source system (tx hash, order id, etc.).
+    pub source_order_id: Option<String>,
+    /// Sequence number from the upstream source feed, if present.
+    pub source_seq: Option<u64>,
+    /// Wall-clock instant at which the signal was placed into the inbound channel.
+    /// Not serialized — stamped at the production site immediately before `try_send`.
+    pub enqueued_at: std::time::Instant,
 }
 
 /// Simplified signal used for position tracking and hedge detection

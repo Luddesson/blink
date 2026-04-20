@@ -266,6 +266,11 @@ pub async fn run_rn1_poller(
                         wallet_weight,
                         signal_source: "rn1".to_string(),
                         analysis_id: None,
+                        intent_id: crate::types::next_intent_id(),
+                        market_id: entry.condition_id.clone(),
+                        source_order_id: Some(hash.clone()),
+                        source_seq: None,
+                        enqueued_at: Instant::now(),
                     };
 
                     total_signals += 1;

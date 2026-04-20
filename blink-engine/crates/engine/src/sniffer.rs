@@ -79,6 +79,11 @@ impl Sniffer {
             wallet_weight: 1.0,
             signal_source: "rn1".to_string(),
             analysis_id: None,
+            intent_id: crate::types::next_intent_id(),
+            market_id: None, // TODO: hydrate market_id from WS order event (market field is condition_id)
+            source_order_id: Some(order.order_id.clone()),
+            source_seq: None,
+            enqueued_at: Instant::now(),
         }
     }
 

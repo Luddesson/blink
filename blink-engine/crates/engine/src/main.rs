@@ -1267,6 +1267,11 @@ async fn main() -> Result<()> {
                         wallet_weight: 1.0,
                         signal_source: "alpha".to_string(),
                         analysis_id: Some(signal.analysis_id.clone()),
+                        intent_id: engine::types::next_intent_id(),
+                        market_id: None, // TODO: hydrate market_id from alpha signal
+                        source_order_id: None,
+                        source_seq: None,
+                        enqueued_at: std::time::Instant::now(),
                     };
 
                     alpha_handle.block_on(paper.handle_signal(rn1_compat));

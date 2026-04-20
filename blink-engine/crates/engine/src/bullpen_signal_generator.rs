@@ -232,6 +232,11 @@ impl BullpenSignalGenerator {
                 wallet_weight: conv.convergence_score.clamp(0.0, 1.0),
                 signal_source: "rn1".to_string(),
                 analysis_id: None,
+                intent_id: crate::types::next_intent_id(),
+                market_id: None, // TODO: hydrate market_id from bullpen discovery data
+                source_order_id: None,
+                source_seq: None,
+                enqueued_at: Instant::now(),
             };
 
             match self.signal_tx.send(signal).await {

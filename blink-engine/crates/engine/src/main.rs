@@ -1013,6 +1013,7 @@ async fn main() -> Result<()> {
         }
 
         Arc::clone(&live).spawn_reconciliation_worker();
+        live.spawn_router_workers().await;
 
         // Spawn heartbeat — keeps the Polymarket session alive every 8s.
         {

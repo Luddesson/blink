@@ -14,6 +14,8 @@ use crate::hot_metrics::{HotStage, StageTimer};
 use crate::mev_router::MevRouter;
 use crate::order_book::OrderBookStore;
 use crate::order_executor::OrderExecutor;
+use crate::order_router::reconciler::spawn_reconciler;
+use crate::order_router::{OrderIntent, OrderRouter};
 use crate::order_signer::{sign_order_with_vault_policy, OrderParams, OrderSigningPolicy};
 use crate::paper_portfolio::{drift_threshold, PaperPortfolio, STARTING_BALANCE_USDC};
 use crate::risk_manager::{RiskConfig, RiskManager};
@@ -67,6 +69,7 @@ pub struct LiveEngine {
     /// insert/remove so that crash recovery can reconcile against the exchange.
     wal_path: String,
     strategy_controller: Arc<StrategyController>,
+    pub order_router: OrderRouter,
 }
 
 /// Point-in-time snapshot of live SLO metrics for dashboards and alerting.
@@ -232,11 +235,24 @@ impl LiveEngine {
             wal_path: std::env::var("PENDING_ORDERS_WAL_PATH")
                 .unwrap_or_else(|_| "logs/live_pending_orders_wal.json".to_string()),
             strategy_controller,
+            order_router: OrderRouter::new(),
         })
     }
 
     pub fn strategy_snapshot(&self) -> StrategySnapshot {
         self.strategy_controller.snapshot()
+    }
+
+    /// Spawn the router's submit-worker pool and reconciler.
+    /// Must be called once after `Arc<LiveEngine>` is constructed.
+    pub async fn spawn_router_workers(&self) {
+        let exec = Arc::new(self.executor.clone());
+        self.order_router.spawn_workers(Arc::clone(&exec)).await;
+        spawn_reconciler(
+            Arc::clone(&self.order_router.store),
+            Arc::clone(&self.order_router.counters),
+            exec,
+        );
     }
 
     /// Atomically persist the current `pending_orders` map to the WAL file.
@@ -392,7 +408,7 @@ impl LiveEngine {
         // ── Stage: Enrich (intent classification + price extraction) ────────
         let _enrich_timer = StageTimer::start(HotStage::Enrich);
         self.sync_risk_closes_from_portfolio().await;
-        self.run_reconciliation_pass().await;
+        // reconciliation is now owned by the OrderRouter reconciler task (250 ms sweeps)
 
         let intent = self.classify_signal_intent(&signal).await;
         if matches!(
@@ -543,7 +559,7 @@ impl LiveEngine {
                     ),
                 );
             }
-            (true, None)
+            (true, None::<String>)
         } else {
             let vault = self
                 .vault
@@ -553,31 +569,49 @@ impl LiveEngine {
             policy.nonce = self.nonce_counter.fetch_add(1, Ordering::Relaxed);
             drop(_sign_timer);
             match sign_order_with_vault_policy(vault.as_ref(), &params, policy) {
-                Ok(signed) => match self.executor.submit_order(&signed, TimeInForce::Gtc).await {
-                    Ok(resp) => {
-                        if resp.success {
-                            info!(order_id = ?resp.order_id, "✅ LIVE order submitted");
+                Ok(signed) => {
+                    // Build OrderIntent with pre-signed payload for idempotent retry.
+                    let order_intent = OrderIntent {
+                        intent_id: signal.intent_id,
+                        market_id: signal.market_id.clone().unwrap_or_default(),
+                        token_id: signal.token_id.clone(),
+                        side: signal.side,
+                        price_u64: signal.price,
+                        size_u64: (size_usdc * 1_000.0) as u64,
+                        tif: TimeInForce::Gtc,
+                        strategy_mode: strategy_snapshot.current_mode,
+                        requested_at: std::time::Instant::now(),
+                        signed_payload: Some(signed),
+                    };
+                    match self.order_router.submit(order_intent) {
+                        Ok(()) => {
+                            info!(
+                                intent_id = signal.intent_id,
+                                "→ OrderRouter: intent queued for submission"
+                            );
                             if let Some(ref log) = self.activity {
                                 log_push(
                                     log,
                                     EntryKind::Fill,
                                     format!(
-                                        "LIVE SUBMITTED {} @{:.3} ${:.2} id={:?}",
-                                        signal.side, entry_price, size_usdc, resp.order_id
+                                        "ROUTER QUEUED {} @{:.3} ${:.2}",
+                                        signal.side, entry_price, size_usdc
                                     ),
                                 );
                             }
-                            (true, resp.order_id.clone())
-                        } else {
-                            error!(error = ?resp.error_msg, "❌ LIVE order rejected");
+                            // Fill accounting is performed by the router reconciler.
+                            (true, None)
+                        }
+                        Err(e) => {
+                            error!(
+                                intent_id = signal.intent_id,
+                                error = %e,
+                                "❌ OrderRouter full — intent dropped"
+                            );
                             (false, None)
                         }
                     }
-                    Err(e) => {
-                        error!(error = %e, "❌ LIVE submit failed");
-                        (false, None)
-                    }
-                },
+                }
                 Err(e) => {
                     error!(error = %e, "❌ EIP-712 signing failed");
                     (false, None)

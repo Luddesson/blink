@@ -138,6 +138,23 @@ pub struct HotCounters {
     pub reconcile_lag_ms_last: AtomicI64,
     pub partial_fills: AtomicU64,
     pub full_fills: AtomicU64,
+    /// Total WebSocket reconnect attempts.
+    pub ws_reconnects_total: AtomicU64,
+    /// Milliseconds between the last two WS sessions (gap latency).
+    pub ws_gap_ms_last: AtomicI64,
+    /// In-flight HTTP submit requests (incremented on send, decremented on
+    /// response/timeout). Exposed as `blink_http_submit_inflight` gauge.
+    pub http_submit_inflight: AtomicI64,
+    // TODO: wire a custom reqwest connector/middleware to increment these.
+    /// Total TLS handshakes initiated (best-effort; requires custom connector).
+    pub tls_handshakes_total: AtomicU64,
+    /// Total DNS lookups initiated (best-effort; requires custom resolver hook).
+    pub dns_lookups_total: AtomicU64,
+    // ─── Router-specific counters (Phase 2) ──────────────────────────────────
+    pub router_dropped_full: AtomicU64,
+    pub router_retries_total: AtomicU64,
+    pub router_reconcile_sweeps: AtomicU64,
+    pub pending_orders_count: AtomicI64,
 }
 
 impl HotCounters {
@@ -155,6 +172,15 @@ impl HotCounters {
             reconcile_lag_ms_last: AtomicI64::new(0),
             partial_fills: AtomicU64::new(0),
             full_fills: AtomicU64::new(0),
+            ws_reconnects_total: AtomicU64::new(0),
+            ws_gap_ms_last: AtomicI64::new(0),
+            http_submit_inflight: AtomicI64::new(0),
+            tls_handshakes_total: AtomicU64::new(0),
+            dns_lookups_total: AtomicU64::new(0),
+            router_dropped_full: AtomicU64::new(0),
+            router_retries_total: AtomicU64::new(0),
+            router_reconcile_sweeps: AtomicU64::new(0),
+            pending_orders_count: AtomicI64::new(0),
         }
     }
 }
@@ -254,10 +280,27 @@ pub fn render_prom() -> String {
     counter!(out, "blink_hot_heartbeat_misses_total",  c.heartbeat_misses.load(Ordering::Relaxed));
     counter!(out, "blink_hot_partial_fills_total",     c.partial_fills.load(Ordering::Relaxed));
     counter!(out, "blink_hot_full_fills_total",        c.full_fills.load(Ordering::Relaxed));
+    counter!(out, "blink_hot_ws_reconnects_total",     c.ws_reconnects_total.load(Ordering::Relaxed));
+    counter!(out, "blink_http_tls_handshakes_total",   c.tls_handshakes_total.load(Ordering::Relaxed));
+    counter!(out, "blink_http_dns_lookups_total",      c.dns_lookups_total.load(Ordering::Relaxed));
 
     let lag = c.reconcile_lag_ms_last.load(Ordering::Relaxed);
     out.push_str(&format!(
         "# TYPE blink_hot_reconcile_lag_ms gauge\nblink_hot_reconcile_lag_ms {lag}\n"
+    ));
+    let ws_gap = c.ws_gap_ms_last.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        "# TYPE blink_hot_ws_gap_ms_last gauge\nblink_hot_ws_gap_ms_last {ws_gap}\n"
+    ));
+    let inflight = c.http_submit_inflight.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        "# TYPE blink_http_submit_inflight gauge\nblink_http_submit_inflight {inflight}\n"
+    ));
+    // http_submit_p99_ms is exposed via blink_stage_submit_ns{quantile="0.99"} / 1_000_000.
+    let (_, _, submit_p99_ns) = m.histograms.percentiles(HotStage::Submit);
+    let submit_p99_ms = submit_p99_ns / 1_000_000;
+    out.push_str(&format!(
+        "# TYPE blink_http_submit_p99_ms gauge\nblink_http_submit_p99_ms {submit_p99_ms}\n"
     ));
 
     for &stage in HotStage::ALL {

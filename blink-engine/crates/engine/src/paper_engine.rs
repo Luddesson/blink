@@ -580,6 +580,7 @@ impl PaperEngine {
 
     /// Process one RN1 signal end-to-end (async — runs fill simulation).
     pub async fn handle_signal(&self, signal: RN1Signal) {
+        // TODO Phase 3: migrate paper_engine to router
         // 5B: Live tick recording — write every RN1 signal to CSV for backtesting.
         {
             let tick_path =

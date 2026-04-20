@@ -64,6 +64,7 @@ pub mod live_engine;
 pub mod mev_router;
 pub mod order_book;
 pub mod order_executor;
+pub mod order_router;
 pub mod order_signer;
 pub mod paper_engine;
 pub mod paper_portfolio;

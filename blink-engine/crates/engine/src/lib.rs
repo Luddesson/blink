@@ -58,6 +58,7 @@ pub mod exit_strategy;
 pub mod gas_oracle;
 pub mod heartbeat;
 pub mod hot_metrics;
+pub mod ingress_dedup;
 pub mod latency_tracker;
 pub mod live_engine;
 pub mod mev_router;

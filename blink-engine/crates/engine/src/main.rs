@@ -928,10 +928,31 @@ async fn main() -> Result<()> {
         let twin_opt = twin_engine.clone();
         let subs_for_signals = Arc::clone(&market_subscriptions);
         let ws_reconnect_for_signals = Arc::clone(&ws_force_reconnect);
+        let dedup = Arc::new(engine::ingress_dedup::IngressDedup::new());
         let mut signal_rx = signal_rx;
         let handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             while let Some(signal) = handle.block_on(signal_rx.recv()) {
+                engine::hot_metrics::counters().signals_in.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // QueueWait: time the signal spent in the channel
+                let _qw = engine::hot_metrics::StageTimer::from_instant(
+                    engine::hot_metrics::HotStage::QueueWait,
+                    signal.enqueued_at,
+                );
+                // Ingress dedup
+                {
+                    let key = engine::ingress_dedup::key_for_signal(&signal);
+                    if !dedup.check_and_insert(&key) {
+                        engine::hot_metrics::counters().dedup_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        tracing::debug!(
+                            order_id = %signal.order_id,
+                            intent_id = signal.intent_id,
+                            "ingress_dedup: duplicate signal dropped"
+                        );
+                        drop(_qw);
+                        continue;
+                    }
+                }
                 latency
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -1163,10 +1184,29 @@ async fn main() -> Result<()> {
 
         let tp = Arc::clone(&trading_paused);
         let twin_opt = twin_engine.clone();
+        let dedup = Arc::new(engine::ingress_dedup::IngressDedup::new());
         let mut signal_rx = signal_rx;
         let handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             while let Some(signal) = handle.block_on(signal_rx.recv()) {
+                engine::hot_metrics::counters().signals_in.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let _qw = engine::hot_metrics::StageTimer::from_instant(
+                    engine::hot_metrics::HotStage::QueueWait,
+                    signal.enqueued_at,
+                );
+                {
+                    let key = engine::ingress_dedup::key_for_signal(&signal);
+                    if !dedup.check_and_insert(&key) {
+                        engine::hot_metrics::counters().dedup_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        tracing::debug!(
+                            order_id = %signal.order_id,
+                            intent_id = signal.intent_id,
+                            "ingress_dedup: duplicate signal dropped"
+                        );
+                        drop(_qw);
+                        continue;
+                    }
+                }
                 latency
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())

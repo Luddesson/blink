@@ -20,6 +20,7 @@ use tracing::{debug, info, warn};
 
 use crate::bullpen_discovery::DiscoveryStore;
 use crate::bullpen_smart_money::ConvergenceStore;
+use crate::ingress_dedup::{key_for_signal, IngressDedup};
 use crate::order_book::OrderBookStore;
 use crate::types::{OrderSide, RN1Signal};
 
@@ -74,6 +75,7 @@ pub struct BullpenSignalGenerator {
     market_subscriptions: Arc<Mutex<Vec<String>>>,
     force_reconnect: Arc<AtomicBool>,
     config: SignalGenConfig,
+    dedup: Arc<IngressDedup>,
     /// Tracks order_ids emitted this session to prevent re-emission on every cycle.
     emitted_ids: HashSet<String>,
     scan_cycle: u64,
@@ -88,6 +90,7 @@ impl BullpenSignalGenerator {
         market_subscriptions: Arc<Mutex<Vec<String>>>,
         force_reconnect: Arc<AtomicBool>,
         config: SignalGenConfig,
+        dedup: Arc<IngressDedup>,
     ) -> Self {
         Self {
             discovery_store,
@@ -97,6 +100,7 @@ impl BullpenSignalGenerator {
             market_subscriptions,
             force_reconnect,
             config,
+            dedup,
             emitted_ids: HashSet::with_capacity(512),
             scan_cycle: 0,
         }
@@ -238,6 +242,12 @@ impl BullpenSignalGenerator {
                 source_seq: None,
                 enqueued_at: Instant::now(),
             };
+
+            let key = key_for_signal(&signal);
+            if !self.dedup.check_and_insert(&key) {
+                debug!(token_id = %token_id, "BullpenSignalGen: dedup dropped duplicate signal");
+                continue;
+            }
 
             match self.signal_tx.send(signal).await {
                 Ok(()) => {

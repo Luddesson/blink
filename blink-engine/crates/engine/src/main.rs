@@ -944,24 +944,24 @@ async fn main() -> Result<()> {
                     let key = engine::ingress_dedup::key_for_signal(&signal);
                     if !dedup.check_and_insert(&key) {
                         engine::hot_metrics::counters().dedup_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        // Track which path won: the duplicate arrives from the slower source;
+                        // the first-insert (winner) was the other path.
+                        let dup_source = signal.signal_source.as_str();
+                        if dup_source == "rest" {
+                            engine::hot_metrics::counters().ws_dedup_wins.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        } else {
+                            engine::hot_metrics::counters().rest_dedup_wins.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         tracing::debug!(
                             order_id = %signal.order_id,
                             intent_id = signal.intent_id,
+                            source = %signal.signal_source,
                             "ingress_dedup: duplicate signal dropped"
                         );
                         drop(_qw);
                         continue;
                     }
                 }
-                latency
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .record(signal.detected_at.elapsed());
-                if tp.load(Ordering::Relaxed) {
-                    continue;
-                }
-                {
-                    let mut subs = subs_for_signals.lock().unwrap_or_else(|e| e.into_inner());
                     if !subs.contains(&signal.token_id) {
                         subs.push(signal.token_id.clone());
                         ws_reconnect_for_signals.store(true, Ordering::Relaxed);

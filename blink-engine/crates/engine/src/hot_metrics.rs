@@ -190,6 +190,13 @@ pub struct HotCounters {
     pub risk_tokens_available: AtomicU64,
     pub risk_cancel_tokens_available: AtomicU64,
     pub risk_per_market_pending_max: AtomicU64,
+
+    // Phase 5: maker-layering.
+    pub maker_layers_planned_total: AtomicU64,
+    pub maker_layers_placed_total: AtomicU64,
+    pub maker_layers_reprice_total: AtomicU64,
+    pub maker_layers_stale_evictions_total: AtomicU64,
+    pub maker_active_layers: AtomicU64,
 }
 
 impl HotCounters {
@@ -245,6 +252,11 @@ impl HotCounters {
             risk_tokens_available: AtomicU64::new(0),
             risk_cancel_tokens_available: AtomicU64::new(0),
             risk_per_market_pending_max: AtomicU64::new(0),
+            maker_layers_planned_total: AtomicU64::new(0),
+            maker_layers_placed_total: AtomicU64::new(0),
+            maker_layers_reprice_total: AtomicU64::new(0),
+            maker_layers_stale_evictions_total: AtomicU64::new(0),
+            maker_active_layers: AtomicU64::new(0),
         }
     }
 }

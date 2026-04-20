@@ -61,6 +61,7 @@ pub mod hot_metrics;
 pub mod ingress_dedup;
 pub mod latency_tracker;
 pub mod live_engine;
+pub mod maker_layering;
 pub mod mev_router;
 pub mod order_book;
 pub mod order_executor;

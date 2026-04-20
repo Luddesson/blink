@@ -933,11 +933,12 @@ async fn main() -> Result<()> {
         let ws_reconnect_for_signals = Arc::clone(&ws_force_reconnect);
         let dedup = Arc::clone(&shared_dedup);
         let mut signal_rx = signal_rx;
-        let handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            while let Some(signal) = handle.block_on(signal_rx.recv()) {
+        let per_token_queue_depth = engine::signal_pipeline::per_token_queue_depth();
+        let token_senders: Arc<dashmap::DashMap<String, tokio::sync::mpsc::Sender<engine::types::RN1Signal>>> =
+            Arc::new(dashmap::DashMap::new());
+        tokio::spawn(async move {
+            while let Some(signal) = signal_rx.recv().await {
                 engine::hot_metrics::counters().signals_in.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                // QueueWait: time the signal spent in the channel
                 let _qw = engine::hot_metrics::StageTimer::from_instant(
                     engine::hot_metrics::HotStage::QueueWait,
                     signal.enqueued_at,
@@ -947,8 +948,6 @@ async fn main() -> Result<()> {
                     let key = engine::ingress_dedup::key_for_signal(&signal);
                     if !dedup.check_and_insert(&key) {
                         engine::hot_metrics::counters().dedup_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        // Track which path won: the duplicate arrives from the slower source;
-                        // the first-insert (winner) was the other path.
                         let dup_source = signal.signal_source.as_str();
                         if dup_source == "rest" {
                             engine::hot_metrics::counters().ws_dedup_wins.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -979,15 +978,44 @@ async fn main() -> Result<()> {
                         ws_reconnect_for_signals.store(true, Ordering::Relaxed);
                     }
                 }
-                let p = Arc::clone(&paper);
-                let t_opt = twin_opt.clone();
-                let sig = signal.clone();
-                if let Some(twin) = t_opt {
-                    handle.block_on(async {
-                        tokio::join!(p.handle_signal(sig.clone()), twin.handle_signal(sig));
+
+                // Route to per-token worker (spawned lazily)
+                let token_id = signal.token_id.clone();
+                if !token_senders.contains_key(&token_id) {
+                    let (tx, mut rx) = tokio::sync::mpsc::channel::<engine::types::RN1Signal>(per_token_queue_depth);
+                    token_senders.insert(token_id.clone(), tx);
+                    engine::hot_metrics::counters()
+                        .signal_per_token_workers_active
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let paper_worker = Arc::clone(&paper);
+                    let twin_worker = twin_opt.clone();
+                    let worker_handle = tokio::runtime::Handle::current();
+                    tokio::task::spawn_blocking(move || {
+                        while let Some(sig) = worker_handle.block_on(rx.recv()) {
+                            let p = Arc::clone(&paper_worker);
+                            if let Some(twin) = twin_worker.clone() {
+                                worker_handle.block_on(async {
+                                    tokio::join!(p.handle_signal(sig.clone()), twin.handle_signal(sig));
+                                });
+                            } else {
+                                worker_handle.block_on(p.handle_signal(sig));
+                            }
+                        }
                     });
-                } else {
-                    handle.block_on(p.handle_signal(sig));
+                }
+
+                if let Some(tx) = token_senders.get(&token_id) {
+                    if tx.try_send(signal).is_err() {
+                        // HFT note: true drop-oldest requires a ring-buffer queue;
+                        // tokio mpsc drops newest on overflow.
+                        engine::hot_metrics::counters()
+                            .signal_pertoken_overflow_dropped
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        tracing::warn!(
+                            token_id = %token_id,
+                            "signal_pipeline: per-token queue full, dropping signal (newest)"
+                        );
+                    }
                 }
             }
         })
@@ -1199,9 +1227,11 @@ async fn main() -> Result<()> {
         let twin_opt = twin_engine.clone();
         let dedup = Arc::clone(&shared_dedup);
         let mut signal_rx = signal_rx;
-        let handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            while let Some(signal) = handle.block_on(signal_rx.recv()) {
+        let per_token_queue_depth = engine::signal_pipeline::per_token_queue_depth();
+        let token_senders: Arc<dashmap::DashMap<String, tokio::sync::mpsc::Sender<engine::types::RN1Signal>>> =
+            Arc::new(dashmap::DashMap::new());
+        tokio::spawn(async move {
+            while let Some(signal) = signal_rx.recv().await {
                 engine::hot_metrics::counters().signals_in.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let _qw = engine::hot_metrics::StageTimer::from_instant(
                     engine::hot_metrics::HotStage::QueueWait,
@@ -1234,15 +1264,41 @@ async fn main() -> Result<()> {
                 if tp.load(Ordering::Relaxed) {
                     continue;
                 }
-                let l = Arc::clone(&live);
-                let t_opt = twin_opt.clone();
-                let sig = signal.clone();
-                if let Some(twin) = t_opt {
-                    handle.block_on(async {
-                        tokio::join!(l.handle_signal(sig.clone()), twin.handle_signal(sig));
+
+                let token_id = signal.token_id.clone();
+                if !token_senders.contains_key(&token_id) {
+                    let (tx, mut rx) = tokio::sync::mpsc::channel::<engine::types::RN1Signal>(per_token_queue_depth);
+                    token_senders.insert(token_id.clone(), tx);
+                    engine::hot_metrics::counters()
+                        .signal_per_token_workers_active
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let live_worker = Arc::clone(&live);
+                    let twin_worker = twin_opt.clone();
+                    let worker_handle = tokio::runtime::Handle::current();
+                    tokio::task::spawn_blocking(move || {
+                        while let Some(sig) = worker_handle.block_on(rx.recv()) {
+                            let l = Arc::clone(&live_worker);
+                            if let Some(twin) = twin_worker.clone() {
+                                worker_handle.block_on(async {
+                                    tokio::join!(l.handle_signal(sig.clone()), twin.handle_signal(sig));
+                                });
+                            } else {
+                                worker_handle.block_on(l.handle_signal(sig));
+                            }
+                        }
                     });
-                } else {
-                    handle.block_on(l.handle_signal(sig));
+                }
+
+                if let Some(tx) = token_senders.get(&token_id) {
+                    if tx.try_send(signal).is_err() {
+                        engine::hot_metrics::counters()
+                            .signal_pertoken_overflow_dropped
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        tracing::warn!(
+                            token_id = %token_id,
+                            "signal_pipeline: per-token queue full, dropping signal (newest)"
+                        );
+                    }
                 }
             }
         })

@@ -29,7 +29,6 @@ use engine::blink_twin::TwinSnapshot;
 use engine::buffer_pool::BufferPool;
 use engine::bullpen_bridge::BullpenBridge;
 use engine::bullpen_discovery::DiscoveryStore;
-use engine::bullpen_signal_generator::SignalTick;
 use engine::bullpen_smart_money::ConvergenceStore;
 use engine::clickhouse_logger::{ClickHouseLogger, WarehouseEvent};
 use engine::clob_client::ClobClient;
@@ -365,7 +364,7 @@ async fn main() -> Result<()> {
         };
 
     // ── Cloudflare R2 uploader (optional — activated by R2_ACCESS_KEY_ID) ───
-    r2_uploader::start_r2_uploader();
+    start_r2_uploader();
 
     // ── Gas oracle (optional — activated by ETHERSCAN_API_KEY) ────────────
     let _gas_oracle = {
@@ -375,6 +374,9 @@ async fn main() -> Result<()> {
 
     // ── Channels ──────────────────────────────────────────────────────────
     let (signal_tx, signal_rx) = tokio::sync::mpsc::channel::<RN1Signal>(1024);
+
+    // Shared ingress dedup across all signal producers (bullpen, paper, live).
+    let shared_dedup = Arc::new(engine::ingress_dedup::IngressDedup::new());
 
     // Alpha signal channel (AI sidecar → engine). Only allocated when enabled.
     let alpha_enabled = config.alpha_enabled;
@@ -592,6 +594,7 @@ async fn main() -> Result<()> {
                 Arc::clone(&market_subscriptions),
                 Arc::clone(&ws_force_reconnect),
                 sg_config,
+                Arc::clone(&shared_dedup),
             );
             let sg_shutdown = Arc::clone(&shutdown);
             tokio::spawn(async move { generator.run(sg_shutdown).await });
@@ -928,7 +931,7 @@ async fn main() -> Result<()> {
         let twin_opt = twin_engine.clone();
         let subs_for_signals = Arc::clone(&market_subscriptions);
         let ws_reconnect_for_signals = Arc::clone(&ws_force_reconnect);
-        let dedup = Arc::new(engine::ingress_dedup::IngressDedup::new());
+        let dedup = Arc::clone(&shared_dedup);
         let mut signal_rx = signal_rx;
         let handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
@@ -962,6 +965,15 @@ async fn main() -> Result<()> {
                         continue;
                     }
                 }
+                latency
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .record(signal.detected_at.elapsed());
+                if tp.load(Ordering::Relaxed) {
+                    continue;
+                }
+                {
+                    let mut subs = subs_for_signals.lock().unwrap_or_else(|e| e.into_inner());
                     if !subs.contains(&signal.token_id) {
                         subs.push(signal.token_id.clone());
                         ws_reconnect_for_signals.store(true, Ordering::Relaxed);
@@ -1184,7 +1196,7 @@ async fn main() -> Result<()> {
 
         let tp = Arc::clone(&trading_paused);
         let twin_opt = twin_engine.clone();
-        let dedup = Arc::new(engine::ingress_dedup::IngressDedup::new());
+        let dedup = Arc::clone(&shared_dedup);
         let mut signal_rx = signal_rx;
         let handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
@@ -1198,9 +1210,16 @@ async fn main() -> Result<()> {
                     let key = engine::ingress_dedup::key_for_signal(&signal);
                     if !dedup.check_and_insert(&key) {
                         engine::hot_metrics::counters().dedup_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let dup_source = signal.signal_source.as_str();
+                        if dup_source == "rest" {
+                            engine::hot_metrics::counters().ws_dedup_wins.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        } else {
+                            engine::hot_metrics::counters().rest_dedup_wins.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         tracing::debug!(
                             order_id = %signal.order_id,
                             intent_id = signal.intent_id,
+                            source = %signal.signal_source,
                             "ingress_dedup: duplicate signal dropped"
                         );
                         drop(_qw);

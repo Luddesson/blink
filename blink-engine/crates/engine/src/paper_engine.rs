@@ -94,6 +94,8 @@ pub struct PaperEngine {
     activity: Option<ActivityLog>,
     /// Risk manager — shared with TUI for runtime config editing.
     pub risk: Arc<TimedMutex<RiskManager>>,
+    /// Shared Phase 3 admission gate (refill task spawned at startup).
+    pub risk_gate: Arc<crate::risk_manager::StreamRiskGate>,
     /// Active fill-window snapshot for the TUI failsafe visualizer.
     pub fill_window: Arc<std::sync::Mutex<Option<FillWindowSnapshot>>>,
     /// Detection-to-fill latency samples for the TUI histogram.
@@ -454,14 +456,17 @@ impl PaperEngine {
                 ),
             );
         }
+        let risk_manager = RiskManager::new(RiskConfig::from_env());
+        let risk_gate = Arc::clone(&risk_manager.gate);
+        crate::risk_manager::StreamRiskGate::spawn_token_refill(Arc::clone(&risk_gate));
+        let risk = Arc::new(TimedMutex::new("risk", risk_manager));
+
         Ok(Self {
             portfolio: Arc::new(Mutex::new(PaperPortfolio::new())),
             book_store: Arc::clone(&book_store),
             activity,
-            risk: Arc::new(TimedMutex::new(
-                "risk",
-                RiskManager::new(RiskConfig::from_env()),
-            )),
+            risk,
+            risk_gate,
             fill_window: Arc::new(std::sync::Mutex::new(None)),
             fill_latency: Arc::new(std::sync::Mutex::new(LatencyStats::new(1_000))),
             signal_queue: Arc::new(Mutex::new(BinaryHeap::new())),

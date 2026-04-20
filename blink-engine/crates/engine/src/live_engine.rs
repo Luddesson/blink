@@ -57,6 +57,8 @@ pub struct LiveEngine {
     vault: Option<Arc<tee_vault::VaultHandle>>,
     funder_addr: String,
     pub risk: Arc<TimedMutex<RiskManager>>,
+    /// Shared Phase 3 admission gate (cloned into `order_router`).
+    pub risk_gate: Arc<crate::risk_manager::StreamRiskGate>,
     #[allow(dead_code)]
     mev_router: Option<std::sync::Mutex<MevRouter>>,
     accounted_closed_trades: Mutex<usize>,
@@ -175,10 +177,9 @@ impl LiveEngine {
         };
 
         let funder_addr = config.funder_address.clone();
-        let risk = Arc::new(TimedMutex::new(
-            "risk",
-            RiskManager::new(RiskConfig::from_env()),
-        ));
+        let risk_manager = RiskManager::new(RiskConfig::from_env());
+        let risk_gate = Arc::clone(&risk_manager.gate);
+        let risk = Arc::new(TimedMutex::new("risk", risk_manager));
         let signing_policy = OrderSigningPolicy {
             expiration: config.polymarket_order_expiration,
             nonce: config.polymarket_order_nonce,
@@ -229,6 +230,7 @@ impl LiveEngine {
             vault,
             funder_addr,
             risk,
+            risk_gate,
             mev_router: mev,
             accounted_closed_trades: Mutex::new(0),
             signing_policy,
@@ -254,6 +256,9 @@ impl LiveEngine {
     /// Must be called once after `Arc<LiveEngine>` is constructed.
     pub async fn spawn_router_workers(&self) {
         let exec = Arc::new(self.executor.clone());
+        self.order_router
+            .set_risk_gate(Arc::clone(&self.risk_gate));
+        crate::risk_manager::StreamRiskGate::spawn_token_refill(Arc::clone(&self.risk_gate));
         self.order_router.spawn_workers(Arc::clone(&exec)).await;
         spawn_reconciler(
             Arc::clone(&self.order_router.store),
@@ -620,7 +625,7 @@ impl LiveEngine {
                         requested_at: std::time::Instant::now(),
                         signed_payload: Some(signed),
                     };
-                    match self.order_router.submit(order_intent) {
+                    match self.order_router.submit(order_intent).await {
                         Ok(()) => {
                             info!(
                                 intent_id = signal.intent_id,

@@ -1,7 +1,8 @@
 //! `OrderRouter` — async submit actor with per-market queues and worker pool.
 
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use dashmap::DashMap;
 use tokio::sync::mpsc;
@@ -9,6 +10,7 @@ use tracing::{error, info, warn};
 
 use crate::hot_metrics;
 use crate::order_executor::OrderExecutor;
+use crate::risk_manager::{AdmitDecision, StreamRiskGate};
 
 use super::intent::OrderIntent;
 use super::state::{OrderState, PendingOrder};
@@ -63,6 +65,9 @@ pub struct OrderRouter {
     inbound_rx: tokio::sync::Mutex<Option<mpsc::Receiver<OrderIntent>>>,
     pub store: Arc<PendingOrderStore>,
     pub counters: Arc<RouterCounters>,
+    /// Shared lock-free admission gate. Installed once via
+    /// [`OrderRouter::set_risk_gate`] during engine startup.
+    gate: OnceLock<Arc<StreamRiskGate>>,
 }
 
 impl OrderRouter {
@@ -73,11 +78,78 @@ impl OrderRouter {
             inbound_rx: tokio::sync::Mutex::new(Some(rx)),
             store: Arc::new(DashMap::new()),
             counters: Arc::new(RouterCounters::default()),
+            gate: OnceLock::new(),
         }
     }
 
-    /// Non-blocking submit.
-    pub fn submit(&self, intent: OrderIntent) -> Result<(), RouterFull> {
+    /// Install the shared [`StreamRiskGate`] used by [`OrderRouter::submit`].
+    /// Call once at startup, before [`OrderRouter::spawn_workers`].
+    pub fn set_risk_gate(&self, gate: Arc<StreamRiskGate>) {
+        if self.gate.set(gate).is_err() {
+            warn!("OrderRouter::set_risk_gate called more than once — ignoring");
+        }
+    }
+
+    /// Async submit. Applies token-bucket admission (if a gate is installed)
+    /// before enqueueing the intent for the dispatcher.
+    ///
+    /// - Admit  → enqueue.
+    /// - Throttle → sleep `retry_in.min(50 ms)` then retry once. If the second
+    ///   attempt still throttles, drop the intent.
+    /// - Reject → drop the intent.
+    pub async fn submit(&self, intent: OrderIntent) -> Result<(), RouterFull> {
+        if let Some(gate) = self.gate.get() {
+            let decision = gate.try_admit(&intent);
+            match decision {
+                AdmitDecision::Admit => {
+                    hot_metrics::counters()
+                        .risk_admits_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                AdmitDecision::Throttle { retry_in } => {
+                    hot_metrics::counters()
+                        .risk_throttles_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    let sleep = retry_in.min(Duration::from_millis(50));
+                    tokio::time::sleep(sleep).await;
+                    match gate.try_admit(&intent) {
+                        AdmitDecision::Admit => {
+                            hot_metrics::counters()
+                                .risk_admits_total
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                        AdmitDecision::Throttle { .. } => {
+                            hot_metrics::counters()
+                                .risk_throttles_total
+                                .fetch_add(1, Ordering::Relaxed);
+                            warn!(
+                                intent_id = intent.intent_id,
+                                "OrderRouter: admission throttled twice — dropping intent"
+                            );
+                            self.counters.dropped_full.fetch_add(1, Ordering::Relaxed);
+                            return Err(RouterFull);
+                        }
+                        AdmitDecision::Reject { reason } => {
+                            bump_reject_counter(reason);
+                            warn!(
+                                intent_id = intent.intent_id,
+                                reason, "OrderRouter: intent rejected by risk gate"
+                            );
+                            return Err(RouterFull);
+                        }
+                    }
+                }
+                AdmitDecision::Reject { reason } => {
+                    bump_reject_counter(reason);
+                    warn!(
+                        intent_id = intent.intent_id,
+                        reason, "OrderRouter: intent rejected by risk gate"
+                    );
+                    return Err(RouterFull);
+                }
+            }
+        }
+
         match self.inbound_tx.try_send(intent) {
             Ok(()) => {
                 self.counters.inbound_depth.fetch_add(1, Ordering::Relaxed);
@@ -111,6 +183,7 @@ impl OrderRouter {
 
         let store = Arc::clone(&self.store);
         let counters = Arc::clone(&self.counters);
+        let gate = self.gate.get().cloned();
 
         let mut worker_txs: Vec<mpsc::Sender<OrderIntent>> = Vec::with_capacity(SUBMIT_WORKERS);
         for _ in 0..SUBMIT_WORKERS {
@@ -120,16 +193,18 @@ impl OrderRouter {
             let s = Arc::clone(&store);
             let c = Arc::clone(&counters);
             let exec = Arc::clone(&executor);
+            let g = gate.clone();
             tokio::spawn(async move {
                 let mut wrx = wrx;
                 while let Some(intent) = wrx.recv().await {
-                    submit_one(intent, &s, &c, &exec).await;
+                    submit_one(intent, &s, &c, &exec, g.as_ref()).await;
                 }
             });
         }
 
         let s_disp = Arc::clone(&store);
         let c_disp = Arc::clone(&counters);
+        let gate_for_dispatch = gate.clone();
         tokio::spawn(async move {
             let mut rx = rx;
             let mut rr = 0usize;
@@ -138,15 +213,21 @@ impl OrderRouter {
 
                 let pending = PendingOrder::new(
                     intent.intent_id,
+                    intent.market_id.clone(),
                     intent.token_id.clone(),
                     intent.side,
                     intent.size_u64 as f64 / 1_000.0,
+                    intent.size_u64,
                     intent.price_u64 as f64 / 1_000.0,
                 );
                 s_disp.insert(intent.intent_id, pending);
                 hot_metrics::counters()
                     .pending_orders_count
                     .fetch_add(1, Ordering::Relaxed);
+
+                if let Some(ref g) = gate_for_dispatch {
+                    g.on_order_created(&intent.market_id, intent.size_u64);
+                }
 
                 if let Err(e) = worker_txs[rr].send(intent).await {
                     error!(
@@ -177,6 +258,7 @@ async fn submit_one(
     store: &PendingOrderStore,
     counters: &RouterCounters,
     executor: &OrderExecutor,
+    gate: Option<&Arc<StreamRiskGate>>,
 ) {
     hot_metrics::counters()
         .submits_started
@@ -201,6 +283,9 @@ async fn submit_one(
             hot_metrics::counters()
                 .submits_rejected
                 .fetch_add(1, Ordering::Relaxed);
+            if let Some(g) = gate {
+                g.on_order_terminal(&intent.market_id, intent.size_u64);
+            }
             return;
         }
     };
@@ -221,6 +306,9 @@ async fn submit_one(
             hot_metrics::counters()
                 .submits_ack
                 .fetch_add(1, Ordering::Relaxed);
+            if let Some(g) = gate {
+                g.on_order_terminal(&intent.market_id, intent.size_u64);
+            }
         }
         Ok(crate::order_executor::SubmitOutcome::Success(resp)) => {
             warn!(
@@ -234,6 +322,9 @@ async fn submit_one(
             hot_metrics::counters()
                 .submits_rejected
                 .fetch_add(1, Ordering::Relaxed);
+            if let Some(g) = gate {
+                g.on_order_terminal(&intent.market_id, intent.size_u64);
+            }
         }
         Ok(crate::order_executor::SubmitOutcome::Unknown) => {
             warn!(
@@ -250,6 +341,9 @@ async fn submit_one(
             hot_metrics::counters()
                 .router_retries_total
                 .fetch_add(1, Ordering::Relaxed);
+            if let Some(g) = gate {
+                g.on_order_terminal(&intent.market_id, intent.size_u64);
+            }
         }
         Err(e) => {
             warn!(
@@ -263,6 +357,21 @@ async fn submit_one(
             hot_metrics::counters()
                 .submits_rejected
                 .fetch_add(1, Ordering::Relaxed);
+            if let Some(g) = gate {
+                g.on_order_terminal(&intent.market_id, intent.size_u64);
+            }
         }
     }
+}
+
+fn bump_reject_counter(reason: &str) {
+    let c = hot_metrics::counters();
+    match reason {
+        "rate" => c.risk_rejects_rate.fetch_add(1, Ordering::Relaxed),
+        "pending_count" => c.risk_rejects_pending_count.fetch_add(1, Ordering::Relaxed),
+        "market_notional" => c.risk_rejects_market_notional.fetch_add(1, Ordering::Relaxed),
+        "account_notional" => c.risk_rejects_account_notional.fetch_add(1, Ordering::Relaxed),
+        "max_single_order" => c.risk_rejects_max_single_order.fetch_add(1, Ordering::Relaxed),
+        _ => 0,
+    };
 }

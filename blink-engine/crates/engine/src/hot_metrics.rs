@@ -171,22 +171,25 @@ pub struct HotCounters {
     pub signal_pertoken_overflow_dropped: AtomicU64,
     pub signal_dispatcher_dropped: AtomicU64,
     // ─── Phase 3 fill/cancel/GC counters ─────────────────────────────────────
-    /// SubmitUnknown orders resolved to Acked (venue confirmed order live).
     pub submit_unknown_resolved_acked_total: AtomicU64,
-    /// SubmitUnknown orders resolved to Rejected (venue never saw order).
     pub submit_unknown_resolved_rejected_total: AtomicU64,
-    /// Total `find_order_by_client_id` lookup attempts.
     pub submit_unknown_lookup_attempts_total: AtomicU64,
-    /// Cancel requests confirmed by the exchange.
     pub cancel_success_total: AtomicU64,
-    /// Cancel requests rejected by the exchange.
     pub cancel_reject_total: AtomicU64,
-    /// Delta size (milliUSDC) of the most recent partial fill update.
     pub fills_delta_size_last: AtomicI64,
-    /// Full-fill ratio in per-mille: full*1000/(full+partial).
     pub partial_fill_ratio_permille: AtomicI64,
-    /// Terminal entries evicted from the store by the GC sweep.
     pub router_gc_evicted_total: AtomicU64,
+    // ─── Phase 3 risk admission counters/gauges ──────────────────────────────
+    pub risk_admits_total: AtomicU64,
+    pub risk_throttles_total: AtomicU64,
+    pub risk_rejects_rate: AtomicU64,
+    pub risk_rejects_pending_count: AtomicU64,
+    pub risk_rejects_market_notional: AtomicU64,
+    pub risk_rejects_account_notional: AtomicU64,
+    pub risk_rejects_max_single_order: AtomicU64,
+    pub risk_tokens_available: AtomicU64,
+    pub risk_cancel_tokens_available: AtomicU64,
+    pub risk_per_market_pending_max: AtomicU64,
 }
 
 impl HotCounters {
@@ -232,6 +235,16 @@ impl HotCounters {
             fills_delta_size_last: AtomicI64::new(0),
             partial_fill_ratio_permille: AtomicI64::new(0),
             router_gc_evicted_total: AtomicU64::new(0),
+            risk_admits_total: AtomicU64::new(0),
+            risk_throttles_total: AtomicU64::new(0),
+            risk_rejects_rate: AtomicU64::new(0),
+            risk_rejects_pending_count: AtomicU64::new(0),
+            risk_rejects_market_notional: AtomicU64::new(0),
+            risk_rejects_account_notional: AtomicU64::new(0),
+            risk_rejects_max_single_order: AtomicU64::new(0),
+            risk_tokens_available: AtomicU64::new(0),
+            risk_cancel_tokens_available: AtomicU64::new(0),
+            risk_per_market_pending_max: AtomicU64::new(0),
         }
     }
 }
@@ -362,6 +375,43 @@ pub fn render_prom() -> String {
     let dispatcher_backlog = c.signal_dispatcher_backlog.load(Ordering::Relaxed);
     out.push_str(&format!(
         "# TYPE blink_signal_dispatcher_backlog gauge\nblink_signal_dispatcher_backlog {dispatcher_backlog}\n"
+    ));
+
+    // Phase 3: Risk admission counters
+    counter!(out, "blink_risk_admits_total",            c.risk_admits_total.load(Ordering::Relaxed));
+    counter!(out, "blink_risk_throttles_total",         c.risk_throttles_total.load(Ordering::Relaxed));
+    out.push_str("# TYPE blink_risk_rejects_total counter\n");
+    out.push_str(&format!(
+        "blink_risk_rejects_total{{reason=\"rate\"}} {}\n",
+        c.risk_rejects_rate.load(Ordering::Relaxed)
+    ));
+    out.push_str(&format!(
+        "blink_risk_rejects_total{{reason=\"pending_count\"}} {}\n",
+        c.risk_rejects_pending_count.load(Ordering::Relaxed)
+    ));
+    out.push_str(&format!(
+        "blink_risk_rejects_total{{reason=\"market_notional\"}} {}\n",
+        c.risk_rejects_market_notional.load(Ordering::Relaxed)
+    ));
+    out.push_str(&format!(
+        "blink_risk_rejects_total{{reason=\"account_notional\"}} {}\n",
+        c.risk_rejects_account_notional.load(Ordering::Relaxed)
+    ));
+    out.push_str(&format!(
+        "blink_risk_rejects_total{{reason=\"max_single_order\"}} {}\n",
+        c.risk_rejects_max_single_order.load(Ordering::Relaxed)
+    ));
+    let risk_tokens = c.risk_tokens_available.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        "# TYPE blink_risk_tokens_available gauge\nblink_risk_tokens_available {risk_tokens}\n"
+    ));
+    let risk_cancel_tokens = c.risk_cancel_tokens_available.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        "# TYPE blink_risk_cancel_tokens_available gauge\nblink_risk_cancel_tokens_available {risk_cancel_tokens}\n"
+    ));
+    let risk_pm_pending = c.risk_per_market_pending_max.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        "# TYPE blink_risk_per_market_pending_max gauge\nblink_risk_per_market_pending_max {risk_pm_pending}\n"
     ));
     let pending = c.pending_orders_count.load(Ordering::Relaxed);
     out.push_str(&format!(

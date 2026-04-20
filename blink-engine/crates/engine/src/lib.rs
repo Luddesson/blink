@@ -53,6 +53,7 @@ pub mod bullpen_smart_money;
 pub mod clickhouse_logger;
 pub mod clob_client;
 pub mod config;
+pub mod execution_profile;
 pub mod execution_provider;
 pub mod exit_strategy;
 pub mod gas_oracle;

@@ -243,6 +243,80 @@ impl OrderRouter {
     pub fn pending_count(&self) -> usize {
         self.store.len()
     }
+
+    /// Initiate a cancel for the given intent. Transitions the order to
+    /// `Cancelling` and issues `DELETE /order/{id}`. The reconciler confirms
+    /// the cancel and transitions to `Cancelled` (or `Filled` on a lost race).
+    ///
+    /// Returns `true` if the cancel RPC was dispatched (or the order was
+    /// already in a terminal state — idempotent), `false` if the order is
+    /// unknown or has no order_id yet.
+    pub async fn cancel_order(&self, intent_id: u64, executor: &OrderExecutor) -> bool {
+        let order_id = {
+            let mut entry = match self.store.get_mut(&intent_id) {
+                Some(e) => e,
+                None => {
+                    warn!(intent_id, "OrderRouter::cancel_order: intent_id not in store");
+                    return false;
+                }
+            };
+
+            if entry.state.is_terminal() || entry.state == OrderState::Cancelling {
+                info!(
+                    intent_id,
+                    state = ?entry.state,
+                    "OrderRouter::cancel_order: already terminal or cancelling — noop"
+                );
+                return true;
+            }
+
+            if !matches!(entry.state, OrderState::Acked | OrderState::PartialFilled) {
+                warn!(
+                    intent_id,
+                    state = ?entry.state,
+                    "OrderRouter::cancel_order: order not in cancellable state"
+                );
+                return false;
+            }
+
+            let id = match entry.order_id.clone() {
+                Some(id) => id,
+                None => {
+                    warn!(intent_id, "OrderRouter::cancel_order: missing order_id");
+                    return false;
+                }
+            };
+
+            entry.cancel_attempts = entry.cancel_attempts.saturating_add(1);
+            entry.transition(OrderState::Cancelling);
+            id
+        };
+
+        hot_metrics::counters()
+            .cancels_started
+            .fetch_add(1, Ordering::Relaxed);
+
+        match executor.cancel_order(&order_id).await {
+            Ok(()) => {
+                info!(
+                    intent_id,
+                    order_id,
+                    "OrderRouter::cancel_order: DELETE dispatched — awaiting reconciler confirmation"
+                );
+                true
+            }
+            Err(e) => {
+                error!(
+                    intent_id,
+                    order_id,
+                    error = %e,
+                    "OrderRouter::cancel_order: DELETE failed — keeping Cancelling, reconciler will retry"
+                );
+                // Stay in Cancelling; reconciler will confirm via GET /order/{id}.
+                true
+            }
+        }
+    }
 }
 
 impl Default for OrderRouter {

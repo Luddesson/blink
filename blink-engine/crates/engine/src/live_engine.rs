@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use chrono::Timelike;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -16,7 +16,7 @@ use crate::order_book::OrderBookStore;
 use crate::order_executor::OrderExecutor;
 use crate::order_router::reconciler::spawn_reconciler;
 use crate::order_router::{OrderIntent, OrderRouter};
-use crate::order_signer::{sign_order_with_vault_policy, OrderParams, OrderSigningPolicy};
+use crate::order_signer::{sign_order_for_intent_with_vault, OrderParams, OrderSigningPolicy};
 use crate::paper_portfolio::{drift_threshold, PaperPortfolio, STARTING_BALANCE_USDC};
 use crate::risk_manager::{RiskConfig, RiskManager};
 use crate::strategy::{StrategyController, StrategySnapshot};
@@ -565,10 +565,8 @@ impl LiveEngine {
                 .vault
                 .as_ref()
                 .expect("vault is Some; guarded by is_none() check above");
-            let mut policy = self.signing_policy;
-            policy.nonce = self.nonce_counter.fetch_add(1, Ordering::Relaxed);
             drop(_sign_timer);
-            match sign_order_with_vault_policy(vault.as_ref(), &params, policy) {
+            match sign_order_for_intent_with_vault(vault.as_ref(), &params, signal.intent_id) {
                 Ok(signed) => {
                     // Build OrderIntent with pre-signed payload for idempotent retry.
                     let order_intent = OrderIntent {

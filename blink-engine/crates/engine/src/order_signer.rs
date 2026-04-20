@@ -86,6 +86,11 @@ pub struct SignedOrder {
     pub signature_type: u8,
     /// 0x-prefixed hex EIP-712 signature (65 bytes / 130 hex chars).
     pub signature: String,
+    /// Deterministic client-side order ID: `"blk-{intent_id}"`.
+    /// Registered with the exchange so ack-loss recovery can use
+    /// `client_order_id` lookup rather than scanning all open orders.
+    /// Not part of the EIP-712 signed payload; stored alongside for reference.
+    pub client_order_id: Option<String>,
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -179,9 +184,110 @@ pub fn sign_order_with_policy(
         side: side_u8,
         signature_type: policy.signature_type,
         signature: format!("0x{}", hex_encode(&sig65)),
+        client_order_id: None,
     })
 }
 
+/// Sign an order for a specific intent, using `intent_id` for deterministic
+/// salt and nonce so retries produce the exact same EIP-712 bytes.
+pub fn sign_order_for_intent(
+    private_key_bytes: &[u8],
+    params: &OrderParams,
+    intent_id: u64,
+) -> Result<SignedOrder> {
+    let policy = OrderSigningPolicy {
+        expiration: 0,
+        nonce: intent_id,
+        signature_type: 0,
+    };
+    let mut signed = sign_order_deterministic(private_key_bytes, params, policy, intent_id)?;
+    signed.client_order_id = Some(format!("blk-{intent_id}"));
+    Ok(signed)
+}
+
+fn sign_order_deterministic(
+    private_key_bytes: &[u8],
+    params: &OrderParams,
+    policy: OrderSigningPolicy,
+    intent_id: u64,
+) -> Result<SignedOrder> {
+    validate_signing_policy(&policy)?;
+    let signing_key = SigningKey::from_bytes(private_key_bytes.into())
+        .context("invalid secp256k1 private key")?;
+    let signer_addr = pubkey_to_address(signing_key.verifying_key());
+
+    // Deterministic salt derived from intent_id — enables idempotent retry.
+    let salt = intent_id as u128;
+
+    let (maker_amount, taker_amount, side_u8) = compute_amounts(params)?;
+
+    let salt_b32 = u128_to_b32(salt);
+    let maker_b32 = addr_to_b32(&params.maker).context("invalid maker address")?;
+    let signer_b32 = addr_to_b32(&signer_addr).context("invalid signer address")?;
+    let taker_b32 = [0u8; 32];
+    let token_id_b32 = decimal_to_b32(&params.token_id)
+        .with_context(|| format!("invalid token_id: {}", params.token_id))?;
+    let maker_amount_b32 = u64_to_b32(maker_amount);
+    let taker_amount_b32 = u64_to_b32(taker_amount);
+    let expiration_b32 = u64_to_b32(policy.expiration);
+    let nonce_b32 = u64_to_b32(policy.nonce);
+    let side_b32 = u8_to_b32(side_u8);
+    let signature_type_b32 = u8_to_b32(policy.signature_type);
+
+    let order_type_hash = keccak256(ORDER_TYPE_STRING);
+    let mut enc = Vec::with_capacity(32 * 13);
+    enc.extend_from_slice(&order_type_hash);
+    enc.extend_from_slice(&salt_b32);
+    enc.extend_from_slice(&maker_b32);
+    enc.extend_from_slice(&signer_b32);
+    enc.extend_from_slice(&taker_b32);
+    enc.extend_from_slice(&token_id_b32);
+    enc.extend_from_slice(&maker_amount_b32);
+    enc.extend_from_slice(&taker_amount_b32);
+    enc.extend_from_slice(&expiration_b32);
+    enc.extend_from_slice(&nonce_b32);
+    enc.extend_from_slice(&[0u8; 32]);
+    enc.extend_from_slice(&side_b32);
+    enc.extend_from_slice(&signature_type_b32);
+    let order_hash = keccak256(&enc);
+
+    let domain_sep = domain_separator();
+    let mut msg = Vec::with_capacity(66);
+    msg.extend_from_slice(&[0x19, 0x01]);
+    msg.extend_from_slice(&domain_sep);
+    msg.extend_from_slice(&order_hash);
+    let digest = keccak256(&msg);
+
+    let (sig, rec_id): (Signature, RecoveryId) = signing_key
+        .sign_prehash(&digest)
+        .context("EIP-712 signing failed")?;
+
+    let sig_bytes = sig.to_bytes();
+    let v = rec_id.to_byte() + 27u8;
+    let mut sig65 = Vec::with_capacity(65);
+    sig65.extend_from_slice(&sig_bytes);
+    sig65.push(v);
+
+    Ok(SignedOrder {
+        salt: salt.to_string(),
+        maker: params.maker.clone(),
+        signer: signer_addr,
+        taker: "0x0000000000000000000000000000000000000000".to_string(),
+        token_id: params.token_id.clone(),
+        maker_amount,
+        taker_amount,
+        expiration: policy.expiration,
+        nonce: policy.nonce,
+        fee_rate_bps: 0,
+        side: side_u8,
+        signature_type: policy.signature_type,
+        signature: format!("0x{}", hex_encode(&sig65)),
+        client_order_id: None,
+    })
+}
+///
+/// The private key never leaves the vault — only the 32-byte digest is sent
+/// in, and a 65-byte signature comes back.
 /// Builds and EIP-712 signs a Polymarket CLOB order using a [`KeyVault`].
 ///
 /// The private key never leaves the vault — only the 32-byte digest is sent
@@ -260,10 +366,85 @@ pub fn sign_order_with_vault_policy(
         side: side_u8,
         signature_type: policy.signature_type,
         signature: format!("0x{}", hex_encode(&sig65)),
+        client_order_id: None,
     })
 }
 
-/// Loads a 32-byte private key from a hex string (with or without `0x` prefix).
+/// Vault variant: sign an order for a specific intent with deterministic
+/// salt/nonce derived from `intent_id` so retries replay identical bytes.
+pub fn sign_order_for_intent_with_vault(
+    vault: &dyn tee_vault::KeyVault,
+    params: &OrderParams,
+    intent_id: u64,
+) -> Result<SignedOrder> {
+    let policy = OrderSigningPolicy {
+        expiration: 0,
+        nonce: intent_id,
+        signature_type: 0,
+    };
+    validate_signing_policy(&policy)?;
+
+    let salt = intent_id as u128;
+
+    let signer_addr = vault.signer_address().to_string();
+    let (maker_amount, taker_amount, side_u8) = compute_amounts(params)?;
+
+    let salt_b32 = u128_to_b32(salt);
+    let maker_b32 = addr_to_b32(&params.maker).context("invalid maker address")?;
+    let signer_b32 = addr_to_b32(&signer_addr).context("invalid signer address")?;
+    let taker_b32 = [0u8; 32];
+    let token_id_b32 = decimal_to_b32(&params.token_id)
+        .with_context(|| format!("invalid token_id: {}", params.token_id))?;
+    let maker_amount_b32 = u64_to_b32(maker_amount);
+    let taker_amount_b32 = u64_to_b32(taker_amount);
+    let expiration_b32 = u64_to_b32(policy.expiration);
+    let nonce_b32 = u64_to_b32(policy.nonce);
+    let side_b32 = u8_to_b32(side_u8);
+    let signature_type_b32 = u8_to_b32(policy.signature_type);
+
+    let order_type_hash = keccak256(ORDER_TYPE_STRING);
+    let mut enc = Vec::with_capacity(32 * 13);
+    enc.extend_from_slice(&order_type_hash);
+    enc.extend_from_slice(&salt_b32);
+    enc.extend_from_slice(&maker_b32);
+    enc.extend_from_slice(&signer_b32);
+    enc.extend_from_slice(&taker_b32);
+    enc.extend_from_slice(&token_id_b32);
+    enc.extend_from_slice(&maker_amount_b32);
+    enc.extend_from_slice(&taker_amount_b32);
+    enc.extend_from_slice(&expiration_b32);
+    enc.extend_from_slice(&nonce_b32);
+    enc.extend_from_slice(&[0u8; 32]);
+    enc.extend_from_slice(&side_b32);
+    enc.extend_from_slice(&signature_type_b32);
+    let order_hash = keccak256(&enc);
+
+    let domain_sep = domain_separator();
+    let mut msg = Vec::with_capacity(66);
+    msg.extend_from_slice(&[0x19, 0x01]);
+    msg.extend_from_slice(&domain_sep);
+    msg.extend_from_slice(&order_hash);
+    let digest = keccak256(&msg);
+
+    let sig65 = vault.sign_digest(&digest)?;
+
+    Ok(SignedOrder {
+        salt: salt.to_string(),
+        maker: params.maker.clone(),
+        signer: signer_addr,
+        taker: "0x0000000000000000000000000000000000000000".to_string(),
+        token_id: params.token_id.clone(),
+        maker_amount,
+        taker_amount,
+        expiration: policy.expiration,
+        nonce: policy.nonce,
+        fee_rate_bps: 0,
+        side: side_u8,
+        signature_type: policy.signature_type,
+        signature: format!("0x{}", hex_encode(&sig65)),
+        client_order_id: Some(format!("blk-{intent_id}")),
+    })
+}
 pub fn load_signer_bytes(private_key_hex: &str) -> Result<Vec<u8>> {
     let hex_str = private_key_hex.trim_start_matches("0x");
     anyhow::ensure!(hex_str.len() == 64, "private key must be 64 hex chars");

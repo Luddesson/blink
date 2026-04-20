@@ -284,6 +284,15 @@ pub fn render_prom() -> String {
     counter!(out, "blink_http_tls_handshakes_total",   c.tls_handshakes_total.load(Ordering::Relaxed));
     counter!(out, "blink_http_dns_lookups_total",      c.dns_lookups_total.load(Ordering::Relaxed));
 
+    // Router counters
+    counter!(out, "blink_router_dropped_full_total",     c.router_dropped_full.load(Ordering::Relaxed));
+    counter!(out, "blink_router_retries_total",          c.router_retries_total.load(Ordering::Relaxed));
+    counter!(out, "blink_router_reconcile_sweeps_total", c.router_reconcile_sweeps.load(Ordering::Relaxed));
+    let pending = c.pending_orders_count.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        "# TYPE blink_router_pending_orders_count gauge\nblink_router_pending_orders_count {pending}\n"
+    ));
+
     let lag = c.reconcile_lag_ms_last.load(Ordering::Relaxed);
     out.push_str(&format!(
         "# TYPE blink_hot_reconcile_lag_ms gauge\nblink_hot_reconcile_lag_ms {lag}\n"

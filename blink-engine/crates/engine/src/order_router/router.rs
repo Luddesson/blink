@@ -206,7 +206,7 @@ async fn submit_one(
     };
 
     match executor.submit_order(&signed, intent.tif).await {
-        Ok(resp) if resp.success => {
+        Ok(crate::order_executor::SubmitOutcome::Success(resp)) if resp.success => {
             let _ack_timer = hot_metrics::StageTimer::start(hot_metrics::HotStage::Ack);
             let order_id = resp.order_id.clone();
             info!(
@@ -222,7 +222,7 @@ async fn submit_one(
                 .submits_ack
                 .fetch_add(1, Ordering::Relaxed);
         }
-        Ok(resp) => {
+        Ok(crate::order_executor::SubmitOutcome::Success(resp)) => {
             warn!(
                 intent_id = intent.intent_id,
                 error = ?resp.error_msg,
@@ -235,11 +235,10 @@ async fn submit_one(
                 .submits_rejected
                 .fetch_add(1, Ordering::Relaxed);
         }
-        Err(e) => {
+        Ok(crate::order_executor::SubmitOutcome::Unknown) => {
             warn!(
                 intent_id = intent.intent_id,
-                error = %e,
-                "OrderRouter: submit failed (network/timeout) — transitioning to SubmitUnknown"
+                "OrderRouter: submit outcome unknown (all attempts timed out) — parking in SubmitUnknown"
             );
             if let Some(mut entry) = store.get_mut(&intent.intent_id) {
                 entry.transition(OrderState::SubmitUnknown);
@@ -250,6 +249,19 @@ async fn submit_one(
             counters.retries_total.fetch_add(1, Ordering::Relaxed);
             hot_metrics::counters()
                 .router_retries_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        Err(e) => {
+            warn!(
+                intent_id = intent.intent_id,
+                error = %e,
+                "OrderRouter: submit failed (non-retryable error) — marking Rejected"
+            );
+            if let Some(mut entry) = store.get_mut(&intent.intent_id) {
+                entry.transition(OrderState::Rejected);
+            }
+            hot_metrics::counters()
+                .submits_rejected
                 .fetch_add(1, Ordering::Relaxed);
         }
     }

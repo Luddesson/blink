@@ -155,6 +155,10 @@ pub struct HotCounters {
     pub router_retries_total: AtomicU64,
     pub router_reconcile_sweeps: AtomicU64,
     pub pending_orders_count: AtomicI64,
+    /// Deduped duplicates where the WS path had published first.
+    pub ws_dedup_wins: AtomicU64,
+    /// Deduped duplicates where the REST path had published first.
+    pub rest_dedup_wins: AtomicU64,
 }
 
 impl HotCounters {
@@ -181,6 +185,8 @@ impl HotCounters {
             router_retries_total: AtomicU64::new(0),
             router_reconcile_sweeps: AtomicU64::new(0),
             pending_orders_count: AtomicI64::new(0),
+            ws_dedup_wins: AtomicU64::new(0),
+            rest_dedup_wins: AtomicU64::new(0),
         }
     }
 }
@@ -288,6 +294,8 @@ pub fn render_prom() -> String {
     counter!(out, "blink_router_dropped_full_total",     c.router_dropped_full.load(Ordering::Relaxed));
     counter!(out, "blink_router_retries_total",          c.router_retries_total.load(Ordering::Relaxed));
     counter!(out, "blink_router_reconcile_sweeps_total", c.router_reconcile_sweeps.load(Ordering::Relaxed));
+    counter!(out, "blink_dedup_ws_wins_total",          c.ws_dedup_wins.load(Ordering::Relaxed));
+    counter!(out, "blink_dedup_rest_wins_total",        c.rest_dedup_wins.load(Ordering::Relaxed));
     let pending = c.pending_orders_count.load(Ordering::Relaxed);
     out.push_str(&format!(
         "# TYPE blink_router_pending_orders_count gauge\nblink_router_pending_orders_count {pending}\n"

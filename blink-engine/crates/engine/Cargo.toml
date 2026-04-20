@@ -45,6 +45,17 @@ default = []
 # Off by default — uses tokio on all platforms including Windows/macOS.
 io_uring = ["dep:tokio-uring"]
 
+# Convenience feature for Linux production builds.
+# Bundles io_uring and any future Linux-only optimisations.
+#
+# Recommended build command on Linux production nodes:
+#   cargo build --release --features prod-linux
+#
+# Cargo does not support target-conditional default features, so we cannot
+# auto-enable io_uring on Linux without an explicit feature flag.  Use the
+# build command above in your Dockerfile / systemd unit / deploy script.
+prod-linux = ["io_uring"]
+
 [target.'cfg(target_os = "linux")'.dependencies]
 tokio-uring = { version = "0.5", optional = true }
 

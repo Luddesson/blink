@@ -133,6 +133,29 @@ impl OrderExecutor {
             "OrderExecutor HTTP client initialised (HFT-tuned)"
         );
 
+        // Log io_uring routing status at startup so operators know which path is active.
+        #[cfg(feature = "io_uring")]
+        {
+            let use_io_uring = std::env::var("BLINK_IO_URING_SUBMIT")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+            if use_io_uring {
+                // TODO(phase2-B): True io_uring HTTP submit requires replacing reqwest with a
+                // custom HTTP/2 client built on top of `IoUringNet` (see io_uring_net.rs).
+                // `IoUringNet` provides a raw TCP abstraction; bridging it to HTTPS + HTTP/2
+                // framing is non-trivial and needs a dedicated sprint.
+                // For now we log the intent and fall through to the reqwest path.
+                tracing::warn!(
+                    "BLINK_IO_URING_SUBMIT=1 detected but io_uring HTTP submit path is not yet \
+                     implemented. Falling back to reqwest (tokio) for order submission. \
+                     See TODO in order_executor.rs for the wiring gap."
+                );
+            } else {
+                tracing::info!("io_uring feature enabled; set BLINK_IO_URING_SUBMIT=1 to route \
+                                submits through io_uring (not yet wired — see TODO)");
+            }
+        }
+
         Ok(Self {
             client,
             base_url: "https://clob.polymarket.com".to_string(),

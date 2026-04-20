@@ -78,6 +78,7 @@ pub struct LiveEngine {
     strategy_controller: Arc<StrategyController>,
     pub order_router: OrderRouter,
     pretrade_gate: PretradeGate,
+    execution_profile: crate::execution_profile::ExecutionProfile,
 }
 
 /// Point-in-time snapshot of live SLO metrics for dashboards and alerting.
@@ -146,6 +147,7 @@ impl LiveEngine {
         book_store: Arc<OrderBookStore>,
         activity: Option<ActivityLog>,
         strategy_controller: Arc<StrategyController>,
+        execution_profile: crate::execution_profile::ExecutionProfile,
     ) -> Result<Self> {
         let executor = OrderExecutor::from_config(&config)?;
 
@@ -245,7 +247,13 @@ impl LiveEngine {
             strategy_controller,
             order_router: OrderRouter::new(),
             pretrade_gate: PretradeGate::new(book_store),
+            execution_profile,
         })
+    }
+
+    /// Returns the execution profile this engine was constructed with.
+    pub fn execution_profile(&self) -> crate::execution_profile::ExecutionProfile {
+        self.execution_profile
     }
 
     pub fn strategy_snapshot(&self) -> StrategySnapshot {
@@ -265,6 +273,13 @@ impl LiveEngine {
             Arc::clone(&self.order_router.counters),
             exec,
             None, // TODO Phase 4: wire RouterFillHook to risk manager
+        );
+
+        #[cfg(feature = "maker-layering")]
+        spawn_maker_layering_task(
+            Arc::clone(&self.risk_gate),
+            Arc::new(self.executor.clone()),
+            Arc::new(self.order_router.clone()),
         );
     }
 
@@ -537,7 +552,7 @@ impl LiveEngine {
         // ── Stage: Drift (FreshnessGate) ─────────────────────────────────
         let _drift_timer = StageTimer::start(HotStage::Drift);
 
-        let gate_cfg = GateConfig::from_env();
+        let gate_cfg = GateConfig::from_profile_and_env(self.execution_profile);
         let price_gate = (entry_price * 1_000.0).round() as u64;
         let gate_result = self.pretrade_gate.check(
             &signal.token_id,

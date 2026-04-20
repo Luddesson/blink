@@ -21,11 +21,24 @@ pub fn default_worker_count() -> usize {
         .unwrap_or(auto)
 }
 
-/// Returns the configured per-token queue depth (default 64, minimum 1).
+/// Returns the configured per-token queue depth. The default is sourced from
+/// the active [`crate::execution_profile::ExecutionProfile`]
+/// (`max_concurrent_per_token`); `BLINK_SIGNAL_PER_TOKEN_QUEUE` overrides.
 pub fn per_token_queue_depth() -> usize {
+    per_token_queue_depth_for_profile(
+        crate::execution_profile::ExecutionProfile::from_env(),
+    )
+}
+
+/// Resolve per-token queue depth for a specific execution profile, honouring
+/// the `BLINK_SIGNAL_PER_TOKEN_QUEUE` env override when present.
+pub fn per_token_queue_depth_for_profile(
+    profile: crate::execution_profile::ExecutionProfile,
+) -> usize {
+    let default = profile.knobs().max_concurrent_per_token;
     std::env::var("BLINK_SIGNAL_PER_TOKEN_QUEUE")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(64)
+        .unwrap_or(default)
         .max(1)
 }

@@ -110,6 +110,13 @@ impl OrderRouter {
         }
     }
 
+    /// Cheap clone of the inbound sender, for subsystems (e.g. maker layering)
+    /// that want to enqueue intents without owning the full `OrderRouter`.
+    /// Skips the risk gate — the caller is expected to `try_admit` first.
+    pub fn inbound_sender(&self) -> mpsc::Sender<OrderIntent> {
+        self.inbound_tx.clone()
+    }
+
     /// Async submit. Applies token-bucket admission (if a gate is installed)
     /// before enqueueing the intent for the dispatcher.
     ///

@@ -263,8 +263,15 @@ impl LiveEngine {
         spawn_reconciler(
             Arc::clone(&self.order_router.store),
             Arc::clone(&self.order_router.counters),
-            exec,
+            Arc::clone(&exec),
             None, // TODO Phase 4: wire RouterFillHook to risk manager
+        );
+
+        #[cfg(feature = "maker-layering")]
+        crate::live_engine::spawn_maker_layering_task(
+            Arc::clone(&self.risk_gate),
+            Arc::clone(&exec),
+            self.order_router.inbound_sender(),
         );
     }
 
@@ -1254,4 +1261,93 @@ mod tests {
         assert!(hour_in_window(2, 22, 6));
         assert!(!hour_in_window(12, 22, 6));
     }
+}
+
+// ─── Phase 5: maker-layering integration (feature-gated) ─────────────────────
+
+/// Spawn the periodic (250 ms) maker-layering maintenance task.
+///
+/// Activated only under the `maker-layering` cargo feature — which will be
+/// wired to `ExecutionProfile::HftMaker` once that profile lands. Until then
+/// the body is dormant code: it owns a `MakerLayerEngine` and exercises the
+/// reprice/metrics paths, but has no market source to plan fresh layers
+/// against. `plan_layers` + submit wiring happens here once an upstream
+/// supplier of `(market_id, token_id, mid)` is in place.
+#[cfg(feature = "maker-layering")]
+pub fn spawn_maker_layering_task(
+    risk_gate: std::sync::Arc<crate::risk_manager::StreamRiskGate>,
+    _executor: std::sync::Arc<crate::order_executor::OrderExecutor>,
+    submit_tx: tokio::sync::mpsc::Sender<crate::order_router::OrderIntent>,
+) {
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use crate::hot_metrics::counters;
+    use crate::maker_layering::MakerLayerEngine;
+    use crate::risk_manager::AdmitDecision;
+
+    let engine = Arc::new(MakerLayerEngine::default());
+
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_millis(250));
+        loop {
+            ticker.tick().await;
+
+            // Collect market keys without holding the DashMap shard lock across awaits.
+            let markets: Vec<String> = engine
+                .per_market
+                .iter()
+                .map(|e| e.key().clone())
+                .collect();
+
+            for market_id in &markets {
+                // TODO: once ExecutionProfile::HftMaker exposes a market
+                // universe + mid oracle, call `engine.plan_layers(...)` here
+                // and forward admitted intents to `submit_tx`. The
+                // try_admit/submit path below exercises the wiring so the
+                // integration is exactly where HftMaker activation will
+                // plug in.
+                let pending: Vec<OrderIntent> = Vec::new();
+                for intent in pending {
+                    counters()
+                        .maker_layers_planned_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    match risk_gate.try_admit(&intent) {
+                        AdmitDecision::Admit => {
+                            if submit_tx.try_send(intent).is_ok() {
+                                counters()
+                                    .maker_layers_placed_total
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        AdmitDecision::Throttle { .. } | AdmitDecision::Reject { .. } => {
+                            // Skip this layer; will be re-planned on the next tick.
+                        }
+                    }
+                }
+
+                // Reprice stale / drifted layers. Cancel path: the reconciler
+                // owns cancel submission (via OrderRouter::cancel_order);
+                // here we just drop the tracked entry and bump metrics.
+                // mid=0 short-circuits drift check — age eviction still fires.
+                let evictions = engine.reprice_stale(market_id, 0, 50);
+                for (_intent_id, reason) in evictions {
+                    counters()
+                        .maker_layers_reprice_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    if matches!(reason, crate::maker_layering::RepriceReason::StaleAge) {
+                        counters()
+                            .maker_layers_stale_evictions_total
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    // TODO: call OrderRouter::cancel_order via a shared handle
+                    // once HftMaker activation lands.
+                }
+            }
+
+            counters()
+                .maker_active_layers
+                .store(engine.max_active_layers(), Ordering::Relaxed);
+        }
+    });
 }

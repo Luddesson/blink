@@ -101,13 +101,27 @@ impl OrderRouter {
         if let Some(gate) = self.gate.get() {
             let decision = gate.try_admit(&intent);
             match decision {
-                AdmitDecision::Admit => {}
+                AdmitDecision::Admit => {
+                    hot_metrics::counters()
+                        .risk_admits_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
                 AdmitDecision::Throttle { retry_in } => {
+                    hot_metrics::counters()
+                        .risk_throttles_total
+                        .fetch_add(1, Ordering::Relaxed);
                     let sleep = retry_in.min(Duration::from_millis(50));
                     tokio::time::sleep(sleep).await;
                     match gate.try_admit(&intent) {
-                        AdmitDecision::Admit => {}
+                        AdmitDecision::Admit => {
+                            hot_metrics::counters()
+                                .risk_admits_total
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
                         AdmitDecision::Throttle { .. } => {
+                            hot_metrics::counters()
+                                .risk_throttles_total
+                                .fetch_add(1, Ordering::Relaxed);
                             warn!(
                                 intent_id = intent.intent_id,
                                 "OrderRouter: admission throttled twice — dropping intent"
@@ -116,6 +130,7 @@ impl OrderRouter {
                             return Err(RouterFull);
                         }
                         AdmitDecision::Reject { reason } => {
+                            bump_reject_counter(reason);
                             warn!(
                                 intent_id = intent.intent_id,
                                 reason, "OrderRouter: intent rejected by risk gate"
@@ -125,6 +140,7 @@ impl OrderRouter {
                     }
                 }
                 AdmitDecision::Reject { reason } => {
+                    bump_reject_counter(reason);
                     warn!(
                         intent_id = intent.intent_id,
                         reason, "OrderRouter: intent rejected by risk gate"
@@ -346,4 +362,16 @@ async fn submit_one(
             }
         }
     }
+}
+
+fn bump_reject_counter(reason: &str) {
+    let c = hot_metrics::counters();
+    match reason {
+        "rate" => c.risk_rejects_rate.fetch_add(1, Ordering::Relaxed),
+        "pending_count" => c.risk_rejects_pending_count.fetch_add(1, Ordering::Relaxed),
+        "market_notional" => c.risk_rejects_market_notional.fetch_add(1, Ordering::Relaxed),
+        "account_notional" => c.risk_rejects_account_notional.fetch_add(1, Ordering::Relaxed),
+        "max_single_order" => c.risk_rejects_max_single_order.fetch_add(1, Ordering::Relaxed),
+        _ => 0,
+    };
 }

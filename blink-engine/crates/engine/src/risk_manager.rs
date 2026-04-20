@@ -531,6 +531,13 @@ impl StreamRiskGate {
                         |t| Some(t.saturating_add(cancel_refill).min(max_cancel_tokens)),
                     );
                 }
+                let c = crate::hot_metrics::counters();
+                c.risk_tokens_available
+                    .store(gate.tokens.load(Ordering::Relaxed), Ordering::Relaxed);
+                c.risk_cancel_tokens_available
+                    .store(gate.cancel_tokens.load(Ordering::Relaxed), Ordering::Relaxed);
+                c.risk_per_market_pending_max
+                    .store(gate.max_per_market_pending_count(), Ordering::Relaxed);
             }
         });
     }

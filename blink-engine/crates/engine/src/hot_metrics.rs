@@ -159,6 +159,17 @@ pub struct HotCounters {
     pub ws_dedup_wins: AtomicU64,
     /// Deduped duplicates where the REST path had published first.
     pub rest_dedup_wins: AtomicU64,
+    // ─── Phase 3: Risk admission counters/gauges ─────────────────────────────
+    pub risk_admits_total: AtomicU64,
+    pub risk_throttles_total: AtomicU64,
+    pub risk_rejects_rate: AtomicU64,
+    pub risk_rejects_pending_count: AtomicU64,
+    pub risk_rejects_market_notional: AtomicU64,
+    pub risk_rejects_account_notional: AtomicU64,
+    pub risk_rejects_max_single_order: AtomicU64,
+    pub risk_tokens_available: AtomicU64,
+    pub risk_cancel_tokens_available: AtomicU64,
+    pub risk_per_market_pending_max: AtomicU64,
 }
 
 impl HotCounters {
@@ -187,6 +198,16 @@ impl HotCounters {
             pending_orders_count: AtomicI64::new(0),
             ws_dedup_wins: AtomicU64::new(0),
             rest_dedup_wins: AtomicU64::new(0),
+            risk_admits_total: AtomicU64::new(0),
+            risk_throttles_total: AtomicU64::new(0),
+            risk_rejects_rate: AtomicU64::new(0),
+            risk_rejects_pending_count: AtomicU64::new(0),
+            risk_rejects_market_notional: AtomicU64::new(0),
+            risk_rejects_account_notional: AtomicU64::new(0),
+            risk_rejects_max_single_order: AtomicU64::new(0),
+            risk_tokens_available: AtomicU64::new(0),
+            risk_cancel_tokens_available: AtomicU64::new(0),
+            risk_per_market_pending_max: AtomicU64::new(0),
         }
     }
 }
@@ -296,6 +317,43 @@ pub fn render_prom() -> String {
     counter!(out, "blink_router_reconcile_sweeps_total", c.router_reconcile_sweeps.load(Ordering::Relaxed));
     counter!(out, "blink_dedup_ws_wins_total",          c.ws_dedup_wins.load(Ordering::Relaxed));
     counter!(out, "blink_dedup_rest_wins_total",        c.rest_dedup_wins.load(Ordering::Relaxed));
+
+    // Phase 3: Risk admission counters
+    counter!(out, "blink_risk_admits_total",            c.risk_admits_total.load(Ordering::Relaxed));
+    counter!(out, "blink_risk_throttles_total",         c.risk_throttles_total.load(Ordering::Relaxed));
+    out.push_str("# TYPE blink_risk_rejects_total counter\n");
+    out.push_str(&format!(
+        "blink_risk_rejects_total{{reason=\"rate\"}} {}\n",
+        c.risk_rejects_rate.load(Ordering::Relaxed)
+    ));
+    out.push_str(&format!(
+        "blink_risk_rejects_total{{reason=\"pending_count\"}} {}\n",
+        c.risk_rejects_pending_count.load(Ordering::Relaxed)
+    ));
+    out.push_str(&format!(
+        "blink_risk_rejects_total{{reason=\"market_notional\"}} {}\n",
+        c.risk_rejects_market_notional.load(Ordering::Relaxed)
+    ));
+    out.push_str(&format!(
+        "blink_risk_rejects_total{{reason=\"account_notional\"}} {}\n",
+        c.risk_rejects_account_notional.load(Ordering::Relaxed)
+    ));
+    out.push_str(&format!(
+        "blink_risk_rejects_total{{reason=\"max_single_order\"}} {}\n",
+        c.risk_rejects_max_single_order.load(Ordering::Relaxed)
+    ));
+    let risk_tokens = c.risk_tokens_available.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        "# TYPE blink_risk_tokens_available gauge\nblink_risk_tokens_available {risk_tokens}\n"
+    ));
+    let risk_cancel_tokens = c.risk_cancel_tokens_available.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        "# TYPE blink_risk_cancel_tokens_available gauge\nblink_risk_cancel_tokens_available {risk_cancel_tokens}\n"
+    ));
+    let risk_pm_pending = c.risk_per_market_pending_max.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        "# TYPE blink_risk_per_market_pending_max gauge\nblink_risk_per_market_pending_max {risk_pm_pending}\n"
+    ));
     let pending = c.pending_orders_count.load(Ordering::Relaxed);
     out.push_str(&format!(
         "# TYPE blink_router_pending_orders_count gauge\nblink_router_pending_orders_count {pending}\n"

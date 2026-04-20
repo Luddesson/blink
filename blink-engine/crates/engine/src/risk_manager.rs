@@ -5,7 +5,12 @@
 
 use std::collections::VecDeque;
 use std::fmt;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use dashmap::DashMap;
+use tracing::warn;
 
 // ─── RiskConfig ───────────────────────────────────────────────────────────────
 
@@ -28,6 +33,25 @@ pub struct RiskConfig {
     /// window exceeds this fraction of portfolio NAV, trip the breaker.
     /// Default 0.05 = 5%.
     pub var_threshold_pct: f64,
+
+    // ── Phase 3: HFT stream-aware risk fields ────────────────────────────
+
+    /// Steady-state order submission rate (orders/second) admitted by the
+    /// token-bucket gate. Default 50.0.
+    pub orders_per_second: f64,
+    /// Burst bucket size — max tokens refill can accumulate. Default 150.
+    pub orders_burst: u32,
+    /// Steady-state cancel/replace budget (operations/second). Default 30.0.
+    pub cancel_replace_budget_per_sec: f64,
+    /// Max concurrent pending orders per market. 0 disables the check.
+    /// Default 6.
+    pub per_market_max_pending: u32,
+    /// Max notional exposure per market (USDC × 1_000 scaled). 0 disables.
+    /// Default 500_000 (= $500).
+    pub per_market_max_notional_usdc: u64,
+    /// Account-wide max pending notional (USDC × 1_000 scaled). 0 disables.
+    /// Default 5_000_000 (= $5000).
+    pub account_max_pending_notional_usdc: u64,
 }
 
 impl Default for RiskConfig {
@@ -40,6 +64,12 @@ impl Default for RiskConfig {
             trading_enabled: false,
             var_window: Duration::from_secs(60),
             var_threshold_pct: 0.05,
+            orders_per_second: 50.0,
+            orders_burst: 150,
+            cancel_replace_budget_per_sec: 30.0,
+            per_market_max_pending: 6,
+            per_market_max_notional_usdc: 500_000,
+            account_max_pending_notional_usdc: 5_000_000,
         }
     }
 }
@@ -76,6 +106,38 @@ impl RiskConfig {
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(10);
 
+        if std::env::var("MAX_ORDERS_PER_SECOND").is_ok() {
+            warn!(
+                "MAX_ORDERS_PER_SECOND is deprecated — use BLINK_RISK_ORDERS_PER_SEC \
+                 and BLINK_RISK_ORDERS_BURST for the Phase 3 token-bucket gate"
+            );
+        }
+
+        let orders_per_second = std::env::var("BLINK_RISK_ORDERS_PER_SEC")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(50.0);
+        let orders_burst = std::env::var("BLINK_RISK_ORDERS_BURST")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(150);
+        let cancel_replace_budget_per_sec = std::env::var("BLINK_RISK_CANCEL_REPLACE_PER_SEC")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(30.0);
+        let per_market_max_pending = std::env::var("BLINK_RISK_PER_MARKET_PENDING")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(6);
+        let per_market_max_notional_usdc = std::env::var("BLINK_RISK_PER_MARKET_NOTIONAL_USDC")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(500_000);
+        let account_max_pending_notional_usdc = std::env::var("BLINK_RISK_ACCOUNT_NOTIONAL_USDC")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(5_000_000);
+
         // Default to false — must be explicitly opted in.
         let trading_enabled = std::env::var("TRADING_ENABLED")
             .map(|v| v.eq_ignore_ascii_case("true"))
@@ -97,6 +159,12 @@ impl RiskConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1.0), // 100% — effectively disabled for paper mode
+            orders_per_second,
+            orders_burst,
+            cancel_replace_budget_per_sec,
+            per_market_max_pending,
+            per_market_max_notional_usdc,
+            account_max_pending_notional_usdc,
         }
     }
 }
@@ -199,6 +267,275 @@ impl RiskViolation {
     }
 }
 
+// ─── Phase 3: StreamRiskGate (lock-free token-bucket admission) ──────────────
+
+/// Admission decision returned by [`StreamRiskGate::try_admit`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdmitDecision {
+    /// Order admitted — 1_000 rate tokens consumed.
+    Admit,
+    /// Bucket empty — caller should back off for `retry_in` then retry once.
+    Throttle { retry_in: Duration },
+    /// Hard reject — a structural limit was exceeded.
+    Reject { reason: &'static str },
+}
+
+/// Per-market mutable risk state tracked by [`StreamRiskGate`].
+#[derive(Debug, Default)]
+pub struct MarketRiskState {
+    pub pending_count: AtomicU32,
+    /// Pending notional in USDC × 1_000.
+    pub pending_notional_usdc: AtomicU64,
+}
+
+/// Lock-free token-bucket admission gate shared between `RiskManager` and
+/// the `OrderRouter`.
+///
+/// **Hot path is integer-only.** All floats from [`RiskConfig`] are converted
+/// to `u64` in [`StreamRiskGate::new`]; [`StreamRiskGate::try_admit`] performs
+/// only integer arithmetic. Tokens are scaled by 1_000 (one order = 1_000
+/// tokens) so the refill interval (10 ms) can deposit fractional-order
+/// increments without loss of precision.
+pub struct StreamRiskGate {
+    // ── Immutable parameters (set at init) ─────────────────────────────────
+    /// Full bucket capacity (orders_burst × 1_000).
+    max_tokens: u64,
+    /// Tokens added every 10 ms ((orders_per_second × 10.0) as u64).
+    refill_per_10ms: u64,
+    /// Full cancel/replace bucket capacity.
+    max_cancel_tokens: u64,
+    /// Cancel tokens added every 10 ms.
+    cancel_refill_per_10ms: u64,
+    /// Single-order USDC cap (× 1_000). 0 disables.
+    max_single_order_u64: u64,
+    /// Max pending orders per market. 0 disables.
+    per_market_max_pending: u32,
+    /// Per-market pending notional cap (× 1_000). 0 disables.
+    per_market_max_notional_usdc: u64,
+    /// Account-wide pending notional cap (× 1_000). 0 disables.
+    account_max_pending_notional_usdc: u64,
+
+    // ── Mutable atomic state ───────────────────────────────────────────────
+    pub tokens: AtomicU64,
+    pub cancel_tokens: AtomicU64,
+    /// Per-market pending counters — updated by router lifecycle hooks.
+    pub market_state: DashMap<String, MarketRiskState>,
+}
+
+impl StreamRiskGate {
+    /// Build a new gate from a risk config. All float fields are converted to
+    /// `u64` here so the hot path stays integer-only.
+    pub fn new(config: &RiskConfig) -> Arc<Self> {
+        let max_tokens = (config.orders_burst as u64).saturating_mul(1_000);
+        let refill_per_10ms = (config.orders_per_second * 10.0).max(0.0) as u64;
+        let max_cancel_tokens =
+            ((config.cancel_replace_budget_per_sec * 3.0).max(0.0) as u64).saturating_mul(1_000);
+        let cancel_refill_per_10ms = (config.cancel_replace_budget_per_sec * 10.0).max(0.0) as u64;
+        let max_single_order_u64 = (config.max_single_order_usdc.max(0.0) * 1_000.0) as u64;
+
+        Arc::new(Self {
+            max_tokens,
+            refill_per_10ms,
+            max_cancel_tokens,
+            cancel_refill_per_10ms,
+            max_single_order_u64,
+            per_market_max_pending: config.per_market_max_pending,
+            per_market_max_notional_usdc: config.per_market_max_notional_usdc,
+            account_max_pending_notional_usdc: config.account_max_pending_notional_usdc,
+            tokens: AtomicU64::new(max_tokens),
+            cancel_tokens: AtomicU64::new(max_cancel_tokens),
+            market_state: DashMap::new(),
+        })
+    }
+
+    /// Integer-only admission check. Must be called on the submit hot path
+    /// BEFORE enqueueing to the router.
+    pub fn try_admit(
+        &self,
+        intent: &crate::order_router::intent::OrderIntent,
+    ) -> AdmitDecision {
+        // Step 1: single-order size cap.
+        if self.max_single_order_u64 > 0 && intent.size_u64 > self.max_single_order_u64 {
+            return AdmitDecision::Reject {
+                reason: "max_single_order",
+            };
+        }
+
+        // Step 2: token-bucket CAS loop.
+        loop {
+            let current = self.tokens.load(Ordering::Acquire);
+            if current < 1_000 {
+                let refill = self.refill_per_10ms.max(1);
+                let deficit = 1_000u64.saturating_sub(current);
+                let ticks = (deficit + refill - 1) / refill;
+                return AdmitDecision::Throttle {
+                    retry_in: Duration::from_millis(ticks.saturating_mul(10).saturating_add(1)),
+                };
+            }
+            if self
+                .tokens
+                .compare_exchange(current, current - 1_000, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                break;
+            }
+        }
+
+        // Step 3: per-market pending count.
+        if !intent.market_id.is_empty() && self.per_market_max_pending > 0 {
+            let entry = self
+                .market_state
+                .entry(intent.market_id.clone())
+                .or_default();
+            let pending = entry.pending_count.load(Ordering::Relaxed);
+            if pending >= self.per_market_max_pending {
+                drop(entry);
+                self.tokens.fetch_add(1_000, Ordering::Relaxed);
+                return AdmitDecision::Reject {
+                    reason: "pending_count",
+                };
+            }
+        }
+
+        // Step 4: per-market pending notional.
+        if !intent.market_id.is_empty() && self.per_market_max_notional_usdc > 0 {
+            let entry = self
+                .market_state
+                .entry(intent.market_id.clone())
+                .or_default();
+            let existing = entry.pending_notional_usdc.load(Ordering::Relaxed);
+            if existing.saturating_add(intent.size_u64) > self.per_market_max_notional_usdc {
+                drop(entry);
+                self.tokens.fetch_add(1_000, Ordering::Relaxed);
+                return AdmitDecision::Reject {
+                    reason: "market_notional",
+                };
+            }
+        }
+
+        // Step 5: account-wide pending notional (sum across markets).
+        if self.account_max_pending_notional_usdc > 0 {
+            let mut sum: u64 = 0;
+            for m in self.market_state.iter() {
+                sum = sum.saturating_add(m.value().pending_notional_usdc.load(Ordering::Relaxed));
+            }
+            if sum.saturating_add(intent.size_u64) > self.account_max_pending_notional_usdc {
+                self.tokens.fetch_add(1_000, Ordering::Relaxed);
+                return AdmitDecision::Reject {
+                    reason: "account_notional",
+                };
+            }
+        }
+
+        AdmitDecision::Admit
+    }
+
+    /// Try to admit a cancel/replace operation against the dedicated budget.
+    pub fn try_admit_cancel(&self) -> AdmitDecision {
+        loop {
+            let current = self.cancel_tokens.load(Ordering::Acquire);
+            if current < 1_000 {
+                let refill = self.cancel_refill_per_10ms.max(1);
+                let deficit = 1_000u64.saturating_sub(current);
+                let ticks = (deficit + refill - 1) / refill;
+                return AdmitDecision::Throttle {
+                    retry_in: Duration::from_millis(ticks.saturating_mul(10).saturating_add(1)),
+                };
+            }
+            if self
+                .cancel_tokens
+                .compare_exchange(current, current - 1_000, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return AdmitDecision::Admit;
+            }
+        }
+    }
+
+    /// Called by the router dispatcher the moment an order enters the store.
+    pub fn on_order_created(&self, market_id: &str, size_u64: u64) {
+        if market_id.is_empty() {
+            return;
+        }
+        let entry = self.market_state.entry(market_id.to_string()).or_default();
+        entry.pending_count.fetch_add(1, Ordering::Relaxed);
+        entry
+            .pending_notional_usdc
+            .fetch_add(size_u64, Ordering::Relaxed);
+    }
+
+    /// Called by the router when an order reaches a terminal state
+    /// (`Acked`, `Rejected`, `SubmitUnknown`, filled/cancelled, etc.).
+    pub fn on_order_terminal(&self, market_id: &str, size_u64: u64) {
+        if market_id.is_empty() {
+            return;
+        }
+        if let Some(entry) = self.market_state.get(market_id) {
+            let _ = entry
+                .pending_count
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                    Some(n.saturating_sub(1))
+                });
+            let _ = entry.pending_notional_usdc.fetch_update(
+                Ordering::AcqRel,
+                Ordering::Acquire,
+                |n| Some(n.saturating_sub(size_u64)),
+            );
+        }
+    }
+
+    /// Current rate-bucket token level (× 1_000).
+    pub fn available_tokens(&self) -> u64 {
+        self.tokens.load(Ordering::Relaxed)
+    }
+
+    /// Current cancel-bucket token level (× 1_000).
+    pub fn available_cancel_tokens(&self) -> u64 {
+        self.cancel_tokens.load(Ordering::Relaxed)
+    }
+
+    /// Max pending count observed across all known markets.
+    pub fn max_per_market_pending_count(&self) -> u64 {
+        let mut max: u64 = 0;
+        for m in self.market_state.iter() {
+            let v = m.value().pending_count.load(Ordering::Relaxed) as u64;
+            if v > max {
+                max = v;
+            }
+        }
+        max
+    }
+
+    /// Spawn the 10 ms refill task. Safe to call once per gate instance.
+    pub fn spawn_token_refill(gate: Arc<Self>) {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(10));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let refill = gate.refill_per_10ms;
+            let cancel_refill = gate.cancel_refill_per_10ms;
+            let max_tokens = gate.max_tokens;
+            let max_cancel_tokens = gate.max_cancel_tokens;
+            loop {
+                interval.tick().await;
+                if refill > 0 && max_tokens > 0 {
+                    let _ = gate
+                        .tokens
+                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |t| {
+                            Some(t.saturating_add(refill).min(max_tokens))
+                        });
+                }
+                if cancel_refill > 0 && max_cancel_tokens > 0 {
+                    let _ = gate.cancel_tokens.fetch_update(
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                        |t| Some(t.saturating_add(cancel_refill).min(max_cancel_tokens)),
+                    );
+                }
+            }
+        });
+    }
+}
+
 // ─── RiskManager ─────────────────────────────────────────────────────────────
 
 /// Runtime risk manager — holds mutable state for daily P&L and rate limiting.
@@ -214,6 +551,10 @@ pub struct RiskManager {
     circuit_breaker_reason: String,
     /// Rolling exposure entries for VaR calculation.
     rolling_exposure: VecDeque<ExposureEntry>,
+    /// Phase 3: shared lock-free token-bucket admission gate. Also cloned
+    /// into the `OrderRouter` at startup so the submit hot path can call
+    /// [`StreamRiskGate::try_admit`] without acquiring a lock.
+    pub gate: Arc<StreamRiskGate>,
 }
 
 /// A single exposure entry in the rolling VaR window.
@@ -228,6 +569,7 @@ struct ExposureEntry {
 impl RiskManager {
     /// Creates a new `RiskManager` with the given configuration.
     pub fn new(config: RiskConfig) -> Self {
+        let gate = StreamRiskGate::new(&config);
         Self {
             config,
             daily_pnl: 0.0,
@@ -235,6 +577,7 @@ impl RiskManager {
             circuit_breaker_tripped_at: None,
             circuit_breaker_reason: String::new(),
             rolling_exposure: VecDeque::new(),
+            gate,
         }
     }
 

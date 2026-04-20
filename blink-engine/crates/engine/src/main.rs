@@ -1555,10 +1555,28 @@ async fn run_preflight_live(config: &Config) -> Result<()> {
     check += 1;
 
     // ── Check 3: heartbeat endpoint reachable ────────────────────────────
+    // Runtime heartbeat worker already tolerates failures (just warns), so we
+    // mirror that behaviour here: advisory only. A true network/DNS failure
+    // surfaces as an error below; HTTP-level failures (404/401/5xx) degrade
+    // to a warning so that first-time operators aren't blocked when the
+    // heartbeat endpoint is deprecated or auth-gated differently.
     match executor.send_heartbeat().await {
         Ok(()) => println!("✅ preflight-live [{check}/{total_checks}] heartbeat endpoint OK"),
         Err(e) => {
-            return Err(anyhow::anyhow!("preflight: heartbeat failed: {e}. Is session active?"));
+            let msg = format!("{e:#}");
+            let is_network = msg.contains("network error")
+                || msg.contains("dns error")
+                || msg.contains("connection refused")
+                || msg.contains("tcp connect error");
+            if is_network {
+                return Err(anyhow::anyhow!(
+                    "preflight: heartbeat network failure: {e}. Check CLOB_HOST + connectivity."
+                ));
+            }
+            println!(
+                "⚠️  preflight-live [{check}/{total_checks}] heartbeat advisory-fail: {msg} \
+                 (runtime will warn and continue; real API creds may succeed)"
+            );
         }
     }
     check += 1;
@@ -1584,10 +1602,10 @@ async fn run_preflight_live(config: &Config) -> Result<()> {
     std::fs::create_dir_all("logs")
         .map_err(|e| anyhow::anyhow!("preflight: cannot create logs/ directory: {e}"))?;
     // Test atomic write to a temp file.
-    let test_path = "data\\.preflight_test";
-    std::fs::write(test_path, b"ok")
+    let test_path = std::path::Path::new("data").join(".preflight_test");
+    std::fs::write(&test_path, b"ok")
         .map_err(|e| anyhow::anyhow!("preflight: data/ not writable: {e}"))?;
-    let _ = std::fs::remove_file(test_path);
+    let _ = std::fs::remove_file(&test_path);
     println!("✅ preflight-live [{check}/{total_checks}] data/ and logs/ directories writable");
     check += 1;
 
@@ -1786,7 +1804,10 @@ fn write_postrun_review(session_log_path: &str) -> Result<String> {
     let ts = Utc::now().format("%Y%m%d-%H%M%S");
     let dir = std::env::var("POSTRUN_REVIEW_DIR").unwrap_or_else(|_| "logs/reports".to_string());
     std::fs::create_dir_all(&dir)?;
-    let out_path = format!("{dir}\\postrun-review-{ts}.txt");
+    let out_path = std::path::Path::new(&dir)
+        .join(format!("postrun-review-{ts}.txt"))
+        .to_string_lossy()
+        .into_owned();
 
     let duration_min = match (review.first_ts, review.last_ts) {
         (Some(a), Some(b)) => (b - a).num_seconds().max(0) as f64 / 60.0,

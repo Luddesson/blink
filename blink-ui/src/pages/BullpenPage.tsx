@@ -3,7 +3,7 @@ import { api } from '../lib/api'
 import ErrorBoundary from '../components/ErrorBoundary'
 import BullpenHeader from '../components/BullpenHeader'
 import DiscoveryTable from '../components/DiscoveryTable'
-import ConvergenceMonitor from '../components/ConvergenceMonitor'
+import ConvergencePanel from '../components/ConvergencePanel'
 
 export default function BullpenPage() {
   const { data: health } = usePoll(api.bullpenHealth, 10_000)
@@ -79,9 +79,9 @@ export default function BullpenPage() {
             </div>
           </ErrorBoundary>
 
-          <ErrorBoundary label="ConvergenceMonitor">
+          <ErrorBoundary label="ConvergencePanel">
             <div className="overflow-y-auto min-h-0">
-              <ConvergenceMonitor convergence={convergence} />
+              <ConvergencePanel convergence={convergence} variant="detailed" />
             </div>
           </ErrorBoundary>
         </div>

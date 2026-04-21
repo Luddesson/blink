@@ -608,6 +608,47 @@ impl OrderExecutor {
         }
     }
 
+    /// Spawns a background task that sends a lightweight GET probe to the CLOB
+    /// host every `interval_secs` seconds to keep the HTTP/2 (or HTTP/1.1)
+    /// connection pool alive during idle trading periods.
+    ///
+    /// A warm connection saves ~200ms on the first order after an idle period
+    /// (eliminates TCP handshake + TLS resumption). The probe reuses the same
+    /// `reqwest::Client` connection pool as order submission.
+    ///
+    /// Controlled by `BLINK_CLOB_KEEPALIVE_SECS` (default 5, set 0 to disable).
+    pub fn spawn_connection_keepalive(&self) {
+        let interval_secs = std::env::var("BLINK_CLOB_KEEPALIVE_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(5);
+        if interval_secs == 0 {
+            return;
+        }
+        // Use a simple unauthenticated endpoint that returns quickly.
+        let probe_url = format!("{}/time", self.base_url);
+        let client = self.client.clone();
+        let probe_url_log = probe_url.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                // Fire-and-forget: we only care about keeping the socket warm.
+                let _ = client
+                    .get(&probe_url)
+                    .timeout(std::time::Duration::from_secs(3))
+                    .send()
+                    .await;
+            }
+        });
+        tracing::info!(
+            interval_secs,
+            probe_url = %probe_url_log,
+            "CLOB connection keep-alive probe started"
+        );
+    }
+
     /// Searches for an order by `client_order_id`.
     ///
     /// **Primary path**: `GET /orders?client_order_id=<id>` — Polymarket CLOB

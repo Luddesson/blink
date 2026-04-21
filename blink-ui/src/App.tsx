@@ -23,7 +23,7 @@ import PortfolioStats from './components/PortfolioStats'
 import ErrorBoundary from './components/ErrorBoundary'
 import BullpenHealth from './components/BullpenHealth'
 import DiscoveryPanel from './components/DiscoveryPanel'
-import ConvergenceAlert from './components/ConvergenceAlert'
+import ConvergencePanel from './components/ConvergencePanel'
 import AuroraBackground from './components/aurora/AuroraBackground'
 import CommandPalette from './components/CommandPalette'
 import HelpSheet from './components/HelpSheet'
@@ -201,7 +201,7 @@ export default function App() {
                   <ErrorBoundary label="FailsafePanel"><FailsafePanel /></ErrorBoundary>
                   <ErrorBoundary label="BullpenHealth"><BullpenHealth health={bullpenHealth} /></ErrorBoundary>
                   <ErrorBoundary label="DiscoveryPanel"><DiscoveryPanel discovery={bullpenDiscovery} /></ErrorBoundary>
-                  <ErrorBoundary label="ConvergenceAlert"><ConvergenceAlert convergence={bullpenConvergence} /></ErrorBoundary>
+                  <ErrorBoundary label="ConvergencePanel"><ConvergencePanel convergence={bullpenConvergence} variant="compact" /></ErrorBoundary>
                 </aside>
               </main>
             )}

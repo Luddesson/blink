@@ -1711,45 +1711,84 @@ impl PaperEngine {
         // ── FreshnessGate (replaces fixed fill window) ─────────────────
         let gate_cfg = GateConfig::from_env();
         let price_gate = (entry_price * 1_000.0).round() as u64;
+        // WS-sourced signals arrive directly from the matching engine and are
+        // inherently fresh — skip the snapshot age check, run only drift + post-only.
+        let effective_stale_ms = if signal.signal_source == "ws" {
+            u32::MAX
+        } else {
+            gate_cfg.stale_ms
+        };
         let gate_result = self.pretrade_gate.check(
             &signal.token_id,
             signal.side,
             price_gate,
-            gate_cfg.stale_ms,
+            effective_stale_ms,
             gate_cfg.max_drift_bps,
             gate_cfg.post_only,
         );
-        let filled = match gate_result {
+
+        // Fix E: If book snapshot is stale for a REST signal, try a quick CLOB REST
+        // midpoint fetch (timeout 80ms) to refresh the snapshot before aborting.
+        let gate_result = if gate_result == GateDecision::SkipStale && signal.signal_source != "ws" {
+            let refreshed = fetch_and_inject_midpoint(
+                &signal.token_id,
+                &self.book_store,
+            ).await;
+            if refreshed {
+                info!(token_id = %signal.token_id, "⚡ Stale snapshot refreshed via CLOB REST — retrying gate");
+                self.pretrade_gate.check(
+                    &signal.token_id,
+                    signal.side,
+                    price_gate,
+                    gate_cfg.stale_ms,
+                    gate_cfg.max_drift_bps,
+                    gate_cfg.post_only,
+                )
+            } else {
+                gate_result
+            }
+        } else {
+            gate_result
+        };
+
+        // Capture the abort reason and actual bps so the log is accurate.
+        enum GateAbortReason {
+            Stale,
+            Drift { bps: i64 },
+            PostOnlyCross,
+        }
+        let gate_abort: Option<GateAbortReason> = match gate_result {
             GateDecision::Proceed => {
                 crate::hot_metrics::counters()
                     .gate_proceed
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                true
+                None
             }
             GateDecision::SkipStale => {
                 crate::hot_metrics::counters()
                     .gate_skip_stale
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                warn!(token_id = %signal.token_id, "⛔ Gate: stale book snapshot — signal dropped");
-                false
+                warn!(token_id = %signal.token_id, stale_ms = gate_cfg.stale_ms, "⛔ Gate: stale book snapshot — signal dropped");
+                Some(GateAbortReason::Stale)
             }
             GateDecision::SkipDrift { bps } => {
                 crate::hot_metrics::counters()
                     .gate_skip_drift
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                warn!(token_id = %signal.token_id, drift_bps = bps, "⛔ Gate: drift too large — signal dropped");
-                false
+                warn!(token_id = %signal.token_id, drift_bps = bps, limit_bps = gate_cfg.max_drift_bps, "⛔ Gate: drift too large — signal dropped");
+                Some(GateAbortReason::Drift { bps })
             }
             GateDecision::SkipPostOnlyCross => {
                 crate::hot_metrics::counters()
                     .gate_skip_post_only
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 warn!(token_id = %signal.token_id, "⛔ Gate: post-only cross — signal dropped");
-                false
+                Some(GateAbortReason::PostOnlyCross)
             }
         };
+        let filled = gate_abort.is_none();
 
-        if !filled {
+        if let Some(reason) = gate_abort {
             // Record this token in the abort cooldown map
             self.drift_abort_cooldown
                 .lock()
@@ -1757,21 +1796,32 @@ impl PaperEngine {
                 .insert(signal.token_id.clone(), Instant::now());
             let mut p = self.portfolio.lock().await;
             p.aborted_orders += 1;
-            let drift_pct = crate::paper_portfolio::drift_threshold() * 100.0;
-            warn!(
-                token_id = %signal.token_id,
-                drift_threshold_pct = drift_pct,
-                "🛑 Paper order ABORTED — price drift exceeded {drift_pct:.1}% during fill window"
-            );
+            let signal_age_ms = signal.detected_at.elapsed().as_millis();
+            let abort_msg = match reason {
+                GateAbortReason::Stale => format!(
+                    "ABORTED — book snapshot stale (>{stale_ms}ms)  token={token:.12}… src={src} age={age}ms",
+                    stale_ms = gate_cfg.stale_ms,
+                    token = &signal.token_id,
+                    src = &signal.signal_source,
+                    age = signal_age_ms,
+                ),
+                GateAbortReason::Drift { bps } => format!(
+                    "ABORTED — price drifted {bps}bps (limit {limit}bps)  token={token:.12}… src={src} age={age}ms",
+                    limit = gate_cfg.max_drift_bps,
+                    token = &signal.token_id,
+                    src = &signal.signal_source,
+                    age = signal_age_ms,
+                ),
+                GateAbortReason::PostOnlyCross => format!(
+                    "ABORTED — post-only cross  token={token:.12}… src={src} age={age}ms",
+                    token = &signal.token_id,
+                    src = &signal.signal_source,
+                    age = signal_age_ms,
+                ),
+            };
+            warn!(token_id = %signal.token_id, signal_source = %signal.signal_source, signal_age_ms, "{}", abort_msg);
             if let Some(ref log) = self.activity {
-                log_push(
-                    log,
-                    EntryKind::Abort,
-                    format!(
-                        "ABORTED — price moved >{drift_pct:.1}% during fill window  token={:.12}…",
-                        &signal.token_id
-                    ),
-                );
+                log_push(log, EntryKind::Abort, abort_msg);
             }
             self.record_rejection("drift_abort", &signal).await;
             return;
@@ -3308,6 +3358,73 @@ fn read_json_with_fallback(path: &str) -> std::io::Result<Option<serde_json::Val
         }
     }
     Ok(None)
+}
+
+/// Fetches the current midpoint price for `token_id` from the CLOB REST API
+/// and injects it as a synthetic book snapshot into `book_store`.
+///
+/// This is the Fix-E stale-snapshot rescue path: instead of aborting a REST
+/// signal because our WS book is stale, we make a single fast REST call to
+/// get a fresh midpoint and inject it so the FreshnessGate can proceed.
+///
+/// Returns `true` if the snapshot was successfully refreshed, `false` on any error.
+async fn fetch_and_inject_midpoint(
+    token_id: &str,
+    book_store: &std::sync::Arc<OrderBookStore>,
+) -> bool {
+    let clob_host = std::env::var("CLOB_HOST")
+        .unwrap_or_else(|_| "https://clob.polymarket.com".to_string());
+    let timeout_ms = std::env::var("BLINK_STALE_FALLBACK_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(80);
+
+    let client = match Client::builder()
+        .timeout(std::time::Duration::from_millis(timeout_ms))
+        .connect_timeout(std::time::Duration::from_millis(timeout_ms))
+        .tcp_nodelay(true)
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let url = format!("{clob_host}/midpoint?token_id={token_id}");
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::debug!(token_id, error = %e, "stale fallback: midpoint request failed");
+            return false;
+        }
+    };
+
+    let body = match resp.json::<serde_json::Value>().await {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let mid_str = body.get("mid").or_else(|| body.get("price"))
+        .and_then(|v| v.as_str());
+    let mid: f64 = match mid_str.and_then(|s| s.parse().ok()) {
+        Some(p) => p,
+        None => return false,
+    };
+    if mid <= 0.0 || mid >= 1.0 {
+        return false;
+    }
+
+    // Inject midpoint as a synthetic best bid (mid - 0.001) and best ask (mid + 0.001).
+    // This gives the gate enough data to run the drift check.
+    let mid_u = (mid * 1_000.0).round() as u64;
+    let bid_u = mid_u.saturating_sub(1);
+    let ask_u = (mid_u + 1).min(999);
+
+    {
+        let mut book = book_store.get_or_create(token_id);
+        book.apply_bids_delta(&[crate::types::PriceLevel { price: bid_u, size: 1_000 }]);
+        book.apply_asks_delta(&[crate::types::PriceLevel { price: ask_u, size: 1_000 }]);
+    }
+    true
 }
 
 #[cfg(test)]

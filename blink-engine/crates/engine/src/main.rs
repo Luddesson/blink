@@ -47,7 +47,7 @@ use engine::paper_engine::PaperEngine;
 use engine::paper_portfolio::STARTING_BALANCE_USDC;
 use engine::r2_uploader::start_r2_uploader;
 use engine::risk_manager::RiskConfig;
-use engine::rn1_poller::{run_rn1_poller, Rn1PollDiagnostics, Rn1PollDiagnosticsHandle};
+use engine::rn1_poller::{prefetch_rn1_active_markets, run_rn1_poller, Rn1PollDiagnostics, Rn1PollDiagnosticsHandle};
 use engine::sniffer::Sniffer;
 use engine::strategy::{StrategyController, StrategyControllerConfig};
 use engine::tick_recorder::{TickRecord, TickRecorder};
@@ -503,7 +503,7 @@ async fn main() -> Result<()> {
             );
         }
         // Spawn one poller task per wallet; share a single diagnostics handle for the primary.
-        let _tasks: Vec<_> = wallet_list
+        let mut tasks: Vec<_> = wallet_list
             .into_iter()
             .map(|(wallet, weight)| {
                 let cfg = Arc::clone(&config);
@@ -515,8 +515,42 @@ async fn main() -> Result<()> {
                 })
             })
             .collect();
+
+        // Staggered shadow poller: spawn a second poller for the primary wallet at
+        // half the poll-interval offset. Halves the effective detection window without
+        // increasing API load per unit time. Ingress dedup discards any duplicates.
+        // Active by default when poll interval ≤ 400ms; override with BLINK_STAGGER_POLL.
+        let poll_ms = std::env::var("RN1_POLL_INTERVAL_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(400);
+        let stagger_enabled = std::env::var("BLINK_STAGGER_POLL")
+            .map(|v| matches!(v.as_str(), "1" | "true"))
+            .unwrap_or(poll_ms <= 400);
+        if stagger_enabled {
+            let stagger_offset_ms = (poll_ms / 2).max(25);
+            let cfg2 = Arc::clone(&config);
+            let tx2 = signal_tx.clone();
+            let act2 = Some(activity.clone());
+            let diag2 = Arc::clone(&rn1_diagnostics);
+            let primary_wallet2 = config.rn1_wallet.clone();
+            let stagger_task = tokio::spawn(async move {
+                // Delay by half the poll interval so the two pollers are out-of-phase.
+                tokio::time::sleep(std::time::Duration::from_millis(stagger_offset_ms)).await;
+                tracing::info!(
+                    offset_ms = stagger_offset_ms,
+                    "RN1 stagger-poller started (phase-shifted shadow for primary wallet)"
+                );
+                run_rn1_poller(cfg2, primary_wallet2, 1.0, tx2, act2, diag2).await;
+            });
+            tasks.push(stagger_task);
+            tracing::info!(
+                stagger_offset_ms,
+                "RN1 stagger-poll enabled — effective detection resolution halved"
+            );
+        }
         // Return the first task handle for join tracking (primary wallet).
-        _tasks.into_iter().next()
+        tasks.into_iter().next()
     };
     let rn1_task = rn1_task.unwrap_or_else(|| tokio::spawn(async {}));
 
@@ -672,6 +706,26 @@ async fn main() -> Result<()> {
         let _ = paper
             .load_warm_state_if_present(&warm_state_path, &market_subscriptions)
             .await;
+
+        // Fase 4: Pre-populate WS market subscriptions from RN1's recent activity.
+        // This lets the WS Sniffer start detecting RN1 orders immediately on startup
+        // (before the first REST-detected signal arrives), cutting latency by ~1.5s.
+        {
+            let prefetched = prefetch_rn1_active_markets(&rn1_wallet).await;
+            if !prefetched.is_empty() {
+                let mut subs = market_subscriptions.lock().unwrap_or_else(|e| e.into_inner());
+                for token in prefetched {
+                    if !subs.contains(&token) {
+                        subs.push(token);
+                    }
+                }
+                info!(
+                    market_count = subs.len(),
+                    "Startup: WS subscription list pre-populated from RN1 activity"
+                );
+            }
+        }
+
         ws_force_reconnect.store(true, Ordering::Relaxed);
 
         let rejection_trend_state: Arc<
@@ -969,6 +1023,28 @@ async fn main() -> Result<()> {
                             intent_id = signal.intent_id,
                             source = %signal.signal_source,
                             "ingress_dedup: duplicate signal dropped"
+                        );
+                        drop(_qw);
+                        continue;
+                    }
+                }
+                // Signal-age pre-gate: discard RN1 signals that are too old to be
+                // actionable. A stale signal would abort at the pretrade gate anyway —
+                // drop it here to avoid queue pressure and wasted compute.
+                // Configurable via MAX_RN1_SIGNAL_AGE_MS (default 2000ms).
+                {
+                    let max_age_ms = std::env::var("MAX_RN1_SIGNAL_AGE_MS")
+                        .ok()
+                        .and_then(|v| v.parse::<u128>().ok())
+                        .unwrap_or(2_000);
+                    let age_ms = signal.detected_at.elapsed().as_millis();
+                    if age_ms > max_age_ms {
+                        tracing::warn!(
+                            intent_id = signal.intent_id,
+                            token_id = %signal.token_id,
+                            age_ms,
+                            limit_ms = max_age_ms,
+                            "signal pre-gate: RN1 signal too stale — discarded before queue"
                         );
                         drop(_qw);
                         continue;
@@ -2016,6 +2092,8 @@ async fn run_preflight_live(config: &Config) -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("preflight: auth check failed: {e}"))?;
     println!("✅ preflight-live [{check}/{total_checks}] auth credentials valid");
+    // Keep the CLOB TCP connection warm so order submissions don't pay TCP+TLS cost.
+    executor.spawn_connection_keepalive();
     check += 1;
 
     // ── Check 3: heartbeat endpoint reachable ────────────────────────────

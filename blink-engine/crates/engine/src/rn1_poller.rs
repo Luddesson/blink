@@ -177,15 +177,30 @@ pub async fn run_rn1_poller(
     let primary_mode =
         std::env::var("RN1_PRIMARY_MODE").unwrap_or_else(|_| "resilience".to_string());
 
-    let client = Client::builder()
-        .timeout(Duration::from_secs(8))
-        .connect_timeout(Duration::from_secs(5))
-        .http1_only()
-        .pool_max_idle_per_host(0) // fresh TCP conn each poll — avoids Cloudflare RST on stale sockets
-        .tcp_keepalive(Duration::from_secs(30))
-        .user_agent("blink-engine-rn1-poller/1.0")
+    // Connection pooling strategy: keep-alive by default (saves 100-200ms per poll from
+    // eliminated TCP+TLS handshake). Set BLINK_RN1_FRESH_CONN=1 to revert to fresh
+    // connections if Cloudflare RST issues reappear on this endpoint.
+    let fresh_conn = std::env::var("BLINK_RN1_FRESH_CONN")
+        .map(|v| matches!(v.as_str(), "1" | "true"))
+        .unwrap_or(false);
+    let client = {
+        let b = Client::builder()
+            .timeout(Duration::from_secs(8))
+            .connect_timeout(Duration::from_secs(3))
+            .http1_only()
+            .tcp_keepalive(Duration::from_secs(20))
+            .tcp_nodelay(true)
+            .user_agent("blink-engine-rn1-poller/1.0");
+        if fresh_conn {
+            b.pool_max_idle_per_host(0)
+        } else {
+            // Keep up to 2 idle connections warm — avoids TCP+TLS overhead each poll.
+            b.pool_max_idle_per_host(2)
+                .pool_idle_timeout(Duration::from_secs(60))
+        }
         .build()
-        .expect("reqwest client");
+        .expect("reqwest client")
+    };
 
     let mut seen_hashes: HashSet<String> = HashSet::with_capacity(256);
     let mut consecutive_errors: u32 = 0;
@@ -578,4 +593,87 @@ async fn poll_activity(
     };
 
     Ok(entries)
+}
+
+// ─── Startup prefetch ────────────────────────────────────────────────────────
+
+/// Fetches the RN1 wallet's recent trade activity at startup and returns the
+/// distinct token IDs found.  This pre-populates the WS market subscription
+/// list so the Sniffer can start detecting RN1 orders in near-real-time
+/// immediately, without waiting for the first REST-detected signal to trickle
+/// through the pipeline.
+///
+/// Uses a short timeout (4 s) and swallows errors so it never blocks startup.
+pub async fn prefetch_rn1_active_markets(wallet: &str) -> Vec<String> {
+    let limit = std::env::var("RN1_PREFETCH_LIMIT")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(100);
+
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(4))
+        .connect_timeout(Duration::from_secs(3))
+        .http1_only()
+        .tcp_nodelay(true)
+        .user_agent("blink-engine-prefetch/1.0")
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(error = %e, "prefetch: failed to build HTTP client");
+            return Vec::new();
+        }
+    };
+
+    let url = format!(
+        "{DATA_API}/activity?user={wallet}&limit={limit}"
+    );
+
+    let response = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(wallet = %wallet, error = %e, "prefetch: activity request failed — WS will start with empty market list");
+            return Vec::new();
+        }
+    };
+
+    let status = response.status();
+    let body = match response.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            warn!(error = %e, "prefetch: failed to read activity response body");
+            return Vec::new();
+        }
+    };
+
+    let mut buf = body.to_vec();
+    let entries: Vec<ActivityEntry> = match simd_json::from_slice::<Vec<ActivityEntry>>(&mut buf) {
+        Ok(e) => e,
+        Err(_) => {
+            // Try serde_json as fallback
+            match serde_json::from_slice::<Vec<ActivityEntry>>(&body) {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!(status = %status, error = %e, "prefetch: failed to decode activity response");
+                    return Vec::new();
+                }
+            }
+        }
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    let tokens: Vec<String> = entries
+        .into_iter()
+        .filter_map(|e| e.asset)
+        .filter(|a| !a.is_empty())
+        .filter(|a| seen.insert(a.clone()))
+        .collect();
+
+    info!(
+        wallet = %wallet,
+        token_count = tokens.len(),
+        "prefetch: pre-populated WS subscription list from RN1 activity"
+    );
+
+    tokens
 }

@@ -7,10 +7,24 @@
    ═══════════════════════════════════════════════════════════════ */
 
 @theme {
-  /* Fonts — Inter for UI, JetBrains Mono for numbers, Instrument Serif for hero accents */
-  --font-sans: 'Inter Variable', 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* Fonts — Space Grotesk for precision headers, Inter Tight for refined body, JetBrains Mono for numbers */
+  --font-display: 'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-sans: 'Inter Tight Variable', 'Inter Variable', 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono Variable', 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
   --font-serif: 'Instrument Serif', ui-serif, Georgia, serif;
+
+  /* Spacing system — 4px grid */
+  --space-0: 0;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
 
   /* Surfaces — deep obsidian hierarchy */
   --color-void: oklch(0.13 0.012 260);
@@ -198,10 +212,29 @@
     color: var(--color-text-primary);
   }
 
-  /* Focus rings — aurora */
+  /* Focus rings — aurora with improved accessibility */
   :focus-visible {
-    outline: 2px solid oklch(0.75 0.18 170 / 0.7);
+    outline: 2px solid oklch(0.75 0.18 170 / 0.8);
     outline-offset: 2px;
+  }
+
+  /* Reduced motion support */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  /* High contrast mode support */
+  @media (prefers-contrast: more) {
+    :root {
+      --color-border-subtle: oklch(0.45 0.02 260 / 0.8);
+      --color-border-strong: oklch(0.65 0.02 260 / 1);
+    }
   }
 }
 
@@ -236,12 +269,34 @@
 /* ── Components ─────────────────────────────────────────────── */
 
 @layer components {
+  /* Cards — Refined spacing and shadows */
   .card {
-    @apply rounded-lg p-4 glass;
+    @apply rounded-lg glass transition-all duration-200;
+    padding: var(--space-6);
+  }
+  .card:hover {
+    box-shadow: 0 4px 12px oklch(0 0 0 / 0.1);
+  }
+
+  .card-compact {
+    @apply rounded-lg glass;
+    padding: var(--space-4);
+  }
+
+  .card-spacious {
+    @apply rounded-lg glass;
+    padding: var(--space-8);
   }
   .card-header {
-    @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-[color:var(--color-text-muted)] mb-3;
+    @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-[color:var(--color-text-muted)];
+    margin-bottom: var(--space-4);
   }
+
+  /* Spacing utilities */
+  .gap-compact { gap: var(--space-2); }
+  .gap-normal { gap: var(--space-4); }
+  .gap-generous { gap: var(--space-6); }
+  .gap-spacious { gap: var(--space-8); }
   .nav-value {
     @apply text-3xl font-semibold tabular font-mono;
   }
@@ -287,30 +342,47 @@
     border-color: oklch(0.35 0.018 260 / 0.5);
   }
 
-  /* Buttons */
+  /* Buttons — Modern Hierarchy */
   .btn-primary {
-    @apply px-4 py-2 rounded-md text-sm font-semibold transition-all;
+    @apply px-4 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200;
     background: linear-gradient(135deg, oklch(0.65 0.22 285), oklch(0.72 0.19 260));
     color: white;
     box-shadow: 0 4px 14px -4px oklch(0.65 0.22 285 / 0.5);
   }
   .btn-primary:hover {
-    filter: brightness(1.1);
+    filter: brightness(1.08);
     box-shadow: 0 6px 20px -4px oklch(0.65 0.22 285 / 0.65);
+  }
+  .btn-primary:active {
+    transform: scale(0.98);
+  }
+
+  .btn-secondary {
+    @apply px-4 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200;
+    background: oklch(0.26 0.022 260 / 0.6);
+    color: var(--color-text-primary);
+    border: 1px solid var(--color-border-subtle);
+  }
+  .btn-secondary:hover {
+    background: oklch(0.32 0.025 260 / 0.8);
+    border-color: var(--color-border-strong);
   }
 
   .btn-danger {
-    @apply px-4 py-2 rounded-md text-sm font-semibold transition-all;
+    @apply px-4 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200;
     background: linear-gradient(135deg, oklch(0.55 0.22 25), oklch(0.65 0.24 25));
     color: white;
     box-shadow: 0 4px 14px -4px oklch(0.65 0.24 25 / 0.5);
   }
   .btn-danger:hover {
-    filter: brightness(1.1);
+    filter: brightness(1.08);
+  }
+  .btn-danger:active {
+    transform: scale(0.98);
   }
 
   .btn-ghost {
-    @apply px-3 py-1.5 rounded-md text-sm transition-colors;
+    @apply px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-200;
     color: var(--color-text-secondary);
   }
   .btn-ghost:hover {

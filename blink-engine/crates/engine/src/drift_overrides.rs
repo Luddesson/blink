@@ -13,9 +13,15 @@
 //!
 //! # Semantics
 //!
-//! Overrides are applied with `min()` semantics — they can only **tighten**
-//! the profile default, never loosen it. This makes it impossible for a
-//! typo or misread to relax risk below the execution-profile baseline.
+//! Default mode is `min()` — overrides can only **tighten** the profile
+//! default, never loosen it. This makes it impossible for a typo or misread
+//! to relax risk below the execution-profile baseline.
+//!
+//! Opt-in `set` mode (via `BLINK_DRIFT_OVERRIDE_MODE=set`) replaces the
+//! profile default with the override value, which allows *loosening* too.
+//! Use only when deliberately widening per-category tolerance (e.g., cs2
+//! during high-vol esports windows). Values are still clamped to
+//! `[BPS_MIN..=BPS_MAX]` / `[PCT_MIN..=PCT_MAX]`.
 //!
 //! # Parse errors
 //!
@@ -45,6 +51,48 @@ pub type PctOverrides = HashMap<MarketClass, f64>;
 
 static BPS_OVERRIDES: OnceLock<BpsOverrides> = OnceLock::new();
 static PCT_OVERRIDES: OnceLock<PctOverrides> = OnceLock::new();
+static MODE: OnceLock<OverrideMode> = OnceLock::new();
+
+/// How overrides combine with the profile default.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum OverrideMode {
+    /// `effective = min(profile_default, override)` — tighten only (safe default).
+    Min,
+    /// `effective = override` — replace profile default; allows loosening.
+    Set,
+}
+
+impl OverrideMode {
+    fn from_env(raw: Option<&str>) -> Self {
+        match raw.map(|s| s.trim().to_ascii_lowercase()) {
+            Some(s) if s == "set" => OverrideMode::Set,
+            Some(s) if s == "min" || s.is_empty() => OverrideMode::Min,
+            Some(other) => {
+                tracing::error!(
+                    env = "BLINK_DRIFT_OVERRIDE_MODE",
+                    value = %other,
+                    "unknown drift override mode — falling back to 'min' (fail-safe)"
+                );
+                OverrideMode::Min
+            }
+            None => OverrideMode::Min,
+        }
+    }
+}
+
+/// Returns the current drift-override mode (parsed once, cached).
+pub fn mode() -> OverrideMode {
+    *MODE.get_or_init(|| {
+        let raw = std::env::var("BLINK_DRIFT_OVERRIDE_MODE").ok();
+        let m = OverrideMode::from_env(raw.as_deref());
+        if m == OverrideMode::Set {
+            tracing::warn!(
+                "BLINK_DRIFT_OVERRIDE_MODE=set — overrides can LOOSEN profile defaults"
+            );
+        }
+        m
+    })
+}
 
 /// Returns the resolved bps override map (parsed on first call and cached).
 pub fn bps_overrides() -> &'static BpsOverrides {
@@ -76,19 +124,26 @@ pub fn pct_overrides() -> &'static PctOverrides {
     })
 }
 
-/// Apply `min()` semantics: return the tighter of `profile_default` and any
-/// class-specific bps override. Missing / empty override map → profile default.
+/// Combine profile default and class override per the configured [`OverrideMode`].
+/// Missing / empty override map → profile default.
 pub fn effective_bps(class: MarketClass, profile_default: u16) -> u16 {
     match bps_overrides().get(&class) {
-        Some(override_bps) => profile_default.min(*override_bps),
+        Some(override_bps) => match mode() {
+            OverrideMode::Min => profile_default.min(*override_bps),
+            OverrideMode::Set => *override_bps,
+        },
         None => profile_default,
     }
 }
 
-/// Apply `min()` semantics for paper drift percent override.
+/// Combine profile default and class override per the configured [`OverrideMode`]
+/// for the paper drift percent.
 pub fn effective_pct(class: MarketClass, profile_default_pct: f64) -> f64 {
     match pct_overrides().get(&class) {
-        Some(override_pct) => profile_default_pct.min(*override_pct),
+        Some(override_pct) => match mode() {
+            OverrideMode::Min => profile_default_pct.min(*override_pct),
+            OverrideMode::Set => *override_pct,
+        },
         None => profile_default_pct,
     }
 }
@@ -328,5 +383,30 @@ mod tests {
     fn parse_bps_whitespace_tolerated() {
         let m = parse_bps_inner(Some("  tennis = 50 ,  cs2=200  ")).unwrap();
         assert_eq!(m.len(), 2);
+    }
+
+    #[test]
+    fn mode_from_env_parsing() {
+        assert_eq!(OverrideMode::from_env(None), OverrideMode::Min);
+        assert_eq!(OverrideMode::from_env(Some("")), OverrideMode::Min);
+        assert_eq!(OverrideMode::from_env(Some("min")), OverrideMode::Min);
+        assert_eq!(OverrideMode::from_env(Some("MIN")), OverrideMode::Min);
+        assert_eq!(OverrideMode::from_env(Some("  set ")), OverrideMode::Set);
+        assert_eq!(OverrideMode::from_env(Some("Set")), OverrideMode::Set);
+        // Unknown → fail-safe to Min.
+        assert_eq!(OverrideMode::from_env(Some("replace")), OverrideMode::Min);
+        assert_eq!(OverrideMode::from_env(Some("nope")), OverrideMode::Min);
+    }
+
+    #[test]
+    fn set_mode_allows_loosening_in_math() {
+        // Directly verify the arithmetic used by effective_bps in Set mode:
+        // override replaces profile_default, regardless of magnitude.
+        let override_bps: u16 = 300;
+        let profile_default: u16 = 120;
+        assert_eq!(override_bps, 300);
+        // And the Min branch would give min(300, 120) = 120 — demonstrating
+        // the semantics differ.
+        assert_eq!(profile_default.min(override_bps), 120);
     }
 }

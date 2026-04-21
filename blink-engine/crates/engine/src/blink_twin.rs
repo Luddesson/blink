@@ -18,7 +18,7 @@ use crate::activity_log::{push as log_push, ActivityLog, EntryKind};
 use crate::order_book::OrderBookStore;
 use crate::paper_engine::parse_autoclaim_tiers;
 use crate::paper_portfolio::{
-    drift_threshold, ExecutionScorecard, PaperPortfolio, STARTING_BALANCE_USDC,
+    drift_threshold_for_title, ExecutionScorecard, PaperPortfolio, STARTING_BALANCE_USDC,
 };
 use crate::types::{OrderSide, RN1Signal};
 
@@ -202,7 +202,8 @@ impl BlinkTwin {
         };
 
         // 4. Adversarial Fill Window Check
-        let twin_drift_threshold = drift_threshold() * current_cfg.drift_multiplier;
+        let twin_drift_threshold =
+            drift_threshold_for_title(signal.market_title.as_deref()) * current_cfg.drift_multiplier;
 
         let filled = self
             .check_fill_window_adversarial(&signal.token_id, entry_price, twin_drift_threshold)

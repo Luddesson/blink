@@ -141,4 +141,17 @@ impl GateConfig {
             post_only,
         }
     }
+
+    /// Resolve the effective drift bps for a given [`MarketClass`], applying
+    /// any `BLINK_GATE_DRIFT_BPS_OVERRIDES` with `min()` semantics (overrides
+    /// can only tighten the profile default, never loosen).
+    ///
+    /// Pass [`MarketClass::Other`] when classification isn't available — that
+    /// yields the unmodified profile/env default.
+    pub fn max_drift_bps_for_class(
+        &self,
+        class: crate::market_class::MarketClass,
+    ) -> u16 {
+        crate::drift_overrides::effective_bps(class, self.max_drift_bps)
+    }
 }

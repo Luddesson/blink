@@ -29,12 +29,41 @@ pub const MIN_TRADE_USDC: f64 = 5.0; // $5 minimum (Phase 6: up from $2 — filt
 /// Configurable via `PAPER_DRIFT_THRESHOLD_PCT` env var (default 8.0 = 8%).
 /// Set higher when shadowing whales who move markets on entry.
 pub fn drift_threshold() -> f64 {
+    drift_threshold_pct_default() / 100.0
+}
+
+/// Profile-default drift threshold as a percent (0..100), before any
+/// category-aware override. Used by [`drift_threshold_for`] as the baseline
+/// that a `PAPER_DRIFT_PCT_OVERRIDES` entry may only tighten.
+fn drift_threshold_pct_default() -> f64 {
     std::env::var("PAPER_DRIFT_THRESHOLD_PCT")
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(8.0)
         .clamp(0.5, 50.0)
-        / 100.0
+}
+
+/// Category-aware drift threshold (fraction, e.g. `0.05` = 5%).
+///
+/// Looks up any `PAPER_DRIFT_PCT_OVERRIDES` entry for the class derived from
+/// `meta` (or `MarketClass::Other` when `meta` is `None`) and applies
+/// `min()` semantics against the profile default — overrides may only
+/// tighten, never loosen.
+pub fn drift_threshold_for(meta: Option<&crate::types::MarketMetadata>) -> f64 {
+    let class = match meta {
+        Some(m) => crate::market_class::classify(m),
+        None => crate::market_class::MarketClass::Other,
+    };
+    let default_pct = drift_threshold_pct_default();
+    crate::drift_overrides::effective_pct(class, default_pct) / 100.0
+}
+
+/// Title-based sibling of [`drift_threshold_for`] for call sites that only
+/// have a market title on the signal (not full [`crate::types::MarketMetadata`]).
+pub fn drift_threshold_for_title(title: Option<&str>) -> f64 {
+    let class = crate::market_class::MarketClass::from_title_opt(title);
+    let default_pct = drift_threshold_pct_default();
+    crate::drift_overrides::effective_pct(class, default_pct) / 100.0
 }
 
 /// Maximum number of NAV snapshots kept for the equity curve (10s sampling → ~28h).

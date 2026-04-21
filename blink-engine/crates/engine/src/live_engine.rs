@@ -554,12 +554,16 @@ impl LiveEngine {
 
         let gate_cfg = GateConfig::from_profile_and_env(self.execution_profile);
         let price_gate = (entry_price * 1_000.0).round() as u64;
+        // Category-aware drift tolerance (min() semantics — override can only tighten).
+        let market_class =
+            crate::market_class::MarketClass::from_title_opt(signal.market_title.as_deref());
+        let max_drift_bps = gate_cfg.max_drift_bps_for_class(market_class);
         let gate_result = self.pretrade_gate.check(
             &signal.token_id,
             signal.side,
             price_gate,
             gate_cfg.stale_ms,
-            gate_cfg.max_drift_bps,
+            max_drift_bps,
             gate_cfg.post_only,
         );
         match gate_result {

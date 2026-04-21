@@ -1711,6 +1711,10 @@ impl PaperEngine {
         // ── FreshnessGate (replaces fixed fill window) ─────────────────
         let gate_cfg = GateConfig::from_env();
         let price_gate = (entry_price * 1_000.0).round() as u64;
+        // Category-aware drift tolerance (min() semantics — override can only tighten).
+        let market_class =
+            crate::market_class::MarketClass::from_title_opt(signal.market_title.as_deref());
+        let max_drift_bps = gate_cfg.max_drift_bps_for_class(market_class);
         // WS-sourced signals arrive directly from the matching engine and are
         // inherently fresh — skip the snapshot age check, run only drift + post-only.
         let effective_stale_ms = if signal.signal_source == "ws" {
@@ -1723,7 +1727,7 @@ impl PaperEngine {
             signal.side,
             price_gate,
             effective_stale_ms,
-            gate_cfg.max_drift_bps,
+            max_drift_bps,
             gate_cfg.post_only,
         );
 
@@ -1741,7 +1745,7 @@ impl PaperEngine {
                     signal.side,
                     price_gate,
                     gate_cfg.stale_ms,
-                    gate_cfg.max_drift_bps,
+                    max_drift_bps,
                     gate_cfg.post_only,
                 )
             } else {

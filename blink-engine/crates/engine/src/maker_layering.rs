@@ -181,8 +181,7 @@ impl MakerLayerEngine {
             // bps offset for this level (level 0 starts one `step_bps` away
             // from mid so we don't cross the touch).
             let bps = (level as u32 + 1) * self.config.step_bps as u32;
-            let offset_milli =
-                (mid_price_u64_milli.saturating_mul(bps as u64)) / 10_000u64;
+            let offset_milli = (mid_price_u64_milli.saturating_mul(bps as u64)) / 10_000u64;
             let price_u64 = match side {
                 OrderSide::Buy => mid_price_u64_milli.saturating_sub(offset_milli),
                 OrderSide::Sell => mid_price_u64_milli.saturating_add(offset_milli),
@@ -192,8 +191,7 @@ impl MakerLayerEngine {
             }
 
             let size_u64 = self.config.per_level_notional_usdc_mil;
-            budget_remaining_usdc_mil =
-                budget_remaining_usdc_mil.saturating_sub(size_u64);
+            budget_remaining_usdc_mil = budget_remaining_usdc_mil.saturating_sub(size_u64);
 
             let intent_id = self.mint_intent_id();
             let price_bps_from_mid = match side {
@@ -281,11 +279,7 @@ impl MakerLayerEngine {
     pub fn on_fill(&self, intent_id: u64, filled_usdc_mil: u64) {
         for mut entry in self.per_market.iter_mut() {
             let state = entry.value_mut();
-            if let Some(pos) = state
-                .orders
-                .iter()
-                .position(|o| o.intent_id == intent_id)
-            {
+            if let Some(pos) = state.orders.iter().position(|o| o.intent_id == intent_id) {
                 let o = &mut state.orders[pos];
                 o.filled_usdc_mil = o.filled_usdc_mil.saturating_add(filled_usdc_mil);
                 let remaining = self
@@ -304,11 +298,7 @@ impl MakerLayerEngine {
     pub fn on_cancel(&self, intent_id: u64) {
         for mut entry in self.per_market.iter_mut() {
             let state = entry.value_mut();
-            if let Some(pos) = state
-                .orders
-                .iter()
-                .position(|o| o.intent_id == intent_id)
-            {
+            if let Some(pos) = state.orders.iter().position(|o| o.intent_id == intent_id) {
                 state.orders.swap_remove(pos);
                 return;
             }

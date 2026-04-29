@@ -152,19 +152,20 @@ export const api = {
   mode: () => get<ModeResponse>('/api/mode'),
   status: () => get<StatusResponse>('/api/status'),
   portfolio: () => get<FullPortfolio>('/api/portfolio'),
-  history: (page = 1, perPage = 50) =>
-    get<HistoryResponse>(`/api/history?page=${page}&per_page=${perPage}`),
-  historyAll: async () => {
+  history: (page = 1, perPage = 50, range = 'all') =>
+    get<HistoryResponse>(`/api/history?page=${page}&per_page=${perPage}&range=${range}`),
+  historyAll: async (range = '24h', maxTrades = 2000) => {
     const perPage = 500
-    const firstPage = await get<HistoryResponse>(`/api/history?page=1&per_page=${perPage}`)
+    const firstPage = await get<HistoryResponse>(`/api/history?page=1&per_page=${perPage}&range=${range}`)
     const trades = [...firstPage.trades]
+    const maxPages = Math.max(1, Math.ceil(maxTrades / perPage))
 
-    for (let page = 2; page <= firstPage.total_pages; page++) {
-      const nextPage = await get<HistoryResponse>(`/api/history?page=${page}&per_page=${perPage}`)
+    for (let page = 2; page <= Math.min(firstPage.total_pages, maxPages); page++) {
+      const nextPage = await get<HistoryResponse>(`/api/history?page=${page}&per_page=${perPage}&range=${range}`)
       trades.push(...nextPage.trades)
     }
 
-    return trades
+    return trades.slice(0, maxTrades)
   },
   risk: () => get<RiskSummary>('/api/risk'),
   latency: () => get<LatencyResponse>('/api/latency'),

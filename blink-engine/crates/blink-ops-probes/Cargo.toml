@@ -1,0 +1,31 @@
+[package]
+name = "blink-ops-probes"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Operator probes for R-2 (rate limit), R-7 (Cloudflare), R-8 (mempool)."
+
+[[bin]]
+name = "blink-probe"
+path = "src/main.rs"
+
+[dependencies]
+clap               = { version = "4", features = ["derive"] }
+tokio              = { workspace = true }
+tokio-tungstenite  = { workspace = true }
+futures-util       = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+anyhow             = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+hdrhistogram       = { workspace = true }
+hyper              = { version = "1", features = ["client", "http2"] }
+hyper-util         = { version = "0.1", features = ["client", "client-legacy", "http2", "tokio"] }
+hyper-rustls       = { version = "0.27", features = ["http1", "http2", "ring", "webpki-tokio"], default-features = false }
+rustls             = { version = "0.23", default-features = false, features = ["ring"] }
+http-body-util     = "0.1"
+hickory-resolver   = "0.24"
+bytes              = "1"
+
+[dev-dependencies]

@@ -1,0 +1,34 @@
+[package]
+name        = "blink-ingress"
+version     = "0.1.0"
+edition     = "2021"
+publish     = false
+description = "Pluggable ingress sources (REST/WS/mempool) fanning RawEvents into the Blink engine."
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+# Polygon mempool tap (JSON-RPC WS `newPendingTransactions`). Off by default
+# — enabling it at runtime still requires the `observe_only` / gating rules
+# documented in `docs/rebuild/R3_LEGAL_MEMO_STUB.md`.
+mempool-tap = []
+
+[dependencies]
+blink-types       = { path = "../blink-types" }
+blink-rings       = { path = "../blink-rings" }
+blink-timestamps  = { path = "../blink-timestamps" }
+tokio             = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tokio-util        = { version = "0.7", features = ["rt"] }
+futures-util      = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+reqwest           = { workspace = true }
+bytes             = "1"
+thiserror         = { workspace = true }
+log               = "0.4"
+
+[dev-dependencies]
+tokio = { workspace = true }

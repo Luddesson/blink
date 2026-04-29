@@ -119,7 +119,9 @@ impl MarketClass {
         let cat_lc = category.to_lowercase();
         let tags_lc: Vec<String> = tags.iter().map(|t| t.to_lowercase()).collect();
         let any = |needles: &[&str]| -> bool {
-            tags_lc.iter().any(|t| needles.iter().any(|n| t.contains(n)))
+            tags_lc
+                .iter()
+                .any(|t| needles.iter().any(|n| t.contains(n)))
                 || needles.iter().any(|n| cat_lc.contains(n))
         };
 
@@ -157,7 +159,13 @@ impl MarketClass {
         if any(&["nhl", "hockey"]) {
             return MarketClass::Nhl;
         }
-        if any(&["soccer", "football", "premier league", "la liga", "champions league"]) {
+        if any(&[
+            "soccer",
+            "football",
+            "premier league",
+            "la liga",
+            "champions league",
+        ]) {
             // Polymarket labels American football as "NFL"; generic "football" here
             // means association football / soccer.
             return MarketClass::Soccer;
@@ -198,13 +206,22 @@ mod tests {
             event_start_time: None,
             event_end_time: None,
             closed: false,
+            neg_risk: false,
+            enable_neg_risk: false,
+            minimum_tick_size: None,
         }
     }
 
     #[test]
     fn tennis_beats_sports() {
-        assert_eq!(classify(&meta("sports", &["Tennis", "Madrid Open"])), MarketClass::Tennis);
-        assert_eq!(classify(&meta("sports", &["ATP", "Madrid"])), MarketClass::Tennis);
+        assert_eq!(
+            classify(&meta("sports", &["Tennis", "Madrid Open"])),
+            MarketClass::Tennis
+        );
+        assert_eq!(
+            classify(&meta("sports", &["ATP", "Madrid"])),
+            MarketClass::Tennis
+        );
         assert_eq!(classify(&meta("sports", &["WTA"])), MarketClass::Tennis);
     }
 
@@ -218,37 +235,64 @@ mod tests {
     #[test]
     fn soccer_variants() {
         assert_eq!(classify(&meta("sports", &["Soccer"])), MarketClass::Soccer);
-        assert_eq!(classify(&meta("sports", &["Premier League"])), MarketClass::Soccer);
-        assert_eq!(classify(&meta("sports", &["Champions League"])), MarketClass::Soccer);
+        assert_eq!(
+            classify(&meta("sports", &["Premier League"])),
+            MarketClass::Soccer
+        );
+        assert_eq!(
+            classify(&meta("sports", &["Champions League"])),
+            MarketClass::Soccer
+        );
         // Generic "football" → soccer (Polymarket labels NFL explicitly).
-        assert_eq!(classify(&meta("sports", &["Football"])), MarketClass::Soccer);
+        assert_eq!(
+            classify(&meta("sports", &["Football"])),
+            MarketClass::Soccer
+        );
     }
 
     #[test]
     fn nfl_stays_nfl() {
-        assert_eq!(classify(&meta("sports", &["NFL", "Football"])), MarketClass::Nfl);
+        assert_eq!(
+            classify(&meta("sports", &["NFL", "Football"])),
+            MarketClass::Nfl
+        );
     }
 
     #[test]
     fn generic_sports_fallback() {
-        assert_eq!(classify(&meta("sports", &["Unknown Tag"])), MarketClass::Sports);
+        assert_eq!(
+            classify(&meta("sports", &["Unknown Tag"])),
+            MarketClass::Sports
+        );
     }
 
     #[test]
     fn politics_and_geopolitics() {
-        assert_eq!(classify(&meta("politics", &["US Election"])), MarketClass::Politics);
-        assert_eq!(classify(&meta("news", &["NATO", "Sanctions"])), MarketClass::Geopolitics);
+        assert_eq!(
+            classify(&meta("politics", &["US Election"])),
+            MarketClass::Politics
+        );
+        assert_eq!(
+            classify(&meta("news", &["NATO", "Sanctions"])),
+            MarketClass::Geopolitics
+        );
     }
 
     #[test]
     fn crypto() {
         assert_eq!(classify(&meta("crypto", &["Bitcoin"])), MarketClass::Crypto);
-        assert_eq!(classify(&meta("crypto", &["ETH price"])), MarketClass::Crypto);
+        assert_eq!(
+            classify(&meta("crypto", &["ETH price"])),
+            MarketClass::Crypto
+        );
     }
 
     #[test]
     fn unknown_is_other() {
-        assert_eq!(classify(&meta("weather", &["Hurricane"])), MarketClass::Other);
+        assert_eq!(
+            classify(&meta("weather", &["Hurricane"])),
+            MarketClass::Other
+        );
     }
 
     #[test]
@@ -262,7 +306,10 @@ mod tests {
 
     #[test]
     fn from_title_matches_tennis() {
-        assert_eq!(MarketClass::from_title("ATP Madrid Open: Snigur vs Vallejo"), MarketClass::Tennis);
+        assert_eq!(
+            MarketClass::from_title("ATP Madrid Open: Snigur vs Vallejo"),
+            MarketClass::Tennis
+        );
         assert_eq!(MarketClass::from_title("WTA final"), MarketClass::Tennis);
     }
 
@@ -271,13 +318,22 @@ mod tests {
         assert_eq!(MarketClass::from_title(""), MarketClass::Other);
         assert_eq!(MarketClass::from_title_opt(None), MarketClass::Other);
         assert_eq!(MarketClass::from_title_opt(Some("")), MarketClass::Other);
-        assert_eq!(MarketClass::from_title("Will it rain Tuesday?"), MarketClass::Other);
+        assert_eq!(
+            MarketClass::from_title("Will it rain Tuesday?"),
+            MarketClass::Other
+        );
     }
 
     #[test]
     fn from_title_matches_cs2() {
-        assert_eq!(MarketClass::from_title("CS2 Major: NAVI vs FaZe"), MarketClass::Cs2);
-        assert_eq!(MarketClass::from_title("Counter-Strike IEM Katowice"), MarketClass::Cs2);
+        assert_eq!(
+            MarketClass::from_title("CS2 Major: NAVI vs FaZe"),
+            MarketClass::Cs2
+        );
+        assert_eq!(
+            MarketClass::from_title("Counter-Strike IEM Katowice"),
+            MarketClass::Cs2
+        );
     }
 
     #[test]

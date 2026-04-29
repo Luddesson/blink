@@ -69,8 +69,8 @@ export default function Header({
           'border-b border-[color:var(--color-border-subtle)]',
           'backdrop-blur-xl',
           isLive
-            ? 'bg-[color:oklch(0.17_0.015_260/0.75)] shadow-[inset_0_-1px_0_0_oklch(0.65_0.24_25/0.15)]'
-            : 'bg-[color:oklch(0.17_0.015_260/0.7)] shadow-[inset_0_-1px_0_0_oklch(0.65_0.22_285/0.12)]',
+            ? 'bg-[color:var(--color-surface-950)/0.75] shadow-[inset_0_-1px_0_0_var(--color-live-500)/0.15]'
+            : 'bg-[color:var(--color-surface-950)/0.7] shadow-[inset_0_-1px_0_0_var(--color-paper-500)/0.12]',
         )}
       >
         {/* Left: Brand + Mode */}
@@ -102,7 +102,7 @@ export default function Header({
             </span>
           </div>
 
-          <div className="relative flex w-full items-center rounded-lg border border-[color:var(--color-border-subtle)] bg-[color:oklch(0.17_0.015_260/0.6)] p-0.5 sm:w-auto">
+          <div className="relative flex w-full items-center rounded-lg border border-[color:var(--color-border-subtle)] bg-[color:var(--color-surface-900)/0.6] p-0.5 sm:w-auto">
             <ModeToggleBtn
               active={!isLive}
               onClick={() => handleModeClick('paper')}
@@ -160,7 +160,7 @@ export default function Header({
             {positionCount !== undefined && positionCount > 0 && (
               <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em]">
                 <span className="text-[color:var(--color-text-muted)]">Positions</span>
-                <span className="px-2 py-0.5 rounded-md font-mono font-semibold text-[11px] bg-[color:oklch(0.26_0.022_260/0.5)] border border-[color:var(--color-border-subtle)] text-[color:var(--color-text-primary)]">
+                <span className="px-2 py-0.5 rounded-md font-mono font-semibold text-[11px] bg-[color:var(--color-surface-700)/0.5] border border-[color:var(--color-border-subtle)] text-[color:var(--color-text-primary)]">
                   {positionCount}
                 </span>
               </div>

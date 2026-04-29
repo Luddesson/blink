@@ -1,25 +1,32 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use chrono::Timelike;
 use std::collections::HashMap;
-use std::sync::atomic::AtomicU64;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use crate::activity_log::{push as log_push, ActivityLog, EntryKind};
+use crate::clob_client::ClobClient;
 use crate::config::Config;
 use crate::hot_metrics::{HotStage, StageTimer};
+use crate::market_metadata::MetadataFetcher;
 use crate::mev_router::MevRouter;
 use crate::order_book::OrderBookStore;
 use crate::order_executor::OrderExecutor;
 use crate::order_router::reconciler::spawn_reconciler;
 use crate::order_router::{OrderIntent, OrderRouter};
-use crate::order_signer::{sign_order_for_intent_with_vault, OrderParams, OrderSigningPolicy};
-use crate::paper_portfolio::{PaperPortfolio, STARTING_BALANCE_USDC};
+use crate::order_signer::{
+    sign_order_for_intent_with_vault_handle_policy, OrderParams, OrderSigningPolicy,
+};
 #[cfg(feature = "legacy-fill-window")]
 use crate::paper_portfolio::drift_threshold;
+use crate::paper_portfolio::{PaperPortfolio, STARTING_BALANCE_USDC};
 use crate::pretrade_gate::{GateConfig, GateDecision, PretradeGate};
 use crate::risk_manager::{RiskConfig, RiskManager};
 use crate::strategy::{StrategyController, StrategySnapshot};
@@ -27,9 +34,7 @@ use crate::timed_mutex::TimedMutex;
 use crate::truth_reconciler::{
     process_order_status, PendingOrder, PendingOrderWal, ReconciliationOutcome,
 };
-use crate::types::{RN1Signal, TimeInForce};
-#[cfg(feature = "legacy-fill-window")]
-use crate::types::OrderSide;
+use crate::types::{parse_price, MarketMetadata, OrderSide, PriceLevel, RN1Signal, TimeInForce};
 
 // ─── Lock Hierarchy ──────────────────────────────────────────────────────────
 // Two mutex flavours are used.  Always acquire in the order listed below;
@@ -79,6 +84,11 @@ pub struct LiveEngine {
     pub order_router: OrderRouter,
     pretrade_gate: PretradeGate,
     execution_profile: crate::execution_profile::ExecutionProfile,
+    metadata_fetcher: MetadataFetcher,
+    market_safety_policy: MarketSafetyPolicy,
+    shadow_audit: ShadowAuditPolicy,
+    starting_nav_usdc: f64,
+    rest_clob: ClobClient,
 }
 
 /// Point-in-time snapshot of live SLO metrics for dashboards and alerting.
@@ -131,6 +141,7 @@ struct CanaryPolicy {
     start_hour_utc: u8,
     end_hour_utc: u8,
     max_reject_streak: usize,
+    max_loss_streak: usize,
     allowed_markets: Vec<String>,
 }
 
@@ -138,7 +149,46 @@ struct CanaryPolicy {
 struct CanaryState {
     accepted_orders: usize,
     reject_streak: usize,
+    loss_streak: usize,
     halted: bool,
+}
+
+#[derive(Debug, Clone)]
+struct MarketSafetyPolicy {
+    allow_neg_risk: bool,
+    allow_unknown_metadata: bool,
+    allow_live_sell: bool,
+    min_supported_tick_size: f64,
+}
+
+impl MarketSafetyPolicy {
+    fn from_env() -> Self {
+        Self {
+            allow_neg_risk: env_bool("BLINK_ALLOW_NEG_RISK", false),
+            allow_unknown_metadata: env_bool("BLINK_ALLOW_UNKNOWN_MARKET_METADATA", false),
+            allow_live_sell: env_bool("BLINK_ALLOW_LIVE_SELL", false),
+            min_supported_tick_size: std::env::var("BLINK_MIN_SUPPORTED_TICK_SIZE")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.001),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ShadowAuditPolicy {
+    enabled: bool,
+    path: String,
+}
+
+impl ShadowAuditPolicy {
+    fn from_env(default_enabled: bool) -> Self {
+        Self {
+            enabled: env_bool("BLINK_SHADOW_AUDIT", default_enabled),
+            path: std::env::var("BLINK_SHADOW_AUDIT_PATH")
+                .unwrap_or_else(|_| "logs/shadow_live_audit.jsonl".to_string()),
+        }
+    }
 }
 
 impl LiveEngine {
@@ -148,6 +198,7 @@ impl LiveEngine {
         activity: Option<ActivityLog>,
         strategy_controller: Arc<StrategyController>,
         execution_profile: crate::execution_profile::ExecutionProfile,
+        starting_cash_usdc: Option<f64>,
     ) -> Result<Self> {
         let executor = OrderExecutor::from_config(&config)?;
 
@@ -184,7 +235,6 @@ impl LiveEngine {
         let risk = Arc::new(TimedMutex::new("risk", risk_manager));
         let signing_policy = OrderSigningPolicy {
             expiration: config.polymarket_order_expiration,
-            nonce: config.polymarket_order_nonce,
             signature_type: config.polymarket_signature_type,
         };
         let reconcile_interval_secs = std::env::var("LIVE_RECONCILE_INTERVAL_SECS")
@@ -200,8 +250,16 @@ impl LiveEngine {
             start_hour_utc: config.live_canary_start_hour_utc,
             end_hour_utc: config.live_canary_end_hour_utc,
             max_reject_streak: config.live_canary_max_reject_streak,
+            max_loss_streak: config.live_canary_max_loss_streak,
             allowed_markets: config.live_canary_allowed_markets.clone(),
         };
+        let market_safety_policy = MarketSafetyPolicy::from_env();
+        let shadow_audit = ShadowAuditPolicy::from_env(config.live_trading);
+        let starting_cash_usdc = starting_cash_usdc
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(STARTING_BALANCE_USDC);
+        let mut portfolio = PaperPortfolio::new();
+        portfolio.cash_usdc = starting_cash_usdc;
 
         if let Some(ref log) = activity {
             log_push(
@@ -225,7 +283,7 @@ impl LiveEngine {
         };
 
         Ok(Self {
-            portfolio: Arc::new(Mutex::new(PaperPortfolio::new())),
+            portfolio: Arc::new(Mutex::new(portfolio)),
             book_store: Arc::clone(&book_store),
             activity,
             executor,
@@ -248,6 +306,11 @@ impl LiveEngine {
             order_router: OrderRouter::new(),
             pretrade_gate: PretradeGate::new(book_store),
             execution_profile,
+            metadata_fetcher: MetadataFetcher::new(),
+            market_safety_policy,
+            shadow_audit,
+            starting_nav_usdc: starting_cash_usdc,
+            rest_clob: ClobClient::new(&config.clob_host),
         })
     }
 
@@ -264,8 +327,7 @@ impl LiveEngine {
     /// Must be called once after `Arc<LiveEngine>` is constructed.
     pub async fn spawn_router_workers(&self) {
         let exec = Arc::new(self.executor.clone());
-        self.order_router
-            .set_risk_gate(Arc::clone(&self.risk_gate));
+        self.order_router.set_risk_gate(Arc::clone(&self.risk_gate));
         crate::risk_manager::StreamRiskGate::spawn_token_refill(Arc::clone(&self.risk_gate));
         self.order_router.spawn_workers(Arc::clone(&exec)).await;
         spawn_reconciler(
@@ -383,6 +445,31 @@ impl LiveEngine {
         recovered
     }
 
+    /// Clears any exchange-side open orders before the live engine accepts
+    /// fresh signals. This prevents old maker orders from surviving a restart.
+    pub async fn startup_cancel_all_open_orders(&self) -> Result<()> {
+        if self.executor.dry_run || !env_bool("LIVE_STARTUP_CANCEL_ALL", true) {
+            return Ok(());
+        }
+
+        warn!("LIVE_STARTUP_CANCEL_ALL=true — cancelling all open exchange orders before signal intake");
+        if let Some(ref log) = self.activity {
+            log_push(
+                log,
+                EntryKind::Warn,
+                "STARTUP SCRUB: cancelling all open exchange orders".to_string(),
+            );
+        }
+
+        self.executor
+            .cancel_all_orders()
+            .await
+            .context("startup cancel_all_orders failed")?;
+        self.run_reconciliation_pass().await;
+        self.persist_wal().await;
+        Ok(())
+    }
+
     pub fn spawn_reconciliation_worker(self: Arc<Self>) {
         tokio::spawn(async move {
             loop {
@@ -433,6 +520,7 @@ impl LiveEngine {
     }
 
     pub async fn handle_signal(&self, signal: RN1Signal) {
+        let handle_started_at = Instant::now();
         // ── Stage: Enrich (intent classification + price extraction) ────────
         let _enrich_timer = StageTimer::start(HotStage::Enrich);
         self.sync_risk_closes_from_portfolio().await;
@@ -467,6 +555,59 @@ impl LiveEngine {
             let mut p = self.portfolio.lock().await;
             p.total_signals += 1;
             p.skipped_orders += 1;
+            self.audit_signal_decision(
+                &signal,
+                "blocked_intent",
+                Some(reason),
+                None,
+                None,
+                handle_started_at,
+            );
+            return;
+        }
+
+        let metadata = match self.check_market_metadata_gate(&signal).await {
+            Ok(metadata) => metadata,
+            Err(reason) => {
+                warn!(
+                    token_id = %signal.token_id,
+                    side = %signal.side,
+                    reason,
+                    "Market metadata gate blocked order"
+                );
+                if let Some(ref log) = self.activity {
+                    log_push(log, EntryKind::Warn, format!("METADATA-BLOCKED: {reason}"));
+                }
+                let mut p = self.portfolio.lock().await;
+                p.total_signals += 1;
+                p.skipped_orders += 1;
+                self.audit_signal_decision(
+                    &signal,
+                    "blocked_market_metadata",
+                    Some(&reason),
+                    None,
+                    None,
+                    handle_started_at,
+                );
+                return;
+            }
+        };
+        if let Err(reason) = self.check_live_side_gate(&signal) {
+            warn!(token_id = %signal.token_id, side = %signal.side, reason, "Live side gate blocked order");
+            if let Some(ref log) = self.activity {
+                log_push(log, EntryKind::Warn, format!("SIDE-BLOCKED: {reason}"));
+            }
+            let mut p = self.portfolio.lock().await;
+            p.total_signals += 1;
+            p.skipped_orders += 1;
+            self.audit_signal_decision(
+                &signal,
+                "blocked_side",
+                Some(&reason),
+                None,
+                Some(&metadata),
+                handle_started_at,
+            );
             return;
         }
 
@@ -495,7 +636,16 @@ impl LiveEngine {
                 "Skipping live signal: strategy min-notional gate"
             );
             let mut p = self.portfolio.lock().await;
+            p.total_signals += 1;
             p.skipped_orders += 1;
+            self.audit_signal_decision(
+                &signal,
+                "blocked_min_notional",
+                Some("rn1_notional_below_strategy_min"),
+                None,
+                Some(&metadata),
+                handle_started_at,
+            );
             return;
         }
         let strategy_adjusted_notional = rn1_notional_usd * strategy_profile.sizing_multiplier;
@@ -512,14 +662,20 @@ impl LiveEngine {
 
         drop(_sizing_timer);
 
-        // ── Stage: Risk ───────────────────────────────────────────────────
-        let _risk_timer = StageTimer::start(HotStage::Risk);
-
-        // 3. Risk check — BEFORE doing anything real
+        // 3. Resolve executable size before touching market data.
         let size_usdc = match size_usdc {
             Some(s) => s,
             None => {
                 // Skip like PaperEngine
+                self.mark_skipped_order().await;
+                self.audit_signal_decision(
+                    &signal,
+                    "blocked_sizing",
+                    Some("portfolio_size_none"),
+                    None,
+                    Some(&metadata),
+                    handle_started_at,
+                );
                 return;
             }
         };
@@ -531,41 +687,175 @@ impl LiveEngine {
             }
             let mut p = self.portfolio.lock().await;
             p.skipped_orders += 1;
+            self.audit_signal_decision(
+                &signal,
+                "blocked_canary",
+                Some(&reason),
+                Some(size_usdc),
+                Some(&metadata),
+                handle_started_at,
+            );
             return;
         }
-
-        if let Err(violation) = self.risk.lock_or_recover().check_pre_order(
-            size_usdc,
-            open_positions,
-            current_nav,
-            STARTING_BALANCE_USDC,
-        ) {
-            warn!("🛑 Risk check blocked order: {violation}");
-            if let Some(ref log) = self.activity {
-                log_push(log, EntryKind::Warn, format!("BLOCKED: {violation}"));
-            }
-            return;
-        }
-
-        drop(_risk_timer);
 
         // ── Stage: Drift (FreshnessGate) ─────────────────────────────────
         let _drift_timer = StageTimer::start(HotStage::Drift);
 
         let gate_cfg = GateConfig::from_profile_and_env(self.execution_profile);
-        let price_gate = (entry_price * 1_000.0).round() as u64;
+        let fast_taker_enabled = std::env::var("BLINK_FAST_TAKER")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+            .unwrap_or(true);
+        let fast_taker_max_chase_bps = std::env::var("BLINK_FAST_TAKER_MAX_CHASE_BPS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(100)
+            .min(1_000);
+        let fast_taker_max_chase_ticks = std::env::var("BLINK_FAST_TAKER_MAX_CHASE_TICKS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(50)
+            .min(250);
+
+        let mut execution_price_u64 = signal.price.max(1);
+        if fast_taker_enabled {
+            if let Some((top_price, top_size)) =
+                self.book_store.top_of_book(&signal.token_id, signal.side)
+            {
+                let signal_price = signal.price.max(1) as u128;
+                let top = top_price as u128;
+                let chase = fast_taker_max_chase_bps as u128;
+                let within_chase = match signal.side {
+                    OrderSide::Buy => top * 10_000 <= signal_price * (10_000 + chase),
+                    OrderSide::Sell => top * 10_000 >= signal_price * (10_000 - chase),
+                };
+                let within_abs_chase = match signal.side {
+                    OrderSide::Buy => {
+                        top <= signal_price.saturating_add(fast_taker_max_chase_ticks as u128)
+                    }
+                    OrderSide::Sell => {
+                        top.saturating_add(fast_taker_max_chase_ticks as u128) >= signal_price
+                    }
+                };
+                if within_chase && within_abs_chase {
+                    let max_price = ((signal_price * (10_000 + chase)) / 10_000) as u64;
+                    let budget_base = (size_usdc * 1_000_000.0).floor() as u64;
+                    let quant_price = match signal.side {
+                        OrderSide::Buy => Self::best_budget_compatible_buy_price(
+                            top_price.max(1),
+                            max_price.max(top_price),
+                            budget_base,
+                        ),
+                        OrderSide::Sell => Some(top_price.max(1)),
+                    };
+                    let Some(quant_price) = quant_price else {
+                        warn!(
+                            token_id = %signal.token_id,
+                            side = %signal.side,
+                            top_price = top_price,
+                            max_price = max_price,
+                            budget_base = budget_base,
+                            "Fast taker skipped: no budget-compatible exact tick/precision price"
+                        );
+                        self.mark_skipped_order().await;
+                        return;
+                    };
+                    execution_price_u64 = quant_price;
+                    info!(
+                        token_id = %signal.token_id,
+                        side = %signal.side,
+                        rn1_price = signal.price,
+                        top_price = top_price,
+                        execution_price = execution_price_u64,
+                        top_size = top_size,
+                        max_chase_bps = fast_taker_max_chase_bps,
+                        max_chase_ticks = fast_taker_max_chase_ticks,
+                        "Fast taker repriced to live top-of-book"
+                    );
+                }
+            }
+        }
         // Category-aware drift tolerance (min() semantics — override can only tighten).
         let market_class =
             crate::market_class::MarketClass::from_title_opt(signal.market_title.as_deref());
         let max_drift_bps = gate_cfg.max_drift_bps_for_class(market_class);
-        let gate_result = self.pretrade_gate.check(
+        let gate_post_only = gate_cfg.post_only && !fast_taker_enabled;
+        let mut gate_result = self.pretrade_gate.check(
             &signal.token_id,
             signal.side,
-            price_gate,
+            execution_price_u64,
             gate_cfg.stale_ms,
             max_drift_bps,
-            gate_cfg.post_only,
+            gate_post_only,
         );
+        if matches!(gate_result, GateDecision::SkipStale)
+            && self.seed_order_book_from_rest(&signal.token_id).await
+        {
+            if fast_taker_enabled {
+                if let Some((top_price, top_size)) =
+                    self.book_store.top_of_book(&signal.token_id, signal.side)
+                {
+                    let signal_price = signal.price.max(1) as u128;
+                    let top = top_price as u128;
+                    let chase = fast_taker_max_chase_bps as u128;
+                    let within_chase = match signal.side {
+                        OrderSide::Buy => top * 10_000 <= signal_price * (10_000 + chase),
+                        OrderSide::Sell => top * 10_000 >= signal_price * (10_000 - chase),
+                    };
+                    let within_abs_chase = match signal.side {
+                        OrderSide::Buy => {
+                            top <= signal_price.saturating_add(fast_taker_max_chase_ticks as u128)
+                        }
+                        OrderSide::Sell => {
+                            top.saturating_add(fast_taker_max_chase_ticks as u128) >= signal_price
+                        }
+                    };
+                    if within_chase && within_abs_chase {
+                        let max_price = ((signal_price * (10_000 + chase)) / 10_000) as u64;
+                        let budget_base = (size_usdc * 1_000_000.0).floor() as u64;
+                        let quant_price = match signal.side {
+                            OrderSide::Buy => Self::best_budget_compatible_buy_price(
+                                top_price.max(1),
+                                max_price.max(top_price),
+                                budget_base,
+                            ),
+                            OrderSide::Sell => Some(top_price.max(1)),
+                        };
+                        let Some(quant_price) = quant_price else {
+                            warn!(
+                                token_id = %signal.token_id,
+                                side = %signal.side,
+                                top_price = top_price,
+                                max_price = max_price,
+                                budget_base = budget_base,
+                                "Fast taker skipped: no budget-compatible exact tick/precision price"
+                            );
+                            self.mark_skipped_order().await;
+                            return;
+                        };
+                        execution_price_u64 = quant_price;
+                        info!(
+                            token_id = %signal.token_id,
+                            side = %signal.side,
+                            rn1_price = signal.price,
+                            top_price = top_price,
+                            execution_price = execution_price_u64,
+                            top_size = top_size,
+                            max_chase_bps = fast_taker_max_chase_bps,
+                            max_chase_ticks = fast_taker_max_chase_ticks,
+                            "Fast taker repriced to REST-seeded top-of-book"
+                        );
+                    }
+                }
+            }
+            gate_result = self.pretrade_gate.check(
+                &signal.token_id,
+                signal.side,
+                execution_price_u64,
+                gate_cfg.stale_ms,
+                max_drift_bps,
+                gate_post_only,
+            );
+        }
         match gate_result {
             GateDecision::Proceed => {
                 crate::hot_metrics::counters()
@@ -577,6 +867,15 @@ impl LiveEngine {
                     .gate_skip_stale
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 warn!(token_id = %signal.token_id, "⛔ Gate: stale book snapshot — signal dropped");
+                self.mark_skipped_order().await;
+                self.audit_signal_decision(
+                    &signal,
+                    "blocked_stale_book",
+                    Some("pretrade_gate_stale_snapshot"),
+                    Some(size_usdc),
+                    Some(&metadata),
+                    handle_started_at,
+                );
                 return;
             }
             GateDecision::SkipDrift { bps } => {
@@ -585,6 +884,16 @@ impl LiveEngine {
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.failsafe_metrics.lock_or_recover().trigger_count += 1;
                 warn!(token_id = %signal.token_id, drift_bps = bps, "⛔ Gate: drift too large — signal dropped");
+                self.mark_skipped_order().await;
+                let reason = format!("pretrade_gate_drift_{bps}_bps");
+                self.audit_signal_decision(
+                    &signal,
+                    "blocked_drift",
+                    Some(&reason),
+                    Some(size_usdc),
+                    Some(&metadata),
+                    handle_started_at,
+                );
                 return;
             }
             GateDecision::SkipPostOnlyCross => {
@@ -592,22 +901,68 @@ impl LiveEngine {
                     .gate_skip_post_only
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 warn!(token_id = %signal.token_id, "⛔ Gate: post-only cross — signal dropped");
+                self.mark_skipped_order().await;
+                self.audit_signal_decision(
+                    &signal,
+                    "blocked_post_only_cross",
+                    Some("pretrade_gate_post_only_cross"),
+                    Some(size_usdc),
+                    Some(&metadata),
+                    handle_started_at,
+                );
                 return;
             }
         }
 
         drop(_drift_timer);
 
+        // ── Stage: Risk ───────────────────────────────────────────────────
+        let _risk_timer = StageTimer::start(HotStage::Risk);
+
+        // Risk check must run after local price/book gates. Otherwise drift- or
+        // stale-rejected candidates consume the 1/sec live-canary rate token and
+        // block the first actually executable signal in the same burst.
+        if let Err(violation) = self.risk.lock_or_recover().check_pre_order(
+            size_usdc,
+            open_positions,
+            current_nav,
+            self.starting_nav_usdc,
+        ) {
+            warn!("🛑 Risk check blocked order: {violation}");
+            if let Some(ref log) = self.activity {
+                log_push(log, EntryKind::Warn, format!("BLOCKED: {violation}"));
+            }
+            self.mark_skipped_order().await;
+            self.audit_signal_decision(
+                &signal,
+                "blocked_risk",
+                Some(&violation.to_string()),
+                Some(size_usdc),
+                Some(&metadata),
+                handle_started_at,
+            );
+            return;
+        }
+
+        drop(_risk_timer);
+
         // ── Stage: Sign ───────────────────────────────────────────────────
         let _sign_timer = StageTimer::start(HotStage::Sign);
 
         // 5. Build and sign (or dry-run)
+        let now = self.next_order_timestamp_ms();
+
         let params = OrderParams {
             token_id: signal.token_id.clone(),
             side: signal.side,
-            price: signal.price,
+            price: execution_price_u64,
             size: size_usdc,
             maker: self.funder_addr.clone(),
+            builder: "0x0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+            timestamp: now,
+            metadata: "0x0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
         };
 
         let (accepted, exchange_order_id) = if self.executor.dry_run || self.vault.is_none() {
@@ -629,7 +984,14 @@ impl LiveEngine {
                 .as_ref()
                 .expect("vault is Some; guarded by is_none() check above");
             drop(_sign_timer);
-            match sign_order_for_intent_with_vault(vault.as_ref(), &params, signal.intent_id) {
+            match sign_order_for_intent_with_vault_handle_policy(
+                vault.as_ref(),
+                &params,
+                self.signing_policy,
+                signal.intent_id,
+            )
+            .await
+            {
                 Ok(signed) => {
                     // Build OrderIntent with pre-signed payload for idempotent retry.
                     let order_intent = OrderIntent {
@@ -637,9 +999,13 @@ impl LiveEngine {
                         market_id: signal.market_id.clone().unwrap_or_default(),
                         token_id: signal.token_id.clone(),
                         side: signal.side,
-                        price_u64: signal.price,
+                        price_u64: execution_price_u64,
                         size_u64: (size_usdc * 1_000.0) as u64,
-                        tif: TimeInForce::Gtc,
+                        tif: if fast_taker_enabled {
+                            TimeInForce::Fak
+                        } else {
+                            TimeInForce::Gtc
+                        },
                         strategy_mode: strategy_snapshot.current_mode,
                         requested_at: std::time::Instant::now(),
                         signed_payload: Some(signed),
@@ -655,7 +1021,7 @@ impl LiveEngine {
                                     log,
                                     EntryKind::Fill,
                                     format!(
-                                        "ROUTER QUEUED {} @{:.3} ${:.2}",
+                                        "SUBMIT QUEUED (NOT FILLED) {} @{:.3} ${:.2}",
                                         signal.side, entry_price, size_usdc
                                     ),
                                 );
@@ -697,10 +1063,31 @@ impl LiveEngine {
                     ),
                 );
             }
+            self.mark_skipped_order().await;
+            self.audit_signal_decision(
+                &signal,
+                "rejected_submit_or_sign",
+                Some("order_not_accepted"),
+                Some(size_usdc),
+                Some(&metadata),
+                handle_started_at,
+            );
             return;
         }
 
         self.record_canary_accept();
+        self.audit_signal_decision(
+            &signal,
+            if self.executor.dry_run || self.vault.is_none() {
+                "accepted_dry_run"
+            } else {
+                "queued_live"
+            },
+            None,
+            Some(size_usdc),
+            Some(&metadata),
+            handle_started_at,
+        );
 
         // 6. Fill accounting — exchange-first (SSOT) principle.
         //
@@ -739,7 +1126,7 @@ impl LiveEngine {
                     ),
                 );
             }
-        } else {
+        } else if self.executor.dry_run || self.vault.is_none() {
             // DRY-RUN / paper mode: no exchange_order_id means no real order
             // was submitted, so record fill immediately (simulation only).
             {
@@ -753,6 +1140,248 @@ impl LiveEngine {
                 );
             }
             self.risk.lock_or_recover().record_fill(size_usdc);
+        } else {
+            // Live router path: OrderRouter::submit() means queued locally, not
+            // exchange-accepted. Never mark a fill here; reconciler/exchange
+            // truth must be the source of portfolio accounting.
+            info!(
+                intent_id = signal.intent_id,
+                token_id = %signal.token_id,
+                "Live order queued without exchange order id; local fill accounting skipped"
+            );
+        }
+    }
+
+    fn best_budget_compatible_buy_price(
+        top_price_u64: u64,
+        max_price_u64: u64,
+        budget_base_units: u64,
+    ) -> Option<u64> {
+        const MIN_MARKETABLE_BUY_BASE: u64 = 1_000_000;
+        if budget_base_units < MIN_MARKETABLE_BUY_BASE {
+            return None;
+        }
+        (top_price_u64.max(1)..=max_price_u64.max(top_price_u64.max(1)))
+            .find(|&price| Self::min_valid_buy_maker_amount_base(price) <= budget_base_units)
+    }
+
+    fn min_valid_buy_maker_amount_base(price_u64: u64) -> u64 {
+        const MIN_MARKETABLE_BUY_BASE: u64 = 1_000_000;
+        let exact_step = Self::exact_buy_maker_step_base(price_u64);
+        let steps = (MIN_MARKETABLE_BUY_BASE + exact_step - 1) / exact_step;
+        exact_step.saturating_mul(steps)
+    }
+
+    fn exact_buy_maker_step_base(price_u64: u64) -> u64 {
+        let price = price_u64.max(1);
+        let lot_multiple = 10_000u64 / Self::gcd_u64(price, 10_000);
+        price.saturating_mul(lot_multiple)
+    }
+
+    fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
+        while b != 0 {
+            let r = a % b;
+            a = b;
+            b = r;
+        }
+        a.max(1)
+    }
+
+    fn next_order_timestamp_ms(&self) -> u64 {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let mut current = self.nonce_counter.load(Ordering::Relaxed);
+
+        loop {
+            let next = now_ms.max(current.saturating_add(1));
+            match self.nonce_counter.compare_exchange(
+                current,
+                next,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return next,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    async fn check_market_metadata_gate(
+        &self,
+        signal: &RN1Signal,
+    ) -> std::result::Result<MarketMetadata, String> {
+        let metadata = match self.metadata_fetcher.fetch(&signal.token_id).await {
+            Ok(metadata) => metadata,
+            Err(e) if self.market_safety_policy.allow_unknown_metadata => {
+                warn!(
+                    token_id = %signal.token_id,
+                    error = %e,
+                    "Market metadata fetch failed but BLINK_ALLOW_UNKNOWN_MARKET_METADATA=true"
+                );
+                MarketMetadata {
+                    market_id: signal.market_id.clone().unwrap_or_default(),
+                    token_id: signal.token_id.clone(),
+                    category: "unknown".to_string(),
+                    tags: Vec::new(),
+                    volume_24h: 0.0,
+                    liquidity: 0.0,
+                    event_start_time: signal.event_start_time,
+                    event_end_time: signal.event_end_time,
+                    closed: false,
+                    neg_risk: false,
+                    enable_neg_risk: false,
+                    minimum_tick_size: None,
+                }
+            }
+            Err(e) => return Err(format!("metadata_fetch_failed: {e}")),
+        };
+
+        if metadata.closed {
+            return Err("market_closed".to_string());
+        }
+
+        if (metadata.neg_risk || metadata.enable_neg_risk)
+            && !self.market_safety_policy.allow_neg_risk
+        {
+            return Err("neg_risk_market_blocked_until_neg_risk_signing_enabled".to_string());
+        }
+
+        match metadata
+            .minimum_tick_size
+            .as_deref()
+            .and_then(parse_tick_size)
+        {
+            Some(tick)
+                if tick + f64::EPSILON < self.market_safety_policy.min_supported_tick_size =>
+            {
+                return Err(format!(
+                    "tick_size_unsupported {:.6}<min_supported {:.6}",
+                    tick, self.market_safety_policy.min_supported_tick_size
+                ));
+            }
+            Some(_) => {}
+            None if !self.market_safety_policy.allow_unknown_metadata => {
+                return Err("metadata_missing_or_invalid_tick_size".to_string());
+            }
+            None => {}
+        }
+
+        Ok(metadata)
+    }
+
+    fn check_live_side_gate(&self, signal: &RN1Signal) -> std::result::Result<(), String> {
+        if signal.side == OrderSide::Sell && !self.market_safety_policy.allow_live_sell {
+            return Err(
+                "live_sell_blocked_until_position_unwind_and_allowance_support".to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    async fn seed_order_book_from_rest(&self, token_id: &str) -> bool {
+        let book = match self.rest_clob.get_order_book(token_id).await {
+            Ok(book) => book,
+            Err(e) => {
+                warn!(
+                    token_id,
+                    error = %e,
+                    "REST order-book seed failed after stale pretrade snapshot"
+                );
+                return false;
+            }
+        };
+
+        let bids = parse_rest_book_levels(&book, "bids");
+        let asks = parse_rest_book_levels(&book, "asks");
+        if bids.is_empty() && asks.is_empty() {
+            warn!(
+                token_id,
+                "REST order-book seed returned no priced levels after stale pretrade snapshot"
+            );
+            return false;
+        }
+
+        self.book_store.replace_snapshot(token_id, &bids, &asks);
+        info!(
+            token_id,
+            bids = bids.len(),
+            asks = asks.len(),
+            "REST order-book seed applied for stale pretrade snapshot"
+        );
+        true
+    }
+
+    async fn mark_skipped_order(&self) {
+        let mut p = self.portfolio.lock().await;
+        p.skipped_orders += 1;
+    }
+
+    fn audit_signal_decision(
+        &self,
+        signal: &RN1Signal,
+        decision: &str,
+        reason: Option<&str>,
+        size_usdc: Option<f64>,
+        metadata: Option<&MarketMetadata>,
+        started_at: Instant,
+    ) {
+        if !self.shadow_audit.enabled {
+            return;
+        }
+
+        let path = Path::new(&self.shadow_audit.path);
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    warn!(path = %self.shadow_audit.path, error = %e, "shadow audit mkdir failed");
+                    return;
+                }
+            }
+        }
+
+        let rn1_shares = signal.size as f64 / 1_000.0;
+        let price = signal.price as f64 / 1_000.0;
+        let event = serde_json::json!({
+            "ts": chrono::Utc::now().to_rfc3339(),
+            "decision": decision,
+            "reason": reason,
+            "token_id": &signal.token_id,
+            "market_id": signal.market_id.as_deref(),
+            "market_title": signal.market_title.as_deref(),
+            "market_outcome": signal.market_outcome.as_deref(),
+            "side": signal.side.to_string(),
+            "price_scaled": signal.price,
+            "price": price,
+            "size_usdc": size_usdc,
+            "rn1_size_scaled": signal.size,
+            "rn1_shares": rn1_shares,
+            "rn1_notional_usd": rn1_shares * price,
+            "intent_id": signal.intent_id,
+            "source_order_id": signal.source_order_id.as_deref(),
+            "source_seq": signal.source_seq,
+            "signal_source": &signal.signal_source,
+            "signal_age_ms": signal.detected_at.elapsed().as_millis() as u64,
+            "queue_age_ms": signal.enqueued_at.elapsed().as_millis() as u64,
+            "decision_latency_ms": started_at.elapsed().as_millis() as u64,
+            "metadata_neg_risk": metadata.map(|m| m.neg_risk),
+            "metadata_enable_neg_risk": metadata.map(|m| m.enable_neg_risk),
+            "metadata_tick_size": metadata.and_then(|m| m.minimum_tick_size.as_deref()),
+            "metadata_category": metadata.map(|m| m.category.as_str()),
+            "metadata_liquidity": metadata.map(|m| m.liquidity),
+            "metadata_volume_24h": metadata.map(|m| m.volume_24h),
+        });
+
+        match OpenOptions::new().create(true).append(true).open(path) {
+            Ok(mut file) => {
+                if let Ok(line) = serde_json::to_string(&event) {
+                    if let Err(e) = writeln!(file, "{line}") {
+                        warn!(path = %self.shadow_audit.path, error = %e, "shadow audit write failed");
+                    }
+                }
+            }
+            Err(e) => warn!(path = %self.shadow_audit.path, error = %e, "shadow audit open failed"),
         }
     }
 
@@ -803,7 +1432,7 @@ impl LiveEngine {
         if state.reject_streak >= self.canary_policy.max_reject_streak {
             state.halted = true;
             let _ = std::fs::write(
-                "logs\\CANARY_HALTED.flag",
+                "logs/CANARY_HALTED.flag",
                 format!(
                     "halted=true reject_streak={} threshold={}\n",
                     state.reject_streak, self.canary_policy.max_reject_streak
@@ -819,7 +1448,7 @@ impl LiveEngine {
                     log,
                     EntryKind::Warn,
                     format!(
-                        "CANARY HALTED: reject_streak={} threshold={} (logs\\CANARY_HALTED.flag)",
+                        "CANARY HALTED: reject_streak={} threshold={} (logs/CANARY_HALTED.flag)",
                         state.reject_streak, self.canary_policy.max_reject_streak
                     ),
                 );
@@ -831,6 +1460,44 @@ impl LiveEngine {
         let mut state = self.canary_state.lock_or_recover();
         state.accepted_orders += 1;
         state.reject_streak = 0;
+    }
+
+    fn record_canary_closed_trade(&self, realized_pnl: f64) {
+        if self.canary_policy.max_loss_streak == 0 {
+            return;
+        }
+
+        let mut state = self.canary_state.lock_or_recover();
+        if realized_pnl < 0.0 {
+            state.loss_streak += 1;
+            if state.loss_streak >= self.canary_policy.max_loss_streak {
+                state.halted = true;
+                let _ = std::fs::write(
+                    "logs/CANARY_HALTED.flag",
+                    format!(
+                        "halted=true loss_streak={} threshold={}\n",
+                        state.loss_streak, self.canary_policy.max_loss_streak
+                    ),
+                );
+                error!(
+                    loss_streak = state.loss_streak,
+                    threshold = self.canary_policy.max_loss_streak,
+                    "CANARY HALTED: realized loss streak threshold reached"
+                );
+                if let Some(ref log) = self.activity {
+                    log_push(
+                        log,
+                        EntryKind::Warn,
+                        format!(
+                            "CANARY HALTED: loss_streak={} threshold={} (logs/CANARY_HALTED.flag)",
+                            state.loss_streak, self.canary_policy.max_loss_streak
+                        ),
+                    );
+                }
+            }
+        } else if realized_pnl > 0.0 {
+            state.loss_streak = 0;
+        }
     }
 
     async fn classify_signal_intent(&self, signal: &RN1Signal) -> SignalIntent {
@@ -856,19 +1523,23 @@ impl LiveEngine {
 
     async fn sync_risk_closes_from_portfolio(&self) {
         let mut accounted = self.accounted_closed_trades.lock().await;
-        let (new_count, realized_delta) = {
+        let (new_count, realized_delta, realized_trades) = {
             let p = self.portfolio.lock().await;
             if *accounted >= p.closed_trades.len() {
                 return;
             }
-            let delta = p.closed_trades[*accounted..]
+            let trades = p.closed_trades[*accounted..]
                 .iter()
                 .map(|t| t.realized_pnl)
-                .sum::<f64>();
-            (p.closed_trades.len(), delta)
+                .collect::<Vec<_>>();
+            let delta = trades.iter().copied().sum::<f64>();
+            (p.closed_trades.len(), delta, trades)
         };
 
         self.risk.lock_or_recover().record_close(realized_delta);
+        for realized_pnl in realized_trades {
+            self.record_canary_closed_trade(realized_pnl);
+        }
         *accounted = new_count;
     }
 
@@ -1024,12 +1695,10 @@ impl LiveEngine {
         }
 
         // Update reconcile lag counter
-        crate::hot_metrics::counters()
-            .reconcile_lag_ms_last
-            .store(
-                _reconcile_start.elapsed().as_millis() as i64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
+        crate::hot_metrics::counters().reconcile_lag_ms_last.store(
+            _reconcile_start.elapsed().as_millis() as i64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 
     #[cfg(feature = "legacy-fill-window")]
@@ -1234,6 +1903,36 @@ fn hour_in_window(hour: u8, start: u8, end: u8) -> bool {
     }
 }
 
+fn env_bool(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1" || v.eq_ignore_ascii_case("yes"))
+        .unwrap_or(default)
+}
+
+fn parse_tick_size(raw: &str) -> Option<f64> {
+    raw.trim().parse::<f64>().ok()
+}
+
+fn parse_rest_book_levels(book: &serde_json::Value, side: &str) -> Vec<PriceLevel> {
+    book.get(side)
+        .and_then(|levels| levels.as_array())
+        .map(|levels| {
+            levels
+                .iter()
+                .filter_map(|level| {
+                    let price = level.get("price").and_then(|v| v.as_str())?;
+                    let size = level.get("size").and_then(|v| v.as_str())?;
+                    let parsed = PriceLevel {
+                        price: parse_price(price),
+                        size: parse_price(size),
+                    };
+                    (parsed.price > 0 && parsed.size > 0).then_some(parsed)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{classify_intent_from_counts, hour_in_window, SignalIntent};
@@ -1306,11 +2005,7 @@ pub fn spawn_maker_layering_task(
             ticker.tick().await;
 
             // Collect market keys without holding the DashMap shard lock across awaits.
-            let markets: Vec<String> = engine
-                .per_market
-                .iter()
-                .map(|e| e.key().clone())
-                .collect();
+            let markets: Vec<String> = engine.per_market.iter().map(|e| e.key().clone()).collect();
 
             for market_id in &markets {
                 // TODO: once ExecutionProfile::HftMaker exposes a market

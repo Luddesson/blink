@@ -8,11 +8,11 @@ const cardVariants = cva(
     variants: {
       variant: {
         default: '',
-        signal:  'shadow-[0_0_0_1px_oklch(0.68_0.18_230/0.28),0_18px_48px_-14px_oklch(0.68_0.18_230/0.25)]',
-        alert:   'shadow-[0_0_0_1px_oklch(0.80_0.17_85/0.3),0_18px_48px_-14px_oklch(0.80_0.17_85/0.25)]',
-        whale:   'shadow-[0_0_0_1px_oklch(0.80_0.17_85/0.3),0_18px_48px_-14px_oklch(0.80_0.17_85/0.25)]',
-        bear:    'shadow-[0_0_0_1px_oklch(0.65_0.24_25/0.3),0_18px_48px_-14px_oklch(0.65_0.24_25/0.3)]',
-        bull:    'shadow-[0_0_0_1px_oklch(0.72_0.19_155/0.28),0_18px_48px_-14px_oklch(0.72_0.19_155/0.25)]',
+        signal:  'shadow-[0_0_0_1px_var(--color-signal-500)/0.28),0_18px_48px_-14px_var(--color-signal-500)/0.25)]',
+        alert:   'shadow-[0_0_0_1px_var(--color-whale-500)/0.3),0_18px_48px_-14px_var(--color-whale-500)/0.25)]',
+        whale:   'shadow-[0_0_0_1px_var(--color-whale-500)/0.3),0_18px_48px_-14px_var(--color-whale-500)/0.25)]',
+        bear:    'shadow-[0_0_0_1px_var(--color-bear-500)/0.3),0_18px_48px_-14px_var(--color-bear-500)/0.3)]',
+        bull:    'shadow-[0_0_0_1px_var(--color-bull-500)/0.28),0_18px_48px_-14px_var(--color-bull-500)/0.25)]',
       },
       accent: {
         none: '',

@@ -336,46 +336,141 @@ pub fn render_prom() -> String {
 
     macro_rules! counter {
         ($out:expr, $name:literal, $val:expr) => {
-            $out.push_str(&format!(
-                "# TYPE {} counter\n{} {}\n",
-                $name,
-                $name,
-                $val
-            ));
+            $out.push_str(&format!("# TYPE {} counter\n{} {}\n", $name, $name, $val));
         };
     }
 
-    counter!(out, "blink_hot_signals_in_total",       c.signals_in.load(Ordering::Relaxed));
-    counter!(out, "blink_hot_dedup_hits_total",        c.dedup_hits.load(Ordering::Relaxed));
-    counter!(out, "blink_hot_submits_started_total",   c.submits_started.load(Ordering::Relaxed));
-    counter!(out, "blink_hot_submits_ack_total",       c.submits_ack.load(Ordering::Relaxed));
-    counter!(out, "blink_hot_submits_rejected_total",  c.submits_rejected.load(Ordering::Relaxed));
-    counter!(out, "blink_hot_submit_unknown_total",    c.submit_unknown.load(Ordering::Relaxed));
-    counter!(out, "blink_hot_cancels_started_total",   c.cancels_started.load(Ordering::Relaxed));
-    counter!(out, "blink_hot_cancels_ack_total",       c.cancels_ack.load(Ordering::Relaxed));
-    counter!(out, "blink_hot_heartbeat_misses_total",  c.heartbeat_misses.load(Ordering::Relaxed));
-    counter!(out, "blink_hot_partial_fills_total",     c.partial_fills.load(Ordering::Relaxed));
-    counter!(out, "blink_hot_full_fills_total",        c.full_fills.load(Ordering::Relaxed));
-    counter!(out, "blink_hot_ws_reconnects_total",     c.ws_reconnects_total.load(Ordering::Relaxed));
-    counter!(out, "blink_http_tls_handshakes_total",   c.tls_handshakes_total.load(Ordering::Relaxed));
-    counter!(out, "blink_http_dns_lookups_total",      c.dns_lookups_total.load(Ordering::Relaxed));
+    counter!(
+        out,
+        "blink_hot_signals_in_total",
+        c.signals_in.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_hot_dedup_hits_total",
+        c.dedup_hits.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_hot_submits_started_total",
+        c.submits_started.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_hot_submits_ack_total",
+        c.submits_ack.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_hot_submits_rejected_total",
+        c.submits_rejected.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_hot_submit_unknown_total",
+        c.submit_unknown.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_hot_cancels_started_total",
+        c.cancels_started.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_hot_cancels_ack_total",
+        c.cancels_ack.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_hot_heartbeat_misses_total",
+        c.heartbeat_misses.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_hot_partial_fills_total",
+        c.partial_fills.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_hot_full_fills_total",
+        c.full_fills.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_hot_ws_reconnects_total",
+        c.ws_reconnects_total.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_http_tls_handshakes_total",
+        c.tls_handshakes_total.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_http_dns_lookups_total",
+        c.dns_lookups_total.load(Ordering::Relaxed)
+    );
 
     // Router counters
-    counter!(out, "blink_router_dropped_full_total",     c.router_dropped_full.load(Ordering::Relaxed));
-    counter!(out, "blink_router_retries_total",          c.router_retries_total.load(Ordering::Relaxed));
-    counter!(out, "blink_router_reconcile_sweeps_total", c.router_reconcile_sweeps.load(Ordering::Relaxed));
-    counter!(out, "blink_dedup_ws_wins_total",          c.ws_dedup_wins.load(Ordering::Relaxed));
-    counter!(out, "blink_dedup_rest_wins_total",        c.rest_dedup_wins.load(Ordering::Relaxed));
+    counter!(
+        out,
+        "blink_router_dropped_full_total",
+        c.router_dropped_full.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_router_retries_total",
+        c.router_retries_total.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_router_reconcile_sweeps_total",
+        c.router_reconcile_sweeps.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_dedup_ws_wins_total",
+        c.ws_dedup_wins.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_dedup_rest_wins_total",
+        c.rest_dedup_wins.load(Ordering::Relaxed)
+    );
 
     // Pre-trade gate counters
-    counter!(out, "blink_gate_proceed_total",           c.gate_proceed.load(Ordering::Relaxed));
-    counter!(out, "blink_gate_skip_stale_total",        c.gate_skip_stale.load(Ordering::Relaxed));
-    counter!(out, "blink_gate_skip_drift_total",        c.gate_skip_drift.load(Ordering::Relaxed));
-    counter!(out, "blink_gate_skip_post_only_total",    c.gate_skip_post_only.load(Ordering::Relaxed));
+    counter!(
+        out,
+        "blink_gate_proceed_total",
+        c.gate_proceed.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_gate_skip_stale_total",
+        c.gate_skip_stale.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_gate_skip_drift_total",
+        c.gate_skip_drift.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_gate_skip_post_only_total",
+        c.gate_skip_post_only.load(Ordering::Relaxed)
+    );
 
     // Signal pipeline counters
-    counter!(out, "blink_signal_pertoken_overflow_dropped_total", c.signal_pertoken_overflow_dropped.load(Ordering::Relaxed));
-    counter!(out, "blink_signal_dispatcher_dropped_total",        c.signal_dispatcher_dropped.load(Ordering::Relaxed));
+    counter!(
+        out,
+        "blink_signal_pertoken_overflow_dropped_total",
+        c.signal_pertoken_overflow_dropped.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_signal_dispatcher_dropped_total",
+        c.signal_dispatcher_dropped.load(Ordering::Relaxed)
+    );
     let workers_active = c.signal_per_token_workers_active.load(Ordering::Relaxed);
     out.push_str(&format!(
         "# TYPE blink_signal_per_token_workers_active gauge\nblink_signal_per_token_workers_active {workers_active}\n"
@@ -390,8 +485,16 @@ pub fn render_prom() -> String {
     ));
 
     // Phase 3: Risk admission counters
-    counter!(out, "blink_risk_admits_total",            c.risk_admits_total.load(Ordering::Relaxed));
-    counter!(out, "blink_risk_throttles_total",         c.risk_throttles_total.load(Ordering::Relaxed));
+    counter!(
+        out,
+        "blink_risk_admits_total",
+        c.risk_admits_total.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_risk_throttles_total",
+        c.risk_throttles_total.load(Ordering::Relaxed)
+    );
     out.push_str("# TYPE blink_risk_rejects_total counter\n");
     out.push_str(&format!(
         "blink_risk_rejects_total{{reason=\"rate\"}} {}\n",
@@ -450,12 +553,39 @@ pub fn render_prom() -> String {
     ));
 
     // Phase 3 counters
-    counter!(out, "blink_submit_unknown_resolved_acked_total",    c.submit_unknown_resolved_acked_total.load(Ordering::Relaxed));
-    counter!(out, "blink_submit_unknown_resolved_rejected_total", c.submit_unknown_resolved_rejected_total.load(Ordering::Relaxed));
-    counter!(out, "blink_submit_unknown_lookup_attempts_total",   c.submit_unknown_lookup_attempts_total.load(Ordering::Relaxed));
-    counter!(out, "blink_cancel_success_total",                   c.cancel_success_total.load(Ordering::Relaxed));
-    counter!(out, "blink_cancel_reject_total",                    c.cancel_reject_total.load(Ordering::Relaxed));
-    counter!(out, "blink_router_gc_evicted_total",                c.router_gc_evicted_total.load(Ordering::Relaxed));
+    counter!(
+        out,
+        "blink_submit_unknown_resolved_acked_total",
+        c.submit_unknown_resolved_acked_total
+            .load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_submit_unknown_resolved_rejected_total",
+        c.submit_unknown_resolved_rejected_total
+            .load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_submit_unknown_lookup_attempts_total",
+        c.submit_unknown_lookup_attempts_total
+            .load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_cancel_success_total",
+        c.cancel_success_total.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_cancel_reject_total",
+        c.cancel_reject_total.load(Ordering::Relaxed)
+    );
+    counter!(
+        out,
+        "blink_router_gc_evicted_total",
+        c.router_gc_evicted_total.load(Ordering::Relaxed)
+    );
     let fills_delta = c.fills_delta_size_last.load(Ordering::Relaxed);
     out.push_str(&format!(
         "# TYPE blink_fills_delta_size_last gauge\nblink_fills_delta_size_last {fills_delta}\n"

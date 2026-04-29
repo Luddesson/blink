@@ -1,0 +1,20 @@
+[package]
+name    = "blink-types"
+version = "0.1.0"
+edition = "2021"
+license = "proprietary"
+
+description = "Canonical event, intent, and journal types shared across the Blink hot path."
+
+[dependencies]
+blink-timestamps = { path = "../blink-timestamps" }
+serde = { workspace = true, optional = true }
+
+[features]
+default = ["serde"]
+# Opt-out for embedded / bench contexts that want the bare types without
+# serde derives and their monomorphisation cost.
+serde = ["dep:serde", "blink-timestamps/serde"]
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -35,7 +35,6 @@ pub struct RiskConfig {
     pub var_threshold_pct: f64,
 
     // ── Phase 3: HFT stream-aware risk fields ────────────────────────────
-
     /// Steady-state order submission rate (orders/second) admitted by the
     /// token-bucket gate. Default 50.0.
     pub orders_per_second: f64,
@@ -83,7 +82,7 @@ impl RiskConfig {
     /// | `MAX_DAILY_LOSS_PCT`      | 1.0 (100% — no limit in paper mode) |
     /// | `MAX_CONCURRENT_POSITIONS`| 20      |
     /// | `MAX_SINGLE_ORDER_USDC`   | 25.0    |
-    /// | `MAX_ORDERS_PER_SECOND`   | 10      |
+    /// | `BLINK_RISK_ORDERS_PER_SEC` | 10    |
     /// | `TRADING_ENABLED`         | false   |
     pub fn from_env() -> Self {
         let max_daily_loss_pct = std::env::var("MAX_DAILY_LOSS_PCT")
@@ -101,26 +100,28 @@ impl RiskConfig {
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(25.0);
 
-        let max_orders_per_second = std::env::var("MAX_ORDERS_PER_SECOND")
+        let legacy_max_orders_per_second = std::env::var("MAX_ORDERS_PER_SECOND")
             .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(10);
+            .and_then(|v| v.parse::<u32>().ok());
+        let orders_per_second = std::env::var("BLINK_RISK_ORDERS_PER_SEC")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or_else(|| legacy_max_orders_per_second.unwrap_or(10) as f64);
+        let max_orders_per_second = orders_per_second.ceil().max(1.0) as u32;
 
-        if std::env::var("MAX_ORDERS_PER_SECOND").is_ok() {
+        if legacy_max_orders_per_second.is_some()
+            && std::env::var("BLINK_RISK_ORDERS_PER_SEC").is_err()
+        {
             warn!(
                 "MAX_ORDERS_PER_SECOND is deprecated — use BLINK_RISK_ORDERS_PER_SEC \
                  and BLINK_RISK_ORDERS_BURST for the Phase 3 token-bucket gate"
             );
         }
 
-        let orders_per_second = std::env::var("BLINK_RISK_ORDERS_PER_SEC")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(50.0);
         let orders_burst = std::env::var("BLINK_RISK_ORDERS_BURST")
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(150);
+            .unwrap_or(max_orders_per_second.saturating_mul(3).max(1));
         let cancel_replace_budget_per_sec = std::env::var("BLINK_RISK_CANCEL_REPLACE_PER_SEC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
@@ -350,10 +351,7 @@ impl StreamRiskGate {
 
     /// Integer-only admission check. Must be called on the submit hot path
     /// BEFORE enqueueing to the router.
-    pub fn try_admit(
-        &self,
-        intent: &crate::order_router::intent::OrderIntent,
-    ) -> AdmitDecision {
+    pub fn try_admit(&self, intent: &crate::order_router::intent::OrderIntent) -> AdmitDecision {
         // Step 1: single-order size cap.
         if self.max_single_order_u64 > 0 && intent.size_u64 > self.max_single_order_u64 {
             return AdmitDecision::Reject {
@@ -374,7 +372,12 @@ impl StreamRiskGate {
             }
             if self
                 .tokens
-                .compare_exchange(current, current - 1_000, Ordering::AcqRel, Ordering::Acquire)
+                .compare_exchange(
+                    current,
+                    current - 1_000,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
                 .is_ok()
             {
                 break;
@@ -444,7 +447,12 @@ impl StreamRiskGate {
             }
             if self
                 .cancel_tokens
-                .compare_exchange(current, current - 1_000, Ordering::AcqRel, Ordering::Acquire)
+                .compare_exchange(
+                    current,
+                    current - 1_000,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
                 .is_ok()
             {
                 return AdmitDecision::Admit;
@@ -525,17 +533,19 @@ impl StreamRiskGate {
                         });
                 }
                 if cancel_refill > 0 && max_cancel_tokens > 0 {
-                    let _ = gate.cancel_tokens.fetch_update(
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                        |t| Some(t.saturating_add(cancel_refill).min(max_cancel_tokens)),
-                    );
+                    let _ =
+                        gate.cancel_tokens
+                            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |t| {
+                                Some(t.saturating_add(cancel_refill).min(max_cancel_tokens))
+                            });
                 }
                 let c = crate::hot_metrics::counters();
                 c.risk_tokens_available
                     .store(gate.tokens.load(Ordering::Relaxed), Ordering::Relaxed);
-                c.risk_cancel_tokens_available
-                    .store(gate.cancel_tokens.load(Ordering::Relaxed), Ordering::Relaxed);
+                c.risk_cancel_tokens_available.store(
+                    gate.cancel_tokens.load(Ordering::Relaxed),
+                    Ordering::Relaxed,
+                );
                 c.risk_per_market_pending_max
                     .store(gate.max_per_market_pending_count(), Ordering::Relaxed);
             }

@@ -21,13 +21,33 @@ import {
 } from '../components/history'
 
 export default function HistoryPage() {
-  const { data: allTrades } = usePoll(() => api.historyAll(), 30_000)
+  const [range, setRange] = useState<'24h' | '7d' | '30d' | 'all'>('24h')
+  const { data: allTrades } = usePoll(() => api.historyAll(range), 60_000, true, [range])
   const [filters, setFilters] = useState<TradeFilters>({})
   const trades = allTrades ?? []
   const stats = useTradeStats(trades, filters)
 
   return (
     <div className="flex-1 flex flex-col gap-2 p-2 overflow-y-auto min-h-0">
+      <div className="flex justify-between items-center bg-neutral-900/50 p-2 rounded border border-neutral-800">
+        <div className="text-sm font-bold text-neutral-400 uppercase tracking-widest ml-2">Trade History</div>
+        <div className="flex gap-1 bg-neutral-950 p-1 rounded border border-neutral-800">
+          {(['24h', '7d', '30d', 'all'] as const).map((r) => (
+            <button
+              key={r}
+              onClick={() => setRange(r)}
+              className={`px-3 py-1 text-[10px] uppercase font-bold rounded transition-colors ${
+                range === r
+                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                  : 'text-neutral-500 hover:text-neutral-300'
+              }`}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <ErrorBoundary label="FilterBar">
         <FilterBar filters={filters} onChange={setFilters} totalTrades={stats.totalTrades} />
       </ErrorBoundary>

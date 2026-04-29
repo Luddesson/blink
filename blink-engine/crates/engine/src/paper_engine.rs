@@ -21,14 +21,14 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::activity_log::{push as log_push, ActivityLog, EntryKind};
-use crate::clickhouse_logger::{
-    ClosedTradeFull, EquitySnapshot, RejectionEventRecord, WarehouseEvent,
-};
 use crate::exit_strategy::{evaluate_exits, ExitAction, ExitConfig};
 use crate::latency_tracker::LatencyStats;
 use crate::order_book::{OrderBook, OrderBookStore};
 use crate::paper_portfolio::{
     drift_threshold, polymarket_taker_fee_with_rate, PaperPortfolio, STARTING_BALANCE_USDC,
+};
+use crate::postgres_logger::{
+    ClosedTradeFull, EquitySnapshot, RejectionEventRecord, WarehouseEvent,
 };
 use crate::pretrade_gate::{GateConfig, GateDecision, PretradeGate};
 use crate::risk_manager::{RiskConfig, RiskManager};
@@ -118,11 +118,6 @@ pub struct PaperEngine {
     /// Per-token drift-abort cooldown. After a drift abort, the token is blocked
     /// for DRIFT_ABORT_COOLDOWN_SECS seconds to prevent cascading redundant aborts.
     drift_abort_cooldown: Arc<std::sync::Mutex<HashMap<String, Instant>>>,
-    /// Optional Bullpen discovery store for conviction boost lookups.
-    pub discovery_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_discovery::DiscoveryStore>>>,
-    /// Optional Bullpen convergence store for whale convergence sizing boost.
-    pub convergence_store:
-        Option<Arc<tokio::sync::RwLock<crate::bullpen_smart_money::ConvergenceStore>>>,
     /// Per-"token_id:side" fill timestamps for soft deduplication window (2C).
     recent_fills: Arc<std::sync::Mutex<HashMap<String, Instant>>>,
     /// Session-start NAV for intraday drawdown gating (3B): (nav, ordinal_day).
@@ -495,8 +490,6 @@ impl PaperEngine {
             market_subscriptions,
             ws_force_reconnect,
             drift_abort_cooldown: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            discovery_store: None,
-            convergence_store: None,
             recent_fills: Arc::new(std::sync::Mutex::new(HashMap::new())),
             session_start_nav: Arc::new(std::sync::Mutex::new(None)),
             warehouse_tx,
@@ -619,7 +612,8 @@ impl PaperEngine {
 
         // ── Stage: Enrich (metadata lookup happens at line ~784) ────────────
         // Enrich timer starts here; it drops when enrich_signal_metadata completes.
-        let _enrich_timer = crate::hot_metrics::StageTimer::start(crate::hot_metrics::HotStage::Enrich);
+        let _enrich_timer =
+            crate::hot_metrics::StageTimer::start(crate::hot_metrics::HotStage::Enrich);
 
         // ── Order-ID dedup: skip if we've already processed this transaction ──
         {
@@ -839,7 +833,8 @@ impl PaperEngine {
 
         // Convert scaled integers back to f64 for human-readable logic.
         // ── Stage: Sizing ─────────────────────────────────────────────────
-        let _sizing_timer = crate::hot_metrics::StageTimer::start(crate::hot_metrics::HotStage::Sizing);
+        let _sizing_timer =
+            crate::hot_metrics::StageTimer::start(crate::hot_metrics::HotStage::Sizing);
         let mut entry_price = signal.price as f64 / 1_000.0;
         let rn1_shares = signal.size as f64 / 1_000.0;
         let rn1_notional_usd = rn1_shares * entry_price;
@@ -880,6 +875,15 @@ impl PaperEngine {
                 min = %format!("${:.2}", min_notional),
                 "⏭️  Signal skipped — RN1 notional below minimum"
             );
+            if let Some(ref log) = self.activity {
+                log_push(
+                    log,
+                    EntryKind::Skip,
+                    format!(
+                        "Skipped — size too small: ${rn1_notional_usd:.2} (min ${min_notional:.2})"
+                    ),
+                );
+            }
             self.record_rejection("min_notional", &signal).await;
             return;
         }
@@ -916,70 +920,21 @@ impl PaperEngine {
                 price = %format!("{:.3}", entry_price),
                 "⏭️  Signal skipped — extreme price (no edge)"
             );
+            if let Some(ref log) = self.activity {
+                log_push(
+                    log,
+                    EntryKind::Skip,
+                    format!("Skipped — extreme price: {entry_price:.3} (range {price_lo:.2}-{price_hi:.2})"),
+                );
+            }
             self.record_rejection("extreme_price", &signal).await;
             return;
         }
 
         // ── Market category filter: block structurally negative-EV categories ──
-        // Data-driven blocklist from Apr 5-8 analysis:
-        //   tennis         → -8.09 USDC on 67 trades (-0.12/trade, WR 75%)
-        //                    Continuous-scoring dynamics break the autoclaim
-        //                    model which depends on discrete price spikes.
-        //   O/U 4.5+       → -6.25 USDC on 28 trades (-0.22/trade, WR 39%)
-        //                    High goal lines are priced efficiently — no edge.
-        //   qualifier      → -2.95 USDC pattern in low-liquidity rounds.
-        //   draw           → -3.53 USDC on 53 trades (WR 68%) — draws are
-        //                    hard to predict and tightly priced.
-        // esports is kept in the blocklist per prior team decision.
         let title_str = signal.market_title.as_deref().unwrap_or("");
         {
             let title_lower = title_str.to_lowercase();
-            let default_blocklist: &[&str] = &[
-                // esports (existing)
-                "esports",
-                "lol:",
-                "cs2:",
-                "cs:go",
-                "dota",
-                "valorant",
-                "league of legends",
-                "counter-strike",
-                "overwatch",
-                "bo3)",
-                "bo5)",
-                "lec ",
-                "lck ",
-                "lpl ",
-                "vct ",
-                // tennis (new — structural incompatibility with autoclaim)
-                "tennis",
-                "atp ",
-                "wta ",
-                "roland garros",
-                "wimbledon",
-                "us open",
-                "australian open",
-                "monte carlo masters",
-                "madrid open",
-                "rome masters",
-                "cincinnati masters",
-                "indian wells",
-                "miami open",
-                "ladies linz",
-                "mexico city:",
-                // qualifier rounds (new — low liquidity, low edge)
-                "qualification:",
-                "qualifier:",
-                // high goal-line O/U (new — efficient pricing, no edge)
-                "o/u 4.5",
-                "o/u 5.5",
-                "o/u 6.5",
-                "o/u 7.5",
-                "over/under 4.5",
-                "over/under 5.5",
-                // draw markets (new — negative EV across the board)
-                "end in a draw",
-            ];
             // Allow operator override via BLOCKED_KEYWORDS env var (comma-separated).
             let custom: Vec<String> = std::env::var("BLOCKED_KEYWORDS")
                 .ok()
@@ -990,16 +945,22 @@ impl PaperEngine {
                         .collect()
                 })
                 .unwrap_or_default();
-            let hit = default_blocklist.iter().any(|kw| title_lower.contains(kw))
-                || custom.iter().any(|kw| title_lower.contains(kw));
+            let hit = custom.iter().any(|kw| title_lower.contains(kw));
             if hit {
                 let mut p = self.portfolio.lock().await;
                 p.skipped_orders += 1;
                 drop(p);
                 warn!(
                     title = %title_str,
-                    "⏭️  Signal skipped — blocked market category"
+                    "Result: Skipped — user-blocked category"
                 );
+                if let Some(ref log) = self.activity {
+                    log_push(
+                        log,
+                        EntryKind::Skip,
+                        format!("Skipped — user-blocked: {title_str}"),
+                    );
+                }
                 self.record_rejection("blocked_category", &signal).await;
                 return;
             }
@@ -1153,7 +1114,6 @@ impl PaperEngine {
         // ── Conviction-based sizing ──────────────────────────────────────
         // Compute a dynamic multiplier using FilterConfig bonuses based on
         // RN1 bet size, market category, sport, and liquidity.
-        // Discovery boost + convergence boost added from Bullpen data when available.
         let conviction_mult = {
             let filter_cfg = crate::types::FilterConfig::from_env();
             let base = crate::exit_strategy::conviction_multiplier(
@@ -1163,19 +1123,7 @@ impl PaperEngine {
                 0.0,  // liquidity — not yet fetched at this point
                 &filter_cfg,
             );
-            let discovery_boost = if let Some(ref store) = self.discovery_store {
-                let s = store.read().await;
-                s.conviction_boost(&signal.token_id)
-            } else {
-                0.0
-            };
-            let convergence_boost = if let Some(ref store) = self.convergence_store {
-                let s = store.read().await;
-                s.convergence_boost(&signal.token_id)
-            } else {
-                0.0
-            };
-            Some(base + discovery_boost + convergence_boost)
+            Some(base)
         };
 
         // ── Sizing (brief lock, no await) ─────────────────────────────
@@ -1733,11 +1681,9 @@ impl PaperEngine {
 
         // Fix E: If book snapshot is stale for a REST signal, try a quick CLOB REST
         // midpoint fetch (timeout 80ms) to refresh the snapshot before aborting.
-        let gate_result = if gate_result == GateDecision::SkipStale && signal.signal_source != "ws" {
-            let refreshed = fetch_and_inject_midpoint(
-                &signal.token_id,
-                &self.book_store,
-            ).await;
+        let gate_result = if gate_result == GateDecision::SkipStale && signal.signal_source != "ws"
+        {
+            let refreshed = fetch_and_inject_midpoint(&signal.token_id, &self.book_store).await;
             if refreshed {
                 info!(token_id = %signal.token_id, "⚡ Stale snapshot refreshed via CLOB REST — retrying gate");
                 self.pretrade_gate.check(
@@ -2779,7 +2725,7 @@ impl PaperEngine {
         let nav = p.nav();
         let unrealised_pnl = nav - p.cash_usdc;
         let ev = EquitySnapshot {
-            timestamp_ms: crate::clickhouse_logger::now_ms(),
+            timestamp_ms: crate::postgres_logger::now_ms(),
             nav_usdc: nav,
             cash_usdc: p.cash_usdc,
             unrealised_pnl,
@@ -3237,7 +3183,7 @@ impl PaperEngine {
         if let Some(ref tx) = self.warehouse_tx {
             for ct in &new_closed_trades {
                 let ev = ClosedTradeFull {
-                    timestamp_ms: crate::clickhouse_logger::now_ms(),
+                    timestamp_ms: crate::postgres_logger::now_ms(),
                     token_id: ct.token_id.clone(),
                     market_title: ct.market_title.clone().unwrap_or_default(),
                     side: format!("{:?}", ct.side),
@@ -3376,8 +3322,8 @@ async fn fetch_and_inject_midpoint(
     token_id: &str,
     book_store: &std::sync::Arc<OrderBookStore>,
 ) -> bool {
-    let clob_host = std::env::var("CLOB_HOST")
-        .unwrap_or_else(|_| "https://clob.polymarket.com".to_string());
+    let clob_host =
+        std::env::var("CLOB_HOST").unwrap_or_else(|_| "https://clob.polymarket.com".to_string());
     let timeout_ms = std::env::var("BLINK_STALE_FALLBACK_TIMEOUT_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -3407,7 +3353,9 @@ async fn fetch_and_inject_midpoint(
         Err(_) => return false,
     };
 
-    let mid_str = body.get("mid").or_else(|| body.get("price"))
+    let mid_str = body
+        .get("mid")
+        .or_else(|| body.get("price"))
         .and_then(|v| v.as_str());
     let mid: f64 = match mid_str.and_then(|s| s.parse().ok()) {
         Some(p) => p,
@@ -3425,8 +3373,14 @@ async fn fetch_and_inject_midpoint(
 
     {
         let mut book = book_store.get_or_create(token_id);
-        book.apply_bids_delta(&[crate::types::PriceLevel { price: bid_u, size: 1_000 }]);
-        book.apply_asks_delta(&[crate::types::PriceLevel { price: ask_u, size: 1_000 }]);
+        book.apply_bids_delta(&[crate::types::PriceLevel {
+            price: bid_u,
+            size: 1_000,
+        }]);
+        book.apply_asks_delta(&[crate::types::PriceLevel {
+            price: ask_u,
+            size: 1_000,
+        }]);
     }
     true
 }

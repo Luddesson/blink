@@ -25,9 +25,7 @@ pub fn default_worker_count() -> usize {
 /// the active [`crate::execution_profile::ExecutionProfile`]
 /// (`max_concurrent_per_token`); `BLINK_SIGNAL_PER_TOKEN_QUEUE` overrides.
 pub fn per_token_queue_depth() -> usize {
-    per_token_queue_depth_for_profile(
-        crate::execution_profile::ExecutionProfile::from_env(),
-    )
+    per_token_queue_depth_for_profile(crate::execution_profile::ExecutionProfile::from_env())
 }
 
 /// Resolve per-token queue depth for a specific execution profile, honouring

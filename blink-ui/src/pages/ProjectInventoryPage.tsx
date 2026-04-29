@@ -131,7 +131,7 @@ export default function ProjectInventoryPage() {
                 a.remove()
                 URL.revokeObjectURL(url)
               } catch (err) {
-                // @ts-ignore
+                // @ts-expect-error - engine.stats is not typed correctly in the API client yet
                 alert('Failed to download project inventory: ' + (err?.message ?? String(err)))
                 console.error(err)
               }

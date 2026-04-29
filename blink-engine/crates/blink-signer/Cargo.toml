@@ -1,0 +1,24 @@
+[package]
+name = "blink-signer"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "EIP-712 signer pool for Polymarket CTF orders (k256 vs secp256k1)."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+k256 = { version = "0.13", features = ["ecdsa"] }
+secp256k1 = { version = "0.30", features = ["recovery", "std"] }
+sha3 = "0.10"
+subtle = "2"
+thiserror = "2"
+
+[dev-dependencies]
+criterion = "0.5"
+hex = "0.4"
+
+[[bench]]
+name = "sign"
+harness = false

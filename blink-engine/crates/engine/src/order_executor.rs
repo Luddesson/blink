@@ -64,13 +64,13 @@ pub struct OrderResponse {
 pub struct OrderStatus {
     pub id: String,
     pub status: String,
-    #[serde(rename = "makerAmount")]
+    #[serde(rename = "makerAmount", alias = "maker_amount")]
     pub maker_amount: Option<String>,
-    #[serde(rename = "takerAmount")]
+    #[serde(rename = "takerAmount", alias = "taker_amount")]
     pub taker_amount: Option<String>,
-    #[serde(rename = "remainingAmount")]
+    #[serde(rename = "remainingAmount", alias = "remaining_amount")]
     pub remaining_amount: Option<String>,
-    #[serde(rename = "sizeMatched")]
+    #[serde(rename = "sizeMatched", alias = "size_matched")]
     pub size_matched: Option<String>,
 }
 
@@ -105,7 +105,7 @@ pub struct OrderSearchEntry {
 pub struct OrderExecutor {
     client: Client,
     base_url: String,
-    maker_address: String,
+    auth_address: String,
     api_key: String,
     /// Base64-encoded secret; decoded to raw bytes before HMAC use.
     api_secret: String,
@@ -172,15 +172,21 @@ impl OrderExecutor {
                      See TODO in order_executor.rs for the wiring gap."
                 );
             } else {
-                tracing::info!("io_uring feature enabled; set BLINK_IO_URING_SUBMIT=1 to route \
-                                submits through io_uring (not yet wired — see TODO)");
+                tracing::info!(
+                    "io_uring feature enabled; set BLINK_IO_URING_SUBMIT=1 to route \
+                                submits through io_uring (not yet wired — see TODO)"
+                );
             }
         }
 
         Ok(Self {
             client,
-            base_url: "https://clob.polymarket.com".to_string(),
-            maker_address: config.funder_address.clone(),
+            base_url: config.clob_host.clone(),
+            auth_address: if config.signer_address.is_empty() {
+                config.funder_address.clone()
+            } else {
+                config.signer_address.clone()
+            },
             api_key: config.api_key.clone(),
             api_secret: config.api_secret.clone(),
             passphrase: config.api_passphrase.clone(),
@@ -207,7 +213,7 @@ impl OrderExecutor {
         order: &SignedOrder,
         time_in_force: TimeInForce,
     ) -> Result<SubmitOutcome> {
-        let body = build_order_body(order, &self.maker_address, time_in_force);
+        let body = build_order_body(order, &self.api_key, time_in_force)?;
         let body_json = serde_json::to_string(&body).context("failed to serialise order body")?;
 
         if self.dry_run {
@@ -264,7 +270,7 @@ impl OrderExecutor {
                 &self.api_key,
                 &self.api_secret,
                 &self.passphrase,
-                &self.maker_address,
+                &self.auth_address,
                 "POST",
                 "/order",
                 &body_json,
@@ -393,7 +399,7 @@ impl OrderExecutor {
             &self.api_key,
             &self.api_secret,
             &self.passphrase,
-            &self.maker_address,
+            &self.auth_address,
             "DELETE",
             &path,
             "",
@@ -432,7 +438,7 @@ impl OrderExecutor {
             &self.api_key,
             &self.api_secret,
             &self.passphrase,
-            &self.maker_address,
+            &self.auth_address,
             "DELETE",
             &path,
             "",
@@ -460,66 +466,61 @@ impl OrderExecutor {
 
     // ─── Order status ────────────────────────────────────────────────────────
 
-    /// Sends `POST /heartbeat` to keep the L2 session alive.
+    /// Sends a ping/time request to verify the CLOB connection and auth.
     ///
-    /// Polymarket cancels open orders when the session heartbeat lapses.
-    /// Call this every 15 seconds in live mode (see [`crate::heartbeat`]).
+    /// In V2, we use `GET /time` as a reliable heartbeat/ping mechanism.
     pub async fn send_heartbeat(&self) -> Result<()> {
         if self.dry_run {
-            info!("DRY-RUN: would POST /heartbeat");
+            info!("DRY-RUN: would GET /time (heartbeat)");
             return Ok(());
         }
 
-        let path = "/heartbeat";
+        let path = "/time";
         let url = format!("{}{}", self.base_url, path);
-        let body = "{}";
 
         let headers = build_auth_headers(
             &self.api_key,
             &self.api_secret,
             &self.passphrase,
-            &self.maker_address,
-            "POST",
+            &self.auth_address,
+            "GET",
             path,
-            body,
+            "",
         )?;
 
-        let mut req = self
-            .client
-            .post(&url)
-            .body(body)
-            .header("Content-Type", "application/json");
+        let mut req = self.client.get(&url);
         for (k, v) in headers {
             req = req.header(k, v);
         }
 
-        let resp = req.send().await.context("POST /heartbeat network error")?;
+        let resp = req.send().await.context("GET /time network error")?;
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("POST /heartbeat returned {status}: {text}");
+            anyhow::bail!("GET /time returned {status}: {text}");
         }
+
         Ok(())
     }
 
-    /// Cancels **all** open orders for this account.  `DELETE /orders`
+    /// Cancels **all** open orders for this account.  `DELETE /cancel-all`
     ///
     /// Used by the emergency-stop path to immediately clear all exchange
     /// exposure before the operator takes over.
     pub async fn cancel_all_orders(&self) -> Result<()> {
         if self.dry_run {
-            info!("DRY-RUN: would DELETE /orders (cancel all open orders)");
+            info!("DRY-RUN: would DELETE /cancel-all (cancel all open orders)");
             return Ok(());
         }
 
-        let path = "/orders";
+        let path = "/cancel-all";
         let url = format!("{}{}", self.base_url, path);
 
         let headers = build_auth_headers(
             &self.api_key,
             &self.api_secret,
             &self.passphrase,
-            &self.maker_address,
+            &self.auth_address,
             "DELETE",
             path,
             "",
@@ -534,19 +535,19 @@ impl OrderExecutor {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("DELETE /orders returned {status}: {text}");
+            anyhow::bail!("DELETE /cancel-all returned {status}: {text}");
         }
 
-        info!("✅ All open orders cancelled via DELETE /orders");
+        info!("✅ All open orders cancelled via DELETE /cancel-all");
         Ok(())
     }
 
     /// Validates that L2 HMAC credentials are accepted by the exchange.
     ///
-    /// Probes `GET /order/auth-probe` with HMAC headers.  The exchange will
-    /// return 404 (order not found) for valid credentials, or 401/403 for
-    /// invalid ones.  This avoids relying on a specific list-endpoint that
-    /// may require query parameters.
+    /// Probes `GET /data/orders` with HMAC headers. This is a
+    /// non-mutating L2 endpoint: success proves the API key, passphrase,
+    /// secret, signer address, timestamp, and HMAC path format all work before
+    /// live order submission is allowed.
     ///
     /// Returns `Ok(())` on success, `Err(…)` with a human-readable explanation
     /// on auth failure so operators know exactly what to fix before going live.
@@ -556,13 +557,13 @@ impl OrderExecutor {
             return Ok(());
         }
 
-        let path = "/order/auth-probe";
+        let path = "/data/orders";
         let url = format!("{}{}", self.base_url, path);
         let headers = build_auth_headers(
             &self.api_key,
             &self.api_secret,
             &self.passphrase,
-            &self.maker_address,
+            &self.auth_address,
             "GET",
             path,
             "",
@@ -582,21 +583,15 @@ impl OrderExecutor {
         let body = resp.text().await.unwrap_or_default();
 
         match status.as_u16() {
-            // 404 = auth accepted, order simply not found — credentials valid.
-            404 => {
-                info!("✅ L2 HMAC credentials validated (probe returned 404 as expected)");
-                Ok(())
-            }
-            // 200 / 2xx = unexpected but auth clearly worked.
             200..=299 => {
-                info!("✅ L2 HMAC credentials validated (probe returned {status})");
+                info!("✅ L2 HMAC credentials validated via GET /data/orders");
                 Ok(())
             }
             // 401 / 403 = auth rejected.
             401 | 403 => {
                 anyhow::bail!(
                     "Credential validation failed (HTTP {status}): {body}\n\
-                     Check POLYMARKET_API_KEY, POLYMARKET_API_SECRET, POLYMARKET_API_PASSPHRASE, and POLYMARKET_FUNDER_ADDRESS."
+                     Check POLYMARKET_API_KEY, POLYMARKET_API_SECRET, POLYMARKET_API_PASSPHRASE, SIGNER_PRIVATE_KEY, and POLYMARKET_FUNDER_ADDRESS."
                 )
             }
             other => {
@@ -651,9 +646,9 @@ impl OrderExecutor {
 
     /// Searches for an order by `client_order_id`.
     ///
-    /// **Primary path**: `GET /orders?client_order_id=<id>` — Polymarket CLOB
-    /// supports this query parameter (verify against live API; see ASSUMPTION on
-    /// `OrderSearchEntry`).
+    /// **Primary path**: `GET /data/orders` — returns open authenticated-user
+    /// orders. We scan client-side because the documented query parameters are
+    /// order hash, market, asset_id, and pagination cursor.
     ///
     /// **Fallback path**: `GET /orders?status=live&limit=200` then scan results
     /// client-side when the primary call returns an empty list.
@@ -663,18 +658,18 @@ impl OrderExecutor {
         client_id: &str,
     ) -> Result<Option<OrderSearchEntry>> {
         if self.dry_run {
-            info!("DRY-RUN: would GET /orders?client_order_id={client_id}");
+            info!("DRY-RUN: would GET /data/orders and scan for client_order_id={client_id}");
             return Ok(None);
         }
 
-        // Primary: query by client_order_id directly.
-        let path = format!("/orders?client_order_id={client_id}");
+        // Primary: scan open orders returned by the documented endpoint.
+        let path = "/data/orders".to_string();
         let url = format!("{}{}", self.base_url, path);
         let headers = build_auth_headers(
             &self.api_key,
             &self.api_secret,
             &self.passphrase,
-            &self.maker_address,
+            &self.auth_address,
             "GET",
             &path,
             "",
@@ -686,14 +681,12 @@ impl OrderExecutor {
         let resp = req
             .send()
             .await
-            .context("GET /orders?client_order_id network error")?;
+            .context("GET /data/orders network error")?;
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
 
         if !status.is_success() {
-            anyhow::bail!(
-                "GET /orders?client_order_id={client_id} returned {status}: {text}"
-            );
+            anyhow::bail!("GET /data/orders returned {status}: {text}");
         }
 
         let entries = parse_order_list(&text);
@@ -703,35 +696,13 @@ impl OrderExecutor {
         {
             return Ok(Some(found));
         }
-
-        // Fallback: scan recent live orders client-side.
-        let fb_path = "/orders?status=live&limit=200";
-        let fb_url = format!("{}{}", self.base_url, fb_path);
-        let fb_headers = build_auth_headers(
-            &self.api_key,
-            &self.api_secret,
-            &self.passphrase,
-            &self.maker_address,
-            "GET",
-            fb_path,
-            "",
-        )?;
-        let mut fb_req = self.client.get(&fb_url);
-        for (k, v) in fb_headers {
-            fb_req = fb_req.header(k, v);
-        }
-        let fb_resp = fb_req
-            .send()
-            .await
-            .context("GET /orders?status=live network error")?;
-        let fb_text = fb_resp.text().await.unwrap_or_default();
-
-        Ok(parse_order_list(&fb_text)
-            .into_iter()
-            .find(|e| e.client_order_id.as_deref() == Some(client_id)))
+        Ok(None)
     }
 
-    /// Fetches the current status of an order.  `GET /order/{order_id}`
+    /// Fetches the current status of an order.  Primary path is
+    /// `GET /order/{order_id}`. FAK/taker orders can disappear from the order
+    /// endpoint after matching, so a 404 falls back to authenticated
+    /// `GET /trades` and scans for `taker_order_id == order_id`.
     #[instrument(skip(self), fields(order_id))]
     pub async fn get_order_status(&self, order_id: &str) -> Result<OrderStatus> {
         let path = format!("/order/{order_id}");
@@ -741,7 +712,7 @@ impl OrderExecutor {
             &self.api_key,
             &self.api_secret,
             &self.passphrase,
-            &self.maker_address,
+            &self.auth_address,
             "GET",
             &path,
             "",
@@ -756,11 +727,87 @@ impl OrderExecutor {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
 
-        if !status.is_success() {
-            anyhow::bail!("GET /order/{order_id} returned {status}: {text}");
+        if status.is_success() {
+            return serde_json::from_str(&text).context("failed to parse GET /order response");
         }
 
-        serde_json::from_str(&text).context("failed to parse GET /order response")
+        if status.as_u16() == 404 {
+            if let Some(trade_status) = self.get_trade_status_for_order(order_id).await? {
+                return Ok(trade_status);
+            }
+        }
+
+        anyhow::bail!("GET /order/{order_id} returned {status}: {text}")
+    }
+
+    async fn get_trade_status_for_order(&self, order_id: &str) -> Result<Option<OrderStatus>> {
+        #[derive(Debug, Deserialize)]
+        struct TradeList {
+            #[serde(default)]
+            data: Vec<TradeEntry>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct TradeEntry {
+            #[serde(default)]
+            taker_order_id: String,
+            #[serde(default)]
+            status: String,
+            #[serde(default)]
+            size: String,
+        }
+
+        let path = "/trades";
+        let url = format!("{}{}", self.base_url, path);
+        let headers = build_auth_headers(
+            &self.api_key,
+            &self.api_secret,
+            &self.passphrase,
+            &self.auth_address,
+            "GET",
+            path,
+            "",
+        )?;
+
+        let mut req = self.client.get(&url);
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+
+        let resp = req.send().await.context("GET /trades network error")?;
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            anyhow::bail!("GET /trades returned {status}: {text}");
+        }
+
+        let trades: TradeList = serde_json::from_str(&text).unwrap_or(TradeList { data: vec![] });
+        let Some(trade) = trades
+            .data
+            .into_iter()
+            .find(|t| t.taker_order_id.eq_ignore_ascii_case(order_id))
+        else {
+            return Ok(None);
+        };
+
+        let normalized_status = match trade.status.to_ascii_uppercase().as_str() {
+            "TRADE_STATUS_CONFIRMED" | "CONFIRMED" => "filled",
+            "TRADE_STATUS_FAILED" | "FAILED" => "rejected",
+            _ => "pending",
+        };
+
+        Ok(Some(OrderStatus {
+            id: order_id.to_string(),
+            status: normalized_status.to_string(),
+            maker_amount: None,
+            taker_amount: None,
+            remaining_amount: None,
+            size_matched: if trade.size.is_empty() {
+                None
+            } else {
+                Some(trade.size)
+            },
+        }))
     }
 }
 
@@ -791,7 +838,7 @@ fn build_auth_headers(
     api_key: &str,
     api_secret: &str,
     passphrase: &str,
-    maker_address: &str,
+    auth_address: &str,
     method: &str,
     path: &str,
     body: &str,
@@ -804,23 +851,33 @@ fn build_auth_headers(
 
     let message = format!("{timestamp}{method}{path}{body}");
 
+    // Robust Base64 decoding: clean whitespace and try both Standard and URL-safe engines.
+    let clean_secret = api_secret
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>();
+
     let secret_bytes = B64
-        .decode(api_secret)
-        .context("POLYMARKET_API_SECRET is not valid base64")?;
+        .decode(&clean_secret)
+        .or_else(|_| {
+            use base64::engine::general_purpose::URL_SAFE;
+            URL_SAFE.decode(&clean_secret)
+        })
+        .context("POLYMARKET_API_SECRET is not valid base64 (even after cleaning whitespace)")?;
 
     let mut mac = HmacSha256::new_from_slice(&secret_bytes).context("HMAC init failed")?;
     mac.update(message.as_bytes());
     let mac_bytes = mac.finalize().into_bytes();
 
-    let signature = B64.encode(mac_bytes);
+    let signature = B64.encode(mac_bytes).replace('+', "-").replace('/', "_");
 
     Ok(vec![
-        ("POLY-ADDRESS".into(), maker_address.to_string()),
-        ("POLY-SIGNATURE".into(), signature),
-        ("POLY-TIMESTAMP".into(), timestamp),
-        ("POLY-NONCE".into(), "0".to_string()),
-        ("POLY-API-KEY".into(), api_key.to_string()),
-        ("POLY-PASSPHRASE".into(), passphrase.to_string()),
+        ("POLY_ADDRESS".into(), auth_address.to_string()),
+        ("POLY_SIGNATURE".into(), signature),
+        ("POLY_TIMESTAMP".into(), timestamp),
+        ("POLY_NONCE".into(), "0".to_string()),
+        ("POLY_API_KEY".into(), api_key.to_string()),
+        ("POLY_PASSPHRASE".into(), passphrase.to_string()),
     ])
 }
 
@@ -834,13 +891,17 @@ struct OrderBody {
     owner: String,
     #[serde(rename = "orderType")]
     order_type: String,
-    /// `true` = post-only (maker).  **MUST** be `true` to avoid taker fees.
-    maker: bool,
+    /// `true` = post-only. Rejected if it would cross the book.
+    #[serde(rename = "postOnly")]
+    post_only: bool,
+    /// V2 submit option; keep false unless deliberately using delayed execution.
+    #[serde(rename = "deferExec")]
+    defer_exec: bool,
 }
 
 #[derive(Debug, Serialize)]
 struct OrderFields {
-    salt: String,
+    salt: u64,
     maker: String,
     signer: String,
     taker: String,
@@ -851,19 +912,28 @@ struct OrderFields {
     #[serde(rename = "takerAmount")]
     taker_amount: String,
     expiration: String,
-    nonce: String,
-    #[serde(rename = "feeRateBps")]
-    fee_rate_bps: String,
-    side: u8,
+    side: String,
     #[serde(rename = "signatureType")]
     signature_type: u8,
     signature: String,
+    timestamp: String,
+    metadata: String,
+    builder: String,
 }
 
-fn build_order_body(order: &SignedOrder, owner: &str, time_in_force: TimeInForce) -> OrderBody {
-    OrderBody {
+fn build_order_body(
+    order: &SignedOrder,
+    owner: &str,
+    time_in_force: TimeInForce,
+) -> Result<OrderBody> {
+    let salt = order
+        .salt
+        .parse::<u64>()
+        .with_context(|| format!("signed order salt is not a u64 JSON number: {}", order.salt))?;
+
+    Ok(OrderBody {
         order: OrderFields {
-            salt: order.salt.clone(),
+            salt,
             maker: order.maker.clone(),
             signer: order.signer.clone(),
             taker: order.taker.clone(),
@@ -871,16 +941,18 @@ fn build_order_body(order: &SignedOrder, owner: &str, time_in_force: TimeInForce
             maker_amount: order.maker_amount.to_string(),
             taker_amount: order.taker_amount.to_string(),
             expiration: order.expiration.to_string(),
-            nonce: order.nonce.to_string(),
-            fee_rate_bps: order.fee_rate_bps.to_string(),
-            side: order.side,
+            side: if order.side == 0 { "BUY" } else { "SELL" }.to_string(),
             signature_type: order.signature_type,
             signature: order.signature.clone(),
+            timestamp: order.timestamp.to_string(),
+            metadata: order.metadata.clone(),
+            builder: order.builder.clone(),
         },
         owner: owner.to_string(),
         order_type: time_in_force.to_string(),
-        maker: true, // post-only — CRITICAL: prevents paying taker fees
-    }
+        post_only: matches!(time_in_force, TimeInForce::Gtc),
+        defer_exec: false,
+    })
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -905,6 +977,11 @@ mod tests {
             side: 0,
             signature_type: 0,
             signature: "0xdeadbeef".to_string(),
+            timestamp: 123456789,
+            metadata: "0x0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+            builder: "0x0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
             client_order_id: None,
         }
     }
@@ -912,18 +989,29 @@ mod tests {
     #[test]
     fn order_body_serialises_correctly() {
         let order = dummy_order();
-        let body = build_order_body(&order, "0xOwner", crate::types::TimeInForce::Gtc);
+        let body = build_order_body(&order, "0xOwner", crate::types::TimeInForce::Gtc).unwrap();
         let json = serde_json::to_value(&body).unwrap();
 
-        assert_eq!(json["maker"], true, "post-only flag must be true");
+        assert_eq!(json["postOnly"], true, "post-only flag must be true");
+        assert_eq!(json["deferExec"], false);
         assert_eq!(json["orderType"], "GTC");
+        assert_eq!(json["order"]["salt"], 12345);
         assert_eq!(json["order"]["makerAmount"], "10000000");
         assert_eq!(json["order"]["takerAmount"], "15384615");
         assert_eq!(json["order"]["expiration"], "0");
-        assert_eq!(json["order"]["nonce"], "0");
-        assert_eq!(json["order"]["feeRateBps"], "0");
-        assert_eq!(json["order"]["side"], 0);
+        assert!(json["order"].get("nonce").is_none());
+        assert!(json["order"].get("feeRateBps").is_none());
+        assert_eq!(
+            json["order"]["taker"],
+            "0x0000000000000000000000000000000000000000"
+        );
+        assert_eq!(json["order"]["side"], "BUY");
         assert_eq!(json["order"]["signatureType"], 0);
+        assert_eq!(json["order"]["timestamp"], "123456789");
+        assert_eq!(
+            json["order"]["metadata"],
+            "0x0000000000000000000000000000000000000000000000000000000000000000"
+        );
     }
 
     #[test]
@@ -936,27 +1024,27 @@ mod tests {
                 .unwrap();
 
         let keys: Vec<&str> = headers.iter().map(|(k, _)| k.as_str()).collect();
-        assert!(keys.contains(&"POLY-ADDRESS"));
-        assert!(keys.contains(&"POLY-SIGNATURE"));
-        assert!(keys.contains(&"POLY-TIMESTAMP"));
-        assert!(keys.contains(&"POLY-NONCE"));
-        assert!(keys.contains(&"POLY-API-KEY"));
-        assert!(keys.contains(&"POLY-PASSPHRASE"));
+        assert!(keys.contains(&"POLY_ADDRESS"));
+        assert!(keys.contains(&"POLY_SIGNATURE"));
+        assert!(keys.contains(&"POLY_TIMESTAMP"));
+        assert!(keys.contains(&"POLY_NONCE"));
+        assert!(keys.contains(&"POLY_API_KEY"));
+        assert!(keys.contains(&"POLY_PASSPHRASE"));
     }
 
     #[test]
     fn order_body_fok_sets_order_type() {
         let order = dummy_order();
-        let body = build_order_body(&order, "0xOwner", crate::types::TimeInForce::Fok);
+        let body = build_order_body(&order, "0xOwner", crate::types::TimeInForce::Fok).unwrap();
         let json = serde_json::to_value(&body).unwrap();
         assert_eq!(json["orderType"], "FOK");
-        assert_eq!(json["maker"], true, "post-only must always be true");
+        assert_eq!(json["postOnly"], false, "post-only is invalid for FOK");
     }
 
     #[test]
     fn order_body_fak_sets_order_type() {
         let order = dummy_order();
-        let body = build_order_body(&order, "0xOwner", crate::types::TimeInForce::Fak);
+        let body = build_order_body(&order, "0xOwner", crate::types::TimeInForce::Fak).unwrap();
         let json = serde_json::to_value(&body).unwrap();
         assert_eq!(json["orderType"], "FAK");
     }

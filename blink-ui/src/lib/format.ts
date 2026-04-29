@@ -61,6 +61,7 @@ export function fmtNeonTime(input: string | number | Date): string {
     const hh = d.toLocaleTimeString('sv-SE', {
       hour: '2-digit',
       minute: '2-digit',
+      second: '2-digit',
       hour12: false,
       timeZone: 'Europe/Stockholm',
     })

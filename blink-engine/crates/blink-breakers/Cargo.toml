@@ -1,0 +1,23 @@
+[package]
+name = "blink-breakers"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Circuit breakers, kill switch, and SLO alert helpers for the Blink HFT hot path."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+arc-swap    = "1"
+blink-types = { path = "../blink-types", default-features = false }
+
+
+
+[dev-dependencies]
+criterion   = "0.5"
+stats_alloc = "0.1"
+
+[[bench]]
+name    = "admit"
+harness = false

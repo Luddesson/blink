@@ -1,0 +1,37 @@
+[package]
+name        = "blink-submit"
+version     = "0.1.0"
+edition     = "2021"
+publish     = false
+description = "Polymarket CLOB submit hot-path: EIP-712 encode → sign → H2 POST → verdict."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+tokio            = { workspace = true }
+bytes            = "1"
+blink-types      = { path = "../blink-types" }
+blink-timestamps = { path = "../blink-timestamps", features = ["fallback-instant"] }
+blink-signer     = { path = "../blink-signer" }
+blink-h2         = { path = "../blink-h2" }
+serde            = { workspace = true }
+serde_json       = { workspace = true }
+thiserror        = { workspace = true }
+log              = "0.4"
+hmac             = { workspace = true }
+sha2             = { workspace = true }
+base64           = { workspace = true }
+sha3             = { workspace = true }
+dashmap          = { workspace = true }
+
+[dev-dependencies]
+hex   = "0.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+criterion = "0.5"
+rand  = { workspace = true }
+blink-types = { path = "../blink-types" }
+
+[[bench]]
+name = "template"
+harness = false

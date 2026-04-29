@@ -34,10 +34,7 @@ impl OrderState {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            OrderState::Filled
-                | OrderState::Cancelled
-                | OrderState::Rejected
-                | OrderState::Stale
+            OrderState::Filled | OrderState::Cancelled | OrderState::Rejected | OrderState::Stale
         )
     }
 }
@@ -138,9 +135,8 @@ impl PendingOrder {
         let total = self.filled_size_u64 + delta;
         // Volume-weighted average price (integer arithmetic).
         if total > 0 {
-            self.avg_fill_price_u64 = (self.avg_fill_price_u64 * self.filled_size_u64
-                + fill_price_u64 * delta)
-                / total;
+            self.avg_fill_price_u64 =
+                (self.avg_fill_price_u64 * self.filled_size_u64 + fill_price_u64 * delta) / total;
         }
         self.filled_size_u64 = total;
         let size_u64 = (self.size_usdc * 1_000.0) as u64;

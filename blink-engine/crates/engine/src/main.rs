@@ -15,7 +15,7 @@ use std::sync::{
 };
 use std::time::Duration; // .catch_unwind() on futures
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use tracing::info;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
@@ -27,10 +27,6 @@ use engine::alpha_signal::AlphaSignal;
 use engine::backtest_engine::{load_ticks_csv, BacktestConfig, BacktestEngine};
 use engine::blink_twin::TwinSnapshot;
 use engine::buffer_pool::BufferPool;
-use engine::bullpen_bridge::BullpenBridge;
-use engine::bullpen_discovery::DiscoveryStore;
-use engine::bullpen_smart_money::ConvergenceStore;
-use engine::clickhouse_logger::{ClickHouseLogger, WarehouseEvent};
 use engine::clob_client::ClobClient;
 use engine::config::Config;
 use engine::execution_provider::create_provider_from_env;
@@ -45,9 +41,12 @@ use engine::order_executor::OrderResponse;
 use engine::order_signer::OrderParams;
 use engine::paper_engine::PaperEngine;
 use engine::paper_portfolio::STARTING_BALANCE_USDC;
+use engine::postgres_logger::{PostgresLogger, WarehouseEvent};
 use engine::r2_uploader::start_r2_uploader;
 use engine::risk_manager::RiskConfig;
-use engine::rn1_poller::{prefetch_rn1_active_markets, run_rn1_poller, Rn1PollDiagnostics, Rn1PollDiagnosticsHandle};
+use engine::rn1_poller::{
+    prefetch_rn1_active_markets, run_rn1_poller, Rn1PollDiagnostics, Rn1PollDiagnosticsHandle,
+};
 use engine::sniffer::Sniffer;
 use engine::strategy::{StrategyController, StrategyControllerConfig};
 use engine::tick_recorder::{TickRecord, TickRecorder};
@@ -61,6 +60,15 @@ use engine::ws_client::WsHealthMetrics;
 use std::collections::HashMap;
 
 use bpf_probes::BpfTelemetry;
+
+const POLYGON_CHAIN_ID: u64 = 137;
+const POLYMARKET_PUSD_PROXY: &str = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB";
+const POLYMARKET_CTF_EXCHANGE_V2: &str = "0xE111180000d2663C0091e4f400237545B87B996B";
+const DEFAULT_POLYGON_RPCS: &[&str] = &[
+    "https://polygon-bor-rpc.publicnode.com",
+    "https://polygon.drpc.org",
+    "https://1rpc.io/matic",
+];
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
@@ -304,12 +312,9 @@ async fn main() -> Result<()> {
             None
         };
 
-    // ── ClickHouse tick recorder (optional — activated by CLICKHOUSE_URL) ─
+    // ── ClickHouse tick recorder (optional — activated by POSTGRES_URL) ─
     let tick_tx: Option<crossbeam_channel::Sender<TickRecord>> =
-        match std::env::var("CLICKHOUSE_URL")
-            .ok()
-            .filter(|s| !s.is_empty())
-        {
+        match std::env::var("POSTGRES_URL").ok().filter(|s| !s.is_empty()) {
             Some(url) => {
                 let (tx, rx) = crossbeam_channel::bounded::<TickRecord>(10_000);
                 let recorder = TickRecorder::new(&url);
@@ -329,24 +334,21 @@ async fn main() -> Result<()> {
                     }
                     recorder.run(rx).await;
                 });
-                info!("ClickHouse tick recording enabled");
+                info!("Postgres tick recording enabled");
                 Some(tx)
             }
             None => {
-                info!("CLICKHOUSE_URL not set — tick recording disabled");
+                info!("POSTGRES_URL not set — tick recording disabled");
                 None
             }
         };
 
-    // ── ClickHouse data warehouse (optional — activated by CLICKHOUSE_URL) ─
+    // ── Postgres data warehouse (optional — activated by POSTGRES_URL) ─
     let warehouse_tx: Option<crossbeam_channel::Sender<WarehouseEvent>> =
-        match std::env::var("CLICKHOUSE_URL")
-            .ok()
-            .filter(|s| !s.is_empty())
-        {
+        match std::env::var("POSTGRES_URL").ok().filter(|s| !s.is_empty()) {
             Some(ref url) => {
                 let (tx, rx) = crossbeam_channel::bounded::<WarehouseEvent>(10_000);
-                let logger = ClickHouseLogger::new(url);
+                let logger = PostgresLogger::new(url);
                 let act = activity.clone();
                 let u = url.clone();
                 tokio::spawn(async move {
@@ -364,14 +366,33 @@ async fn main() -> Result<()> {
                     }
                     logger.run(rx).await;
                 });
-                info!("ClickHouse data warehouse enabled");
+                info!("Postgres data warehouse enabled");
                 Some(tx)
             }
             None => {
-                info!("CLICKHOUSE_URL not set — data warehouse disabled");
+                info!("POSTGRES_URL not set — data warehouse disabled");
                 None
             }
         };
+
+    // ── Postgres command listener (optional — activated by POSTGRES_URL) ───
+    if let Ok(url) = std::env::var("POSTGRES_URL")
+        .map(|s| s)
+        .map(|s| if s.is_empty() { Err("empty") } else { Ok(s) })
+        .unwrap_or(Err("missing"))
+    {
+        let act = activity.clone();
+        tokio::spawn(async move {
+            match engine::command_listener::run_command_listener(url).await {
+                Ok(()) => {}
+                Err(e) => log_push(
+                    &act,
+                    EntryKind::Warn,
+                    format!("Postgres command listener error: {e}"),
+                ),
+            }
+        });
+    }
 
     // ── Cloudflare R2 uploader (optional — activated by R2_ACCESS_KEY_ID) ───
     start_r2_uploader();
@@ -383,7 +404,7 @@ async fn main() -> Result<()> {
     };
 
     // ── Channels ──────────────────────────────────────────────────────────
-    let (signal_tx, signal_rx) = tokio::sync::mpsc::channel::<RN1Signal>(1024);
+    let (signal_tx, signal_rx) = crossbeam_channel::unbounded::<RN1Signal>();
 
     // Shared ingress dedup across all signal producers (bullpen, paper, live).
     let shared_dedup = Arc::new(engine::ingress_dedup::IngressDedup::new());
@@ -473,15 +494,18 @@ async fn main() -> Result<()> {
     // Primary wallet from RN1_WALLET; additional wallets from TRACK_WALLETS=addr:weight,...
     let rn1_task = {
         // Build the list of wallets to track: primary first, then any extras.
-        let primary_wallet = config.rn1_wallet.clone();
-        let mut wallet_list: Vec<(String, f64)> = vec![(primary_wallet, 1.0)];
+        let primary_wallet = config.rn1_wallet.clone().to_lowercase();
+        let mut wallet_list: Vec<(String, f64)> = vec![(primary_wallet.clone(), 1.0)];
+        let mut seen_wallets = std::collections::HashSet::new();
+        seen_wallets.insert(primary_wallet);
+
         if let Ok(extra) = std::env::var("TRACK_WALLETS") {
             for entry in extra.split(',') {
                 let entry = entry.trim();
                 if entry.is_empty() {
                     continue;
                 }
-                let (addr, weight) = if let Some(pos) = entry.rfind(':') {
+                let (addr_raw, weight) = if let Some(pos) = entry.rfind(':') {
                     let w = entry[pos + 1..]
                         .parse::<f64>()
                         .unwrap_or(0.8)
@@ -490,7 +514,9 @@ async fn main() -> Result<()> {
                 } else {
                     (entry.to_string(), 0.8)
                 };
-                if !addr.is_empty() {
+                let addr = addr_raw.trim().to_lowercase();
+                if !addr.is_empty() && !seen_wallets.contains(&addr) {
+                    seen_wallets.insert(addr.clone());
                     wallet_list.push((addr, weight));
                 }
             }
@@ -499,11 +525,11 @@ async fn main() -> Result<()> {
             tracing::info!(
                 n = wallet_list.len(),
                 wallets = ?wallet_list.iter().map(|(w, _)| &w[..w.len().min(10)]).collect::<Vec<_>>(),
-                "1A: Multi-wallet tracking enabled"
+                "1A: Multi-wallet tracking enabled (deduplicated)"
             );
         }
         // Spawn one poller task per wallet; share a single diagnostics handle for the primary.
-        let mut tasks: Vec<_> = wallet_list
+        let tasks: Vec<_> = wallet_list
             .into_iter()
             .map(|(wallet, weight)| {
                 let cfg = Arc::clone(&config);
@@ -516,140 +542,13 @@ async fn main() -> Result<()> {
             })
             .collect();
 
-        // Staggered shadow poller: spawn a second poller for the primary wallet at
-        // half the poll-interval offset. Halves the effective detection window without
-        // increasing API load per unit time. Ingress dedup discards any duplicates.
-        // Active by default when poll interval ≤ 400ms; override with BLINK_STAGGER_POLL.
-        let poll_ms = std::env::var("RN1_POLL_INTERVAL_MS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(400);
-        let stagger_enabled = std::env::var("BLINK_STAGGER_POLL")
-            .map(|v| matches!(v.as_str(), "1" | "true"))
-            .unwrap_or(poll_ms <= 400);
-        if stagger_enabled {
-            let stagger_offset_ms = (poll_ms / 2).max(25);
-            let cfg2 = Arc::clone(&config);
-            let tx2 = signal_tx.clone();
-            let act2 = Some(activity.clone());
-            let diag2 = Arc::clone(&rn1_diagnostics);
-            let primary_wallet2 = config.rn1_wallet.clone();
-            let stagger_task = tokio::spawn(async move {
-                // Delay by half the poll interval so the two pollers are out-of-phase.
-                tokio::time::sleep(std::time::Duration::from_millis(stagger_offset_ms)).await;
-                tracing::info!(
-                    offset_ms = stagger_offset_ms,
-                    "RN1 stagger-poller started (phase-shifted shadow for primary wallet)"
-                );
-                run_rn1_poller(cfg2, primary_wallet2, 1.0, tx2, act2, diag2).await;
-            });
-            tasks.push(stagger_task);
-            tracing::info!(
-                stagger_offset_ms,
-                "RN1 stagger-poll enabled — effective detection resolution halved"
-            );
-        }
+        // Staggered shadow poller: disabled to prevent duplicates in HFT mode.
         // Return the first task handle for join tracking (primary wallet).
         tasks.into_iter().next()
     };
     let rn1_task = rn1_task.unwrap_or_else(|| tokio::spawn(async {}));
 
     // ── Optional Agent JSON-RPC server (for orchestrator/agents) ─────────
-
-    // ── Bullpen CLI bridge (BULLPEN_ENABLED=true to activate) ────────────
-    let bullpen_config = engine::bullpen_bridge::BullpenConfig::from_env();
-    let bullpen: Option<Arc<engine::bullpen_bridge::BullpenBridge>> = if bullpen_config.enabled {
-        let bridge = Arc::new(engine::bullpen_bridge::BullpenBridge::new(bullpen_config));
-        let bp = Arc::clone(&bridge);
-        tokio::spawn(async move {
-            match bp.health_check().await {
-                Ok(()) => {}
-                Err(e) => tracing::warn!("Bullpen CLI not available: {e} — enrichment disabled"),
-            }
-        });
-        log_push(
-            &activity,
-            EntryKind::Engine,
-            "Bullpen CLI bridge enabled".to_string(),
-        );
-        info!("Bullpen CLI bridge enabled");
-        Some(bridge)
-    } else {
-        None
-    };
-    // ── Bullpen Discovery Scheduler (cold-path enrichment) ──────────────
-    let discovery_store = Arc::new(tokio::sync::RwLock::new(
-        engine::bullpen_discovery::DiscoveryStore::new(),
-    ));
-    if let Some(ref bp) = bullpen {
-        let disc_config = engine::bullpen_discovery::DiscoverySchedulerConfig::from_env();
-        if disc_config.enabled {
-            let scheduler = engine::bullpen_discovery::DiscoveryScheduler::new(
-                Arc::clone(bp),
-                Arc::clone(&discovery_store),
-                disc_config,
-            );
-            let disc_shutdown = Arc::clone(&shutdown);
-            tokio::spawn(async move { scheduler.run(disc_shutdown).await });
-            log_push(
-                &activity,
-                EntryKind::Engine,
-                "Bullpen discovery scheduler started".to_string(),
-            );
-            info!("Bullpen discovery scheduler started");
-        }
-    }
-    let _bullpen = bullpen; // Available for future phase wiring
-
-    // ── Bullpen Smart Money Monitor ─────────────────────────────────────
-    let convergence_store = {
-        let sm_config = engine::bullpen_smart_money::SmartMoneyConfig::from_env();
-        if sm_config.enabled {
-            if let Some(ref bp) = _bullpen {
-                let monitor =
-                    engine::bullpen_smart_money::SmartMoneyMonitor::new(Arc::clone(bp), sm_config);
-                let store = monitor.convergence_store();
-                let sm_shutdown = Arc::clone(&shutdown);
-                tokio::spawn(async move { monitor.run(sm_shutdown).await });
-                log_push(
-                    &activity,
-                    EntryKind::Engine,
-                    "Bullpen smart money monitor started".to_string(),
-                );
-                info!("Bullpen smart money monitor started");
-                Some(store)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    };
-
-    // ── Bullpen Signal Generator (SM → 6h markets → RN1Signal) ──────────
-    if let Some(ref conv_store) = convergence_store {
-        let sg_config = engine::bullpen_signal_generator::SignalGenConfig::from_env();
-        if sg_config.enabled {
-            let generator = engine::bullpen_signal_generator::BullpenSignalGenerator::new(
-                Arc::clone(&discovery_store),
-                Arc::clone(conv_store),
-                Arc::clone(&book_store),
-                signal_tx.clone(),
-                Arc::clone(&market_subscriptions),
-                Arc::clone(&ws_force_reconnect),
-                sg_config,
-                Arc::clone(&shared_dedup),
-            );
-            let sg_shutdown = Arc::clone(&shutdown);
-            tokio::spawn(async move { generator.run(sg_shutdown).await });
-            log_push(
-                &activity,
-                EntryKind::Engine,
-                "Bullpen signal generator started".to_string(),
-            );
-            info!("Bullpen signal generator started");
-        }
-    }
 
     let rpc_enabled = env_flag("AGENT_RPC_ENABLED");
     let rpc_bind_addr =
@@ -681,8 +580,7 @@ async fn main() -> Result<()> {
             Arc::clone(&strategy_controller),
             config.strategy_mode_explicit_env,
         )?;
-        paper_inner.discovery_store = Some(Arc::clone(&discovery_store));
-        paper_inner.convergence_store = convergence_store.clone();
+
         let paper = Arc::new(paper_inner);
         paper_for_persist = Some(Arc::clone(&paper));
 
@@ -713,7 +611,9 @@ async fn main() -> Result<()> {
         {
             let prefetched = prefetch_rn1_active_markets(&rn1_wallet).await;
             if !prefetched.is_empty() {
-                let mut subs = market_subscriptions.lock().unwrap_or_else(|e| e.into_inner());
+                let mut subs = market_subscriptions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 for token in prefetched {
                     if !subs.contains(&token) {
                         subs.push(token);
@@ -998,11 +898,14 @@ async fn main() -> Result<()> {
         let dedup = Arc::clone(&shared_dedup);
         let mut signal_rx = signal_rx;
         let per_token_queue_depth = engine::signal_pipeline::per_token_queue_depth();
-        let token_senders: Arc<dashmap::DashMap<String, tokio::sync::mpsc::Sender<engine::types::RN1Signal>>> =
-            Arc::new(dashmap::DashMap::new());
-        tokio::spawn(async move {
-            while let Some(signal) = signal_rx.recv().await {
-                engine::hot_metrics::counters().signals_in.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let token_senders: Arc<
+            dashmap::DashMap<String, crossbeam_channel::Sender<engine::types::RN1Signal>>,
+        > = Arc::new(dashmap::DashMap::new());
+        tokio::task::spawn_blocking(move || {
+            while let Ok(signal) = signal_rx.recv() {
+                engine::hot_metrics::counters()
+                    .signals_in
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let _qw = engine::hot_metrics::StageTimer::from_instant(
                     engine::hot_metrics::HotStage::QueueWait,
                     signal.enqueued_at,
@@ -1011,12 +914,18 @@ async fn main() -> Result<()> {
                 {
                     let key = engine::ingress_dedup::key_for_signal(&signal);
                     if !dedup.check_and_insert(&key) {
-                        engine::hot_metrics::counters().dedup_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        engine::hot_metrics::counters()
+                            .dedup_hits
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let dup_source = signal.signal_source.as_str();
                         if dup_source == "rest" {
-                            engine::hot_metrics::counters().ws_dedup_wins.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            engine::hot_metrics::counters()
+                                .ws_dedup_wins
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         } else {
-                            engine::hot_metrics::counters().rest_dedup_wins.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            engine::hot_metrics::counters()
+                                .rest_dedup_wins
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
                         tracing::debug!(
                             order_id = %signal.order_id,
@@ -1068,7 +977,9 @@ async fn main() -> Result<()> {
                 // Route to per-token worker (spawned lazily)
                 let token_id = signal.token_id.clone();
                 if !token_senders.contains_key(&token_id) {
-                    let (tx, mut rx) = tokio::sync::mpsc::channel::<engine::types::RN1Signal>(per_token_queue_depth);
+                    let (tx, rx) = crossbeam_channel::bounded::<engine::types::RN1Signal>(
+                        per_token_queue_depth,
+                    );
                     token_senders.insert(token_id.clone(), tx);
                     engine::hot_metrics::counters()
                         .signal_per_token_workers_active
@@ -1076,8 +987,8 @@ async fn main() -> Result<()> {
                     let paper_worker = Arc::clone(&paper);
                     let twin_worker = twin_opt.clone();
                     let worker_handle = tokio::runtime::Handle::current();
-                    tokio::task::spawn_blocking(move || {
-                        while let Some(sig) = worker_handle.block_on(rx.recv()) {
+                    std::thread::spawn(move || {
+                        while let Ok(sig) = rx.recv() {
                             // Measure QueueWait from enqueue to worker pickup.
                             let _qw_worker = engine::hot_metrics::StageTimer::from_instant(
                                 engine::hot_metrics::HotStage::QueueWait,
@@ -1092,7 +1003,10 @@ async fn main() -> Result<()> {
                             let p = Arc::clone(&paper_worker);
                             if let Some(twin) = twin_worker.clone() {
                                 worker_handle.block_on(async {
-                                    tokio::join!(p.handle_signal(sig.clone()), twin.handle_signal(sig));
+                                    tokio::join!(
+                                        p.handle_signal(sig.clone()),
+                                        twin.handle_signal(sig)
+                                    );
                                 });
                             } else {
                                 worker_handle.block_on(p.handle_signal(sig));
@@ -1132,13 +1046,33 @@ async fn main() -> Result<()> {
             }
         })
     } else if live_mode {
+        let live_preflight = if env_flag("LIVE_STARTUP_PREFLIGHT") {
+            Some(run_preflight_live(&config).await?)
+        } else {
+            None
+        };
+        let live_starting_cash = live_preflight
+            .and_then(|summary| summary.pusd_balance_usdc)
+            .or_else(|| {
+                std::env::var("BLINK_LIVE_STARTING_USDC")
+                    .ok()
+                    .and_then(|v| v.parse::<f64>().ok())
+            });
+
         let live = Arc::new(engine::live_engine::LiveEngine::new(
             Arc::clone(&config),
             Arc::clone(&book_store),
             Some(activity.clone()),
             Arc::clone(&strategy_controller),
             execution_profile,
+            live_starting_cash,
         )?);
+        if let Some(cash) = live_starting_cash {
+            tracing::info!(
+                cash_usdc = %format!("{cash:.6}"),
+                "Live portfolio cash seeded from on-chain pUSD balance"
+            );
+        }
         live_for_web = Some(Arc::clone(&live));
         live_for_shutdown = Some(Arc::clone(&live));
 
@@ -1152,6 +1086,7 @@ async fn main() -> Result<()> {
                 "Startup WAL recovery complete — check logs for outcomes"
             );
         }
+        live.startup_cancel_all_open_orders().await?;
 
         Arc::clone(&live).spawn_reconciliation_worker();
         live.spawn_router_workers().await;
@@ -1341,11 +1276,14 @@ async fn main() -> Result<()> {
         let dedup = Arc::clone(&shared_dedup);
         let mut signal_rx = signal_rx;
         let per_token_queue_depth = engine::signal_pipeline::per_token_queue_depth();
-        let token_senders: Arc<dashmap::DashMap<String, tokio::sync::mpsc::Sender<engine::types::RN1Signal>>> =
-            Arc::new(dashmap::DashMap::new());
-        tokio::spawn(async move {
-            while let Some(signal) = signal_rx.recv().await {
-                engine::hot_metrics::counters().signals_in.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let token_senders: Arc<
+            dashmap::DashMap<String, crossbeam_channel::Sender<engine::types::RN1Signal>>,
+        > = Arc::new(dashmap::DashMap::new());
+        tokio::task::spawn_blocking(move || {
+            while let Ok(signal) = signal_rx.recv() {
+                engine::hot_metrics::counters()
+                    .signals_in
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let _qw = engine::hot_metrics::StageTimer::from_instant(
                     engine::hot_metrics::HotStage::QueueWait,
                     signal.enqueued_at,
@@ -1353,12 +1291,18 @@ async fn main() -> Result<()> {
                 {
                     let key = engine::ingress_dedup::key_for_signal(&signal);
                     if !dedup.check_and_insert(&key) {
-                        engine::hot_metrics::counters().dedup_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        engine::hot_metrics::counters()
+                            .dedup_hits
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let dup_source = signal.signal_source.as_str();
                         if dup_source == "rest" {
-                            engine::hot_metrics::counters().ws_dedup_wins.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            engine::hot_metrics::counters()
+                                .ws_dedup_wins
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         } else {
-                            engine::hot_metrics::counters().rest_dedup_wins.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            engine::hot_metrics::counters()
+                                .rest_dedup_wins
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
                         tracing::debug!(
                             order_id = %signal.order_id,
@@ -1380,7 +1324,9 @@ async fn main() -> Result<()> {
 
                 let token_id = signal.token_id.clone();
                 if !token_senders.contains_key(&token_id) {
-                    let (tx, mut rx) = tokio::sync::mpsc::channel::<engine::types::RN1Signal>(per_token_queue_depth);
+                    let (tx, rx) = crossbeam_channel::bounded::<engine::types::RN1Signal>(
+                        per_token_queue_depth,
+                    );
                     token_senders.insert(token_id.clone(), tx);
                     engine::hot_metrics::counters()
                         .signal_per_token_workers_active
@@ -1388,8 +1334,8 @@ async fn main() -> Result<()> {
                     let live_worker = Arc::clone(&live);
                     let twin_worker = twin_opt.clone();
                     let worker_handle = tokio::runtime::Handle::current();
-                    tokio::task::spawn_blocking(move || {
-                        while let Some(sig) = worker_handle.block_on(rx.recv()) {
+                    std::thread::spawn(move || {
+                        while let Ok(sig) = rx.recv() {
                             let _qw_worker = engine::hot_metrics::StageTimer::from_instant(
                                 engine::hot_metrics::HotStage::QueueWait,
                                 sig.enqueued_at,
@@ -1403,7 +1349,10 @@ async fn main() -> Result<()> {
                             let l = Arc::clone(&live_worker);
                             if let Some(twin) = twin_worker.clone() {
                                 worker_handle.block_on(async {
-                                    tokio::join!(l.handle_signal(sig.clone()), twin.handle_signal(sig));
+                                    tokio::join!(
+                                        l.handle_signal(sig.clone()),
+                                        twin.handle_signal(sig)
+                                    );
                                 });
                             } else {
                                 worker_handle.block_on(l.handle_signal(sig));
@@ -1442,8 +1391,8 @@ async fn main() -> Result<()> {
     } else {
         // Read-only mode
         let mut signal_rx = signal_rx;
-        tokio::spawn(async move {
-            while let Some(signal) = signal_rx.recv().await {
+        tokio::task::spawn_blocking(move || {
+            while let Ok(signal) = signal_rx.recv() {
                 latency
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -1503,17 +1452,12 @@ async fn main() -> Result<()> {
                         }),
                         market_outcome: None,
                         side: signal.side,
-                        price: (signal.recommended_price * 1000.0) as u64,
-                        // size must be shares×1000 so that notional = price×size/1_000_000 = usdc.
-                        // recommended_size_usdc is already in USD, so convert to shares first.
-                        size: if signal.recommended_price > 0.001 {
-                            (signal.recommended_size_usdc / signal.recommended_price * 1000.0)
-                                as u64
-                        } else {
-                            (signal.recommended_size_usdc * 1000.0) as u64
-                        },
+                        price: 0, // Placeholder
+                        size: 0,  // Placeholder
                         order_id: format!("alpha-{}", signal.analysis_id),
                         detected_at: signal.received_at.unwrap_or_else(std::time::Instant::now),
+                        enqueued_at: signal.received_at.unwrap_or_else(std::time::Instant::now),
+                        source_seq: Some(0),
                         event_start_time: None,
                         event_end_time: None,
                         source_wallet: "alpha-sidecar".to_string(),
@@ -1521,10 +1465,8 @@ async fn main() -> Result<()> {
                         signal_source: "alpha".to_string(),
                         analysis_id: Some(signal.analysis_id.clone()),
                         intent_id: engine::types::next_intent_id(),
-                        market_id: None, // TODO: hydrate market_id from alpha signal
+                        market_id: None,
                         source_order_id: None,
-                        source_seq: None,
-                        enqueued_at: std::time::Instant::now(),
                     };
 
                     alpha_handle.block_on(paper.handle_signal(rn1_compat));
@@ -1578,9 +1520,7 @@ async fn main() -> Result<()> {
             market_subscriptions: Arc::clone(&market_subscriptions),
             shutdown: Arc::clone(&shutdown),
             paper: paper_for_persist.as_ref().map(Arc::clone),
-            bullpen: _bullpen.clone(),
-            discovery_store: Some(Arc::clone(&discovery_store)),
-            convergence_store: convergence_store.clone(),
+
             alpha_signal_tx: alpha_signal_tx.clone(),
             alpha_analytics: alpha_analytics.clone(),
             alpha_risk_config: alpha_risk_config.clone(),
@@ -1618,7 +1558,10 @@ async fn main() -> Result<()> {
         let web_bind = format!("0.0.0.0:{web_ui_port}");
         let (broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(64);
 
-        let risk_handle = paper_for_persist.as_ref().map(|p| Arc::clone(&p.risk));
+        let risk_handle = paper_for_persist
+            .as_ref()
+            .map(|p| Arc::clone(&p.risk))
+            .or_else(|| live_for_web.as_ref().map(|live| Arc::clone(&live.risk)));
 
         let web_state = AppState {
             ws_live: Arc::clone(&ws_live),
@@ -1636,14 +1579,10 @@ async fn main() -> Result<()> {
             started_at: Arc::new(std::time::Instant::now()),
             provider: engine::execution_provider::create_provider_from_env(),
             live_engine: live_for_web.as_ref().map(Arc::clone),
-            bullpen: _bullpen.clone(),
-            discovery_store: Some(Arc::clone(&discovery_store)),
-            convergence_store: convergence_store.clone(),
+
             slug_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
             portfolio_cache: Arc::new(std::sync::RwLock::new(None)),
-            clickhouse_url: std::env::var("CLICKHOUSE_URL")
-                .ok()
-                .filter(|s| !s.is_empty()),
+            clickhouse_url: std::env::var("POSTGRES_URL").ok().filter(|s| !s.is_empty()),
             snapshot_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             portfolio_cached_at_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             alpha_analytics: alpha_analytics.clone(),
@@ -2040,7 +1979,20 @@ fn env_flag_default_true(key: &str) -> bool {
         .unwrap_or(true)
 }
 
-async fn run_preflight_live(config: &Config) -> Result<()> {
+#[inline]
+fn env_f64_or(key: &str, default: f64) -> f64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(default)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct LivePreflightSummary {
+    pusd_balance_usdc: Option<f64>,
+}
+
+async fn run_preflight_live(config: &Config) -> Result<LivePreflightSummary> {
     anyhow::ensure!(
         config.live_trading,
         "--preflight-live requires LIVE_TRADING=true"
@@ -2048,7 +2000,7 @@ async fn run_preflight_live(config: &Config) -> Result<()> {
     config.validate_live_profile_contract()?;
 
     let mut check = 1u8;
-    let total_checks = 7;
+    let total_checks = 9;
 
     // ── Check 1: market data reachable (all tokens) ─────────────────────
     let clob = ClobClient::new(&config.clob_host);
@@ -2130,7 +2082,7 @@ async fn run_preflight_live(config: &Config) -> Result<()> {
     std::fs::create_dir_all("logs")
         .map_err(|e| anyhow::anyhow!("preflight: cannot create logs/ directory: {e}"))?;
     // Test atomic write to a temp file.
-    let test_path = "data\\.preflight_test";
+    let test_path = "data/.preflight_test";
     std::fs::write(test_path, b"ok")
         .map_err(|e| anyhow::anyhow!("preflight: data/ not writable: {e}"))?;
     let _ = std::fs::remove_file(test_path);
@@ -2152,13 +2104,414 @@ async fn run_preflight_live(config: &Config) -> Result<()> {
         risk_cfg.max_single_order_usdc > 0.0,
         "preflight: MAX_SINGLE_ORDER_USDC must be > 0"
     );
-    println!(
-        "✅ preflight-live [{check}/{total_checks}] risk limits: max_order=${} max_daily_loss={:.1}%",
-        risk_cfg.max_single_order_usdc, risk_cfg.max_daily_loss_pct * 100.0,
+    let min_trade_usdc = env_f64_or(
+        "PAPER_MIN_TRADE_USDC",
+        engine::paper_portfolio::MIN_TRADE_USDC,
+    )
+    .max(1.0);
+    let min_floor_usdc = env_f64_or("PAPER_MIN_ORDER_FLOOR_USDC", 2.0).max(min_trade_usdc);
+    let paper_max_order_usdc = env_f64_or("PAPER_MAX_ORDER_USDC", 5.0).clamp(min_floor_usdc, 500.0);
+    let effective_order_cap = risk_cfg
+        .max_single_order_usdc
+        .min(config.live_canary_max_order_usdc)
+        .min(paper_max_order_usdc);
+    anyhow::ensure!(
+        min_trade_usdc <= effective_order_cap,
+        "preflight: PAPER_MIN_TRADE_USDC ({min_trade_usdc:.2}) exceeds effective live order cap ({effective_order_cap:.2})"
     );
+    anyhow::ensure!(
+        min_floor_usdc <= effective_order_cap,
+        "preflight: PAPER_MIN_ORDER_FLOOR_USDC ({min_floor_usdc:.2}) exceeds effective live order cap ({effective_order_cap:.2})"
+    );
+    println!(
+        "✅ preflight-live [{check}/{total_checks}] risk limits: max_order=${} effective_cap=${:.2} min_trade=${:.2} max_daily_loss={:.1}% loss_streak_cap={}",
+        risk_cfg.max_single_order_usdc,
+        effective_order_cap,
+        min_trade_usdc,
+        risk_cfg.max_daily_loss_pct * 100.0,
+        config.live_canary_max_loss_streak,
+    );
+    check += 1;
 
-    println!("\n🟢  ALL {total_checks} PREFLIGHT CHECKS PASSED — safe to go live");
-    Ok(())
+    let geo_blocked =
+        run_geoblock_live_preflight(check, total_checks, risk_cfg.trading_enabled).await?;
+    check += 1;
+
+    let summary = run_onchain_live_preflight(config, check, total_checks).await?;
+
+    if geo_blocked {
+        println!("\n🟡  PREFLIGHT COMPLETE — live trading remains blocked by geoguard/kill switch");
+    } else {
+        println!("\n🟢  ALL {total_checks} PREFLIGHT CHECKS PASSED — safe to go live");
+    }
+    Ok(summary)
+}
+
+async fn run_geoblock_live_preflight(
+    check: u8,
+    total_checks: u8,
+    trading_enabled: bool,
+) -> Result<bool> {
+    if !engine::geo_guard::guard_enabled() {
+        anyhow::ensure!(
+            !trading_enabled,
+            "preflight: BLINK_GEO_GUARD_ENABLED=false while TRADING_ENABLED=true"
+        );
+        println!(
+            "⚠️  preflight-live [{check}/{total_checks}] geoblock guard disabled; keep TRADING_ENABLED=false until compliance is verified"
+        );
+        return Ok(false);
+    }
+
+    match engine::geo_guard::check_geoblock().await {
+        Ok(status) if status.blocked => {
+            anyhow::ensure!(
+                !trading_enabled,
+                "preflight: Polymarket geoblock reports blocked location {}; refusing TRADING_ENABLED=true",
+                status.location_label(),
+            );
+            println!(
+                "⚠️  preflight-live [{check}/{total_checks}] geoblock: blocked location {}; kill switch must remain OFF",
+                status.location_label(),
+            );
+            Ok(true)
+        }
+        Ok(status) => {
+            println!(
+                "✅ preflight-live [{check}/{total_checks}] geoblock: trading available from {}",
+                status.location_label(),
+            );
+            Ok(false)
+        }
+        Err(e) => {
+            anyhow::ensure!(
+                !trading_enabled,
+                "preflight: cannot verify Polymarket geoblock while TRADING_ENABLED=true: {e}"
+            );
+            println!(
+                "⚠️  preflight-live [{check}/{total_checks}] geoblock check failed while kill switch is OFF: {e}"
+            );
+            Ok(true)
+        }
+    }
+}
+
+async fn run_onchain_live_preflight(
+    config: &Config,
+    check: u8,
+    total_checks: u8,
+) -> Result<LivePreflightSummary> {
+    let rpc_urls = polygon_rpc_urls();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .context("preflight: build Polygon RPC client")?;
+
+    let mut last_error = None;
+    for rpc_url in rpc_urls {
+        match read_onchain_state(&client, &rpc_url, &config.funder_address).await {
+            Ok(state) => {
+                anyhow::ensure!(
+                    state.chain_id == POLYGON_CHAIN_ID,
+                    "preflight: Polygon RPC returned chain_id={} from {} (expected {POLYGON_CHAIN_ID})",
+                    state.chain_id,
+                    rpc_url,
+                );
+                anyhow::ensure!(
+                    state.pusd_code_present,
+                    "preflight: no bytecode at pUSD proxy {POLYMARKET_PUSD_PROXY}"
+                );
+                anyhow::ensure!(
+                    state.exchange_code_present,
+                    "preflight: no bytecode at CTF Exchange V2 {POLYMARKET_CTF_EXCHANGE_V2}"
+                );
+                anyhow::ensure!(
+                    state.pusd_balance_raw != "0x0",
+                    "preflight: funder {} has 0 pUSD at {POLYMARKET_PUSD_PROXY}",
+                    config.funder_address,
+                );
+                anyhow::ensure!(
+                    state.exchange_allowance_raw != "0x0",
+                    "preflight: pUSD allowance from {} to CTF Exchange V2 is 0",
+                    config.funder_address,
+                );
+                let signer_address = if !config.signer_private_key.is_empty() {
+                    tee_vault::VaultHandle::spawn(&config.signer_private_key)
+                        .map(|vault| vault.signer_address().to_string())
+                        .ok()
+                } else {
+                    None
+                };
+                let signer_pol_balance_raw = match signer_address.as_deref() {
+                    Some(address) if !address.eq_ignore_ascii_case(&config.funder_address) => {
+                        read_native_balance(&client, &rpc_url, address).await.ok()
+                    }
+                    Some(_) => Some(state.pol_balance_raw.clone()),
+                    None => None,
+                };
+                let signer_pol_zero = signer_pol_balance_raw
+                    .as_deref()
+                    .is_none_or(|raw| raw == "0x0");
+
+                if config.polymarket_signature_type == 0 && state.pol_balance_raw == "0x0" {
+                    println!(
+                        "⚠️  preflight-live [{check}/{total_checks}] on-chain gas: EOA funder POL=0; order-affecting on-chain transactions need native POL"
+                    );
+                } else if config.polymarket_signature_type != 0
+                    && state.pol_balance_raw == "0x0"
+                    && signer_pol_zero
+                {
+                    println!(
+                        "⚠️  preflight-live [{check}/{total_checks}] on-chain gas: proxy funder POL=0 and signer POL=0; CLOB can trade after allowance via relayer, but direct approvals/migrations need gas"
+                    );
+                } else if config.polymarket_signature_type != 0 {
+                    println!(
+                        "✅ preflight-live [{check}/{total_checks}] on-chain gas: signature_type={} proxy/gasless path; funder_POL={} signer_POL={}",
+                        config.polymarket_signature_type,
+                        format_token_amount(&state.pol_balance_raw, 18),
+                        signer_pol_balance_raw
+                            .as_deref()
+                            .map(|raw| format_token_amount(raw, 18))
+                            .unwrap_or_else(|| "unknown".to_string()),
+                    );
+                }
+                let pusd_balance_formatted =
+                    format_token_amount(&state.pusd_balance_raw, state.pusd_decimals);
+                println!(
+                    "✅ preflight-live [{check}/{total_checks}] on-chain: pUSD={} allowance={} rpc={}",
+                    pusd_balance_formatted,
+                    format_token_amount(&state.exchange_allowance_raw, state.pusd_decimals),
+                    rpc_url,
+                );
+                return Ok(LivePreflightSummary {
+                    pusd_balance_usdc: parse_token_amount_f64(
+                        &state.pusd_balance_raw,
+                        state.pusd_decimals,
+                    ),
+                });
+            }
+            Err(e) => last_error = Some(e),
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| anyhow::anyhow!("preflight: no Polygon RPC URLs configured"))
+        .context("preflight: on-chain pUSD/allowance check failed"))
+}
+
+#[derive(Debug)]
+struct OnchainState {
+    chain_id: u64,
+    pol_balance_raw: String,
+    pusd_balance_raw: String,
+    exchange_allowance_raw: String,
+    pusd_decimals: u8,
+    pusd_code_present: bool,
+    exchange_code_present: bool,
+}
+
+async fn read_onchain_state(
+    client: &reqwest::Client,
+    rpc_url: &str,
+    owner: &str,
+) -> Result<OnchainState> {
+    let chain_id =
+        parse_quantity_u64(&rpc_call(client, rpc_url, "eth_chainId", serde_json::json!([])).await?)
+            .context("preflight: parse eth_chainId")?;
+    let pol_balance_raw = read_native_balance(client, rpc_url, owner)
+        .await
+        .context("preflight: eth_getBalance")?;
+    let pusd_code = rpc_call(
+        client,
+        rpc_url,
+        "eth_getCode",
+        serde_json::json!([POLYMARKET_PUSD_PROXY, "latest"]),
+    )
+    .await
+    .context("preflight: eth_getCode pUSD")?;
+    let exchange_code = rpc_call(
+        client,
+        rpc_url,
+        "eth_getCode",
+        serde_json::json!([POLYMARKET_CTF_EXCHANGE_V2, "latest"]),
+    )
+    .await
+    .context("preflight: eth_getCode exchange")?;
+
+    let pusd_decimals_raw = eth_call(client, rpc_url, POLYMARKET_PUSD_PROXY, "0x313ce567")
+        .await
+        .context("preflight: pUSD decimals()")?;
+    let pusd_decimals =
+        parse_quantity_u64(&pusd_decimals_raw).context("preflight: parse pUSD decimals")? as u8;
+    let pusd_balance_raw = eth_call(
+        client,
+        rpc_url,
+        POLYMARKET_PUSD_PROXY,
+        &format!("0x70a08231{}", abi_address(owner)?),
+    )
+    .await
+    .context("preflight: pUSD balanceOf(funder)")?;
+    let exchange_allowance_raw = eth_call(
+        client,
+        rpc_url,
+        POLYMARKET_PUSD_PROXY,
+        &format!(
+            "0xdd62ed3e{}{}",
+            abi_address(owner)?,
+            abi_address(POLYMARKET_CTF_EXCHANGE_V2)?,
+        ),
+    )
+    .await
+    .context("preflight: pUSD allowance(funder, exchange)")?;
+
+    Ok(OnchainState {
+        chain_id,
+        pol_balance_raw: normalize_quantity(&pol_balance_raw),
+        pusd_balance_raw: normalize_quantity(&pusd_balance_raw),
+        exchange_allowance_raw: normalize_quantity(&exchange_allowance_raw),
+        pusd_decimals,
+        pusd_code_present: has_code(&pusd_code),
+        exchange_code_present: has_code(&exchange_code),
+    })
+}
+
+async fn read_native_balance(
+    client: &reqwest::Client,
+    rpc_url: &str,
+    owner: &str,
+) -> Result<String> {
+    let raw = rpc_call(
+        client,
+        rpc_url,
+        "eth_getBalance",
+        serde_json::json!([owner, "latest"]),
+    )
+    .await?;
+    Ok(normalize_quantity(&raw))
+}
+
+async fn eth_call(client: &reqwest::Client, rpc_url: &str, to: &str, data: &str) -> Result<String> {
+    rpc_call(
+        client,
+        rpc_url,
+        "eth_call",
+        serde_json::json!([{ "to": to, "data": data }, "latest"]),
+    )
+    .await
+}
+
+async fn rpc_call(
+    client: &reqwest::Client,
+    rpc_url: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<String> {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method,
+        "params": params,
+    });
+    let response: serde_json::Value = client
+        .post(rpc_url)
+        .json(&body)
+        .send()
+        .await
+        .with_context(|| format!("preflight: RPC request {method} via {rpc_url}"))?
+        .error_for_status()
+        .with_context(|| format!("preflight: RPC HTTP status {method} via {rpc_url}"))?
+        .json()
+        .await
+        .with_context(|| format!("preflight: RPC JSON decode {method} via {rpc_url}"))?;
+    if let Some(error) = response.get("error") {
+        anyhow::bail!("preflight: RPC {method} via {rpc_url} returned {error}");
+    }
+    response
+        .get("result")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .with_context(|| format!("preflight: RPC {method} via {rpc_url} missing string result"))
+}
+
+fn polygon_rpc_urls() -> Vec<String> {
+    let mut urls: Vec<String> = std::env::var("POLYGON_RPC_URL")
+        .ok()
+        .into_iter()
+        .flat_map(|v| {
+            v.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for url in DEFAULT_POLYGON_RPCS {
+        if !urls.iter().any(|u| u == url) {
+            urls.push((*url).to_string());
+        }
+    }
+    urls
+}
+
+fn abi_address(address: &str) -> Result<String> {
+    let hex = address
+        .strip_prefix("0x")
+        .or_else(|| address.strip_prefix("0X"))
+        .unwrap_or(address);
+    anyhow::ensure!(
+        hex.len() == 40 && hex.chars().all(|c| c.is_ascii_hexdigit()),
+        "invalid 20-byte address: {address}"
+    );
+    Ok(format!("{hex:0>64}").to_lowercase())
+}
+
+fn parse_quantity_u64(hex: &str) -> Result<u64> {
+    let normalized = normalize_quantity(hex);
+    u64::from_str_radix(normalized.trim_start_matches("0x"), 16)
+        .with_context(|| format!("invalid hex quantity: {hex}"))
+}
+
+fn normalize_quantity(hex: &str) -> String {
+    let trimmed = hex.trim();
+    let body = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed)
+        .trim_start_matches('0');
+    if body.is_empty() {
+        "0x0".to_string()
+    } else {
+        format!("0x{}", body.to_lowercase())
+    }
+}
+
+fn has_code(hex: &str) -> bool {
+    let normalized = normalize_quantity(hex);
+    normalized != "0x0"
+}
+
+fn format_token_amount(raw_hex: &str, decimals: u8) -> String {
+    let normalized = normalize_quantity(raw_hex);
+    let Ok(raw) = u128::from_str_radix(normalized.trim_start_matches("0x"), 16) else {
+        return format!("{normalized} raw");
+    };
+    let scale = 10u128.saturating_pow(decimals as u32);
+    if scale == 0 {
+        return raw.to_string();
+    }
+    let whole = raw / scale;
+    let frac = raw % scale;
+    format!("{whole}.{frac:0width$}", width = decimals as usize)
+}
+
+fn parse_token_amount_f64(raw_hex: &str, decimals: u8) -> Option<f64> {
+    let normalized = normalize_quantity(raw_hex);
+    let raw = u128::from_str_radix(normalized.trim_start_matches("0x"), 16).ok()?;
+    let scale = 10u128.checked_pow(decimals as u32)? as f64;
+    if scale == 0.0 {
+        return None;
+    }
+    Some(raw as f64 / scale)
 }
 
 /// Operator-initiated emergency stop: cancels all open exchange orders and

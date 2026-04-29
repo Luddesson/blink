@@ -468,6 +468,12 @@ pub struct MarketMetadata {
     pub event_start_time: Option<i64>, // Unix timestamp — game/event kickoff
     pub event_end_time: Option<i64>,   // Unix timestamp — market resolution deadline
     pub closed: bool,
+    /// True when the market requires Polymarket's neg-risk order path.
+    pub neg_risk: bool,
+    /// Gamma's augmented/enable flag, when present.
+    pub enable_neg_risk: bool,
+    /// Minimum allowed price increment as reported by Gamma/CLOB metadata.
+    pub minimum_tick_size: Option<String>,
 }
 
 impl MarketMetadata {

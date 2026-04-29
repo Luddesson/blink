@@ -76,6 +76,33 @@ fn realism_mode() -> bool {
         .unwrap_or(true) // Phase 6: default ON — paper must reflect real execution
 }
 
+fn dynamic_sizing_enabled() -> bool {
+    std::env::var("BLINK_DYNAMIC_SIZING")
+        .ok()
+        .map(|v| !matches!(v.to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no"))
+        .unwrap_or(true)
+}
+
+fn capital_sizing_tier(nav_usdc: f64) -> (f64, f64, f64) {
+    let nav = nav_usdc.max(0.0);
+    if nav < 10.0 {
+        // Micro/canary: exchange minimums dominate, but absolute dollars are tiny.
+        (0.40, 0.45, 2.0)
+    } else if nav < 100.0 {
+        (0.18, 0.18, 10.0)
+    } else if nav < 1_000.0 {
+        (0.10, 0.08, 25.0)
+    } else if nav < 10_000.0 {
+        (0.06, 0.035, 100.0)
+    } else if nav < 100_000.0 {
+        (0.035, 0.015, 500.0)
+    } else if nav < 1_000_000.0 {
+        (0.020, 0.0075, 2_500.0)
+    } else {
+        (0.010, 0.0025, 5_000.0)
+    }
+}
+
 /// Detect Polymarket fee category from market title.
 /// Returns (category_name, fee_rate) per Polymarket's current 0.4% flat taker fee.
 pub fn detect_fee_category(title: &str) -> (&'static str, f64) {
@@ -605,18 +632,30 @@ impl PaperPortfolio {
         rn1_notional_usdc: f64,
         conviction_mult: Option<f64>,
     ) -> Option<f64> {
+        let nav = self.nav();
+        let dynamic_sizing = dynamic_sizing_enabled();
+        let (tier_size_multiplier, tier_max_position_pct, tier_max_order_usdc) =
+            capital_sizing_tier(nav);
         let size_multiplier = match conviction_mult {
             Some(m) => m,
             None => std::env::var("PAPER_SIZE_MULTIPLIER")
                 .ok()
                 .and_then(|v| v.parse::<f64>().ok())
-                .unwrap_or(SIZE_MULTIPLIER)
+                .unwrap_or(if dynamic_sizing {
+                    tier_size_multiplier
+                } else {
+                    SIZE_MULTIPLIER
+                })
                 .max(0.01),
         };
         let max_position_pct = std::env::var("PAPER_MAX_POSITION_PCT")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(MAX_POSITION_PCT)
+            .unwrap_or(if dynamic_sizing {
+                tier_max_position_pct
+            } else {
+                MAX_POSITION_PCT
+            })
             .clamp(0.01, 1.0);
         let min_trade_usdc = std::env::var("PAPER_MIN_TRADE_USDC")
             .ok()
@@ -632,17 +671,26 @@ impl PaperPortfolio {
         let max_order_usdc = std::env::var("PAPER_MAX_ORDER_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(5.0) // Data-driven: trades >$5 have negative E[V]
-            .clamp(min_floor_usdc, 500.0);
+            .or_else(|| {
+                std::env::var("BLINK_HARD_MAX_ORDER_USDC")
+                    .ok()
+                    .and_then(|v| v.parse::<f64>().ok())
+            })
+            .unwrap_or(if dynamic_sizing {
+                tier_max_order_usdc
+            } else {
+                5.0
+            })
+            .clamp(min_floor_usdc, 500_000.0);
 
         let raw = rn1_notional_usdc * size_multiplier;
-        let cap_nav = self.nav() * max_position_pct;
+        let cap_nav = nav * max_position_pct;
         // No cash reserve — always deploy all available cash to maximise exposure
         let cash_reserve_pct: f64 = std::env::var("CASH_RESERVE_PCT")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0);
-        let available_cash = (self.cash_usdc - self.nav() * cash_reserve_pct).max(0.0);
+        let available_cash = (self.cash_usdc - nav * cash_reserve_pct).max(0.0);
         let size = raw
             .max(min_floor_usdc)
             .min(max_order_usdc)

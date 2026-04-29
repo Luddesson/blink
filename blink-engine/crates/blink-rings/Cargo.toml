@@ -1,0 +1,23 @@
+[package]
+name = "blink-rings"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "SPSC ring wrappers + core-affinity helpers for the Blink HFT engine."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+rtrb      = "0.3"
+libc      = "0.2"
+log       = "0.4"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "ring"
+harness = false
+

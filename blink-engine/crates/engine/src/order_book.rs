@@ -124,12 +124,14 @@ impl OrderBookStore {
     /// Returns the age of the most recent book update for `token_id`, in
     /// milliseconds (capped at `u32::MAX`), or `None` if the token is unknown.
     pub fn get_snapshot_age_ms(&self, token_id: &str) -> Option<u32> {
-        self.last_updated
-            .get(token_id)
-            .map(|r| {
-                let ms = r.elapsed().as_millis();
-                if ms > u32::MAX as u128 { u32::MAX } else { ms as u32 }
-            })
+        self.last_updated.get(token_id).map(|r| {
+            let ms = r.elapsed().as_millis();
+            if ms > u32::MAX as u128 {
+                u32::MAX
+            } else {
+                ms as u32
+            }
+        })
     }
 
     /// Returns the current mid-price (×1 000) for a token, or `None` if the
@@ -231,6 +233,17 @@ impl OrderBookStore {
     /// or `None` if the token is not tracked.
     pub fn get_book_snapshot(&self, token_id: &str) -> Option<OrderBook> {
         self.books.get(token_id).map(|b| b.clone())
+    }
+
+    /// Replaces the full order-book snapshot for `token_id`.
+    pub fn replace_snapshot(&self, token_id: &str, bids: &[PriceLevel], asks: &[PriceLevel]) {
+        let mut book = self.get_or_create(token_id);
+        book.bids.clear();
+        book.asks.clear();
+        book.apply_bids_delta(bids);
+        book.apply_asks_delta(asks);
+        self.last_updated
+            .insert(token_id.to_string(), Instant::now());
     }
 
     /// Returns top-of-book level `(price, size)` for the requested side.

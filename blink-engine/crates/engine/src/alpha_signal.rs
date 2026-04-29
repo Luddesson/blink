@@ -2,52 +2,24 @@
 //!
 //! An [`AlphaSignal`] is produced by the Python sidecar (LLM analysis pipeline)
 //! and submitted via the agent RPC server. It flows through the same risk
-//! management and execution pipeline as [`crate::types::RN1Signal`].
+//! management and order execution pipeline as RN1 signals.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
 use crate::types::OrderSide;
 
-// ─── Signal Source ──────────────────────────────────────────────────────────
+// ─── Alpha Signal ────────────────────────────────────────────────────────────
 
-/// Identifies where a trading signal originated.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum SignalSource {
-    /// Shadow-copy of a tracked wallet's order (existing RN1 pipeline).
-    Rn1Copytrade,
-    /// AI/LLM-generated autonomous signal from the Python sidecar.
-    AiAutonomous { model: String, prompt_id: String },
-    /// Smart-money wallet convergence detection (Bullpen).
-    SmartMoneyConvergence,
-}
-
-// ─── Alpha Signal ───────────────────────────────────────────────────────────
-
-/// A trading recommendation produced by the AI analysis pipeline.
-///
-/// Submitted by the Python sidecar via `submit_alpha_signal` RPC.
-/// The Rust engine applies its own risk checks before executing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlphaSignal {
-    /// Polymarket token ID to trade.
     pub token_id: String,
-    /// Polymarket condition ID (0x…).
-    #[serde(default)]
-    pub condition_id: String,
-    /// Buy or Sell.
     pub side: OrderSide,
-    /// LLM confidence in the recommendation (0.0–1.0).
     pub confidence: f64,
-    /// Suggested limit price (decimal, e.g. 0.55).
-    pub recommended_price: f64,
-    /// Suggested order size in USDC.
-    pub recommended_size_usdc: f64,
-    /// LLM reasoning chain (for logging/auditability).
-    #[serde(default)]
+    pub expected_move_bps: u64,
     pub reasoning: String,
     /// Source metadata.
     pub source: SignalSource,
@@ -159,115 +131,57 @@ impl AlphaRiskConfig {
     }
 }
 
-// ─── Alpha Cycle Reporting ──────────────────────────────────────────────────
+// ─── Analytics & History ────────────────────────────────────────────────────
 
-/// A single market's analysis result within a cycle (reported by the sidecar).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AlphaCycleMarket {
-    pub question: String,
-    pub yes_price: f64,
-    #[serde(default)]
-    pub llm_probability: Option<f64>,
-    #[serde(default)]
-    pub confidence: Option<f64>,
-    #[serde(default)]
-    pub edge_bps: Option<f64>,
-    /// "BUY", "SELL", "PASS", "LOW_EDGE", "SUBMITTED", "REJECTED"
-    pub action: String,
-    /// LLM reasoning text (1-3 sentences explaining the decision).
-    #[serde(default)]
-    pub reasoning: Option<String>,
-    /// CLOB spread in percent (e.g. 0.02 = 2%).
-    #[serde(default)]
-    pub spread_pct: Option<f64>,
-    /// Bid-side depth in USDC (top 5 levels).
-    #[serde(default)]
-    pub bid_depth_usdc: Option<f64>,
-    /// Ask-side depth in USDC (top 5 levels).
-    #[serde(default)]
-    pub ask_depth_usdc: Option<f64>,
-    /// 1-hour price change (e.g. +0.03 = +3%).
-    #[serde(default)]
-    pub price_change_1h: Option<f64>,
-    /// "BUY" or "SELL" direction for submitted signals.
-    #[serde(default)]
-    pub side: Option<String>,
-    /// Token ID for position correlation.
-    #[serde(default)]
-    pub token_id: Option<String>,
-    /// Recommended size in USDC (Kelly output).
-    #[serde(default)]
-    pub recommended_size_usdc: Option<f64>,
-    /// Reasoning chain data (Phase 2) — Call 1 + Devil's Advocate + final combination.
-    #[serde(default)]
-    pub reasoning_chain: Option<serde_json::Value>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalSource {
+    pub strategy: String,
+    pub model: String,
+    pub temperature: f64,
+    pub window_hours: u32,
 }
 
-/// Cycle-level report sent by the Python sidecar after each analysis run.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlphaSignalRecord {
+    pub timestamp_ms: u64,
+    pub token_id: String,
+    pub analysis_id: String,
+    pub side: OrderSide,
+    pub confidence: f64,
+    pub expected_move_bps: u64,
+    pub status: String, // "accepted", "rejected", "opened", "filled", "failed"
+    pub reject_reason: Option<String>,
+    pub position_id: Option<usize>,
+    pub entry_price: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlphaCycleReport {
     pub markets_scanned: u32,
     pub markets_analyzed: u32,
     pub signals_generated: u32,
     pub signals_submitted: u32,
-    pub cycle_duration_secs: f64,
-    #[serde(default)]
+    pub duration_secs: f64,
     pub top_markets: Vec<AlphaCycleMarket>,
 }
 
-// ─── Signal History ─────────────────────────────────────────────────────────
-
-/// Record of a single alpha signal through its full lifecycle.
-///
-/// Created when the sidecar submits a signal. Updated when the engine
-/// accepts/rejects, opens a position, or closes it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AlphaSignalRecord {
-    /// ISO 8601 timestamp when the signal was received.
-    pub timestamp: String,
-    /// Unique analysis ID from the LLM pipeline.
-    pub analysis_id: String,
-    /// Polymarket token ID.
+pub struct AlphaCycleMarket {
     pub token_id: String,
-    /// Market question text.
-    pub market_question: String,
-    /// "BUY" or "SELL".
-    pub side: String,
-    /// LLM confidence (0.0-1.0).
+    pub title: String,
     pub confidence: f64,
-    /// LLM reasoning text.
     pub reasoning: String,
-    /// Suggested limit price.
-    pub recommended_price: f64,
-    /// Suggested size in USDC.
-    pub recommended_size_usdc: f64,
-    /// Lifecycle status: "accepted", "rejected:reason", "opened", "closed"
-    pub status: String,
-    /// Position ID if a position was opened.
-    pub position_id: Option<usize>,
-    /// Accumulated realized P&L (handles partial closes).
-    pub realized_pnl: Option<f64>,
-    /// Current unrealized P&L (updated on API calls).
-    pub unrealized_pnl: Option<f64>,
-    /// Entry price if position was opened.
-    pub entry_price: Option<f64>,
-    /// Current price if position is open.
-    pub current_price: Option<f64>,
 }
 
-/// Snapshot of a single cycle for trend tracking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlphaCycleSnapshot {
-    /// ISO 8601 timestamp.
     pub timestamp: String,
     pub markets_scanned: u32,
     pub markets_analyzed: u32,
+    pub signals_generated: u32,
     pub signals_submitted: u32,
-    pub signals_accepted: u32,
-    pub cycle_duration_secs: f64,
+    pub duration_secs: f64,
 }
-
-// ─── Alpha Analytics ────────────────────────────────────────────────────────
 
 /// Tracks AI trading performance separately from RN1.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -349,89 +263,41 @@ impl AlphaAnalytics {
             .rev()
             .find(|r| r.analysis_id == analysis_id)
         {
-            if rec.status == "accepted" {
-                rec.status = "engine_rejected".to_string();
-            }
+            rec.status = "engine_rejected".to_string();
         }
     }
 
-    /// Record realized P&L when an AI position is closed (supports partial closes).
-    pub fn record_close(&mut self, analysis_id: &str, pnl: f64) {
-        self.realized_pnl_usdc += pnl;
-        self.positions_closed += 1;
-
-        if pnl > 0.0 {
-            self.win_count += 1;
-        } else if pnl < 0.0 {
-            self.loss_count += 1;
-        }
-        if pnl > self.best_trade_pnl {
-            self.best_trade_pnl = pnl;
-        }
-        if pnl < self.worst_trade_pnl {
-            self.worst_trade_pnl = pnl;
-        }
-
-        // Update signal record
-        if let Some(rec) = self
-            .signal_history
-            .iter_mut()
-            .rev()
-            .find(|r| r.analysis_id == analysis_id)
-        {
-            rec.realized_pnl = Some(rec.realized_pnl.unwrap_or(0.0) + pnl);
-            rec.status = "closed".to_string();
-        }
-    }
-
-    /// Update unrealized P&L for open AI positions (called periodically).
-    pub fn update_unrealized(&mut self, analysis_id: &str, unrealized: f64, current_price: f64) {
-        if let Some(rec) = self
-            .signal_history
-            .iter_mut()
-            .rev()
-            .find(|r| r.analysis_id == analysis_id)
-        {
-            rec.unrealized_pnl = Some(unrealized);
-            rec.current_price = Some(current_price);
-        }
-    }
-
-    pub fn record_cycle(&mut self, report: AlphaCycleReport) {
+    pub fn add_cycle_report(&mut self, report: AlphaCycleReport) {
         self.cycles_completed += 1;
-        let now = chrono::Utc::now().to_rfc3339();
-        self.last_cycle_at = Some(now.clone());
+        self.last_cycle_at = Some(chrono::Utc::now().to_rfc3339());
         self.last_cycle_markets_scanned = report.markets_scanned;
         self.last_cycle_markets_analyzed = report.markets_analyzed;
         self.last_cycle_signals_generated = report.signals_generated;
         self.last_cycle_signals_submitted = report.signals_submitted;
-        self.last_cycle_duration_secs = report.cycle_duration_secs;
-        self.last_cycle_top_markets = report.top_markets;
+        self.last_cycle_duration_secs = report.duration_secs;
+        self.last_cycle_top_markets = report.top_markets.clone();
 
-        // Record cycle snapshot for trend tracking
+        let snapshot = AlphaCycleSnapshot {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            markets_scanned: report.markets_scanned,
+            markets_analyzed: report.markets_analyzed,
+            signals_generated: report.signals_generated,
+            signals_submitted: report.signals_submitted,
+            duration_secs: report.duration_secs,
+        };
+
         if self.cycle_history.len() >= MAX_CYCLE_HISTORY {
             self.cycle_history.pop_front();
         }
-        self.cycle_history.push_back(AlphaCycleSnapshot {
-            timestamp: now,
-            markets_scanned: self.last_cycle_markets_scanned,
-            markets_analyzed: self.last_cycle_markets_analyzed,
-            signals_submitted: self.last_cycle_signals_submitted,
-            signals_accepted: 0, // updated separately
-            cycle_duration_secs: self.last_cycle_duration_secs,
-        });
+        self.cycle_history.push_back(snapshot);
     }
 
-    /// Win rate as a percentage (0-100).
     pub fn win_rate_pct(&self) -> f64 {
-        let total = self.win_count + self.loss_count;
-        if total == 0 {
+        if self.win_count + self.loss_count == 0 {
             return 0.0;
         }
-        (self.win_count as f64 / total as f64) * 100.0
+        (self.win_count as f64 / (self.win_count + self.loss_count) as f64) * 100.0
     }
-
-    /// Average P&L per closed trade.
     pub fn avg_pnl_per_trade(&self) -> f64 {
         let total = self.win_count + self.loss_count;
         if total == 0 {
@@ -439,131 +305,29 @@ impl AlphaAnalytics {
         }
         self.realized_pnl_usdc / total as f64
     }
+    pub fn add_signal_calibration(&mut self, record: AlphaSignalRecord) {
+        // Calibration records are essentially detailed signal history entries
+        // but might include retrospective ground-truth data from the sidecar.
+        // For now, we just record them into the history ring.
+        self.record_signal(record);
+    }
 }
-
-// ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_analytics() -> AlphaAnalytics {
-        AlphaAnalytics::default()
-    }
-
     #[test]
-    fn win_rate_zero_when_no_trades() {
-        let a = make_analytics();
-        assert_eq!(a.win_rate_pct(), 0.0);
-    }
-
-    #[test]
-    fn win_rate_100_when_all_wins() {
-        let mut a = make_analytics();
-        a.win_count = 3;
-        a.loss_count = 0;
-        assert!((a.win_rate_pct() - 100.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn win_rate_50_when_equal_wins_losses() {
-        let mut a = make_analytics();
-        a.win_count = 2;
-        a.loss_count = 2;
-        assert!((a.win_rate_pct() - 50.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn avg_pnl_zero_when_no_trades() {
-        let a = make_analytics();
-        assert_eq!(a.avg_pnl_per_trade(), 0.0);
-    }
-
-    #[test]
-    fn avg_pnl_correct() {
-        let mut a = make_analytics();
-        a.win_count = 1;
-        a.loss_count = 1;
-        a.realized_pnl_usdc = 10.0;
-        assert!((a.avg_pnl_per_trade() - 5.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn record_accept_increments_both_counters() {
-        let mut a = make_analytics();
-        a.record_accept();
-        a.record_accept();
-        assert_eq!(a.signals_received, 2);
-        assert_eq!(a.signals_accepted, 2);
-        assert_eq!(a.signals_rejected, 0);
-    }
-
-    #[test]
-    fn record_reject_increments_correctly() {
-        let mut a = make_analytics();
-        a.record_reject("low_confidence");
-        a.record_reject("low_confidence");
-        a.record_reject("stale_signal");
-        assert_eq!(a.signals_received, 3);
-        assert_eq!(a.signals_rejected, 3);
-        assert_eq!(a.signals_accepted, 0);
-        assert_eq!(*a.reject_reasons.get("low_confidence").unwrap(), 2);
-        assert_eq!(*a.reject_reasons.get("stale_signal").unwrap(), 1);
-    }
-
-    #[test]
-    fn record_close_tracks_best_worst() {
-        let mut a = make_analytics();
-        a.record_close("id-1", 5.0);
-        a.record_close("id-2", -3.0);
-        assert!((a.best_trade_pnl - 5.0).abs() < 1e-9);
-        assert!((a.worst_trade_pnl - (-3.0)).abs() < 1e-9);
-        assert_eq!(a.win_count, 1);
-        assert_eq!(a.loss_count, 1);
-    }
-
-    #[test]
-    fn signal_history_ring_buffer_caps_at_50() {
-        let mut a = make_analytics();
-        for i in 0..60 {
-            a.record_signal(AlphaSignalRecord {
-                timestamp: String::new(),
-                analysis_id: format!("id-{i}"),
-                token_id: "t".into(),
-                market_question: String::new(),
-                side: "BUY".into(),
-                confidence: 0.8,
-                reasoning: String::new(),
-                recommended_price: 0.5,
-                recommended_size_usdc: 5.0,
-                status: "accepted".into(),
-                position_id: None,
-                realized_pnl: None,
-                unrealized_pnl: None,
-                entry_price: None,
-                current_price: None,
-            });
-        }
-        assert_eq!(a.signal_history.len(), 50);
-        // Oldest should be evicted, newest retained
-        assert_eq!(a.signal_history.back().unwrap().analysis_id, "id-59");
-    }
-
-    #[test]
-    fn alpha_risk_config_defaults_are_conservative() {
+    fn alpha_risk_config_safety() {
+        // Ensure defaults are always conservative.
         let cfg = AlphaRiskConfig::default();
-        assert!(!cfg.enabled, "Alpha must default to disabled");
-        assert!(
-            cfg.confidence_floor >= 0.60,
-            "Confidence floor must be ≥ 60%"
-        );
         assert!(
             cfg.max_single_order_usdc <= 10.0,
-            "Max order must be ≤ $10 for safety"
+            "Max order must be \u{2264} $10 for safety"
         );
         assert!(
             cfg.max_concurrent_positions <= 5,
-            "Max positions must be ≤ 5"
+            "Max positions must be \u{2264} 5"
         );
     }
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
-import { Sparkles, Brain, AlertOctagon, TrendingUp, Target, Clock } from 'lucide-react'
+import { Sparkles, Brain, AlertOctagon, TrendingUp, Target, Clock, Copy, Check } from 'lucide-react'
 import { api } from '../lib/api'
 import type { AlphaCycleMarket, AlphaSignalRecord, AlphaPosition, AlphaClosedTrade } from '../lib/api'
 import { usePoll } from '../hooks/usePoll'
@@ -9,6 +9,24 @@ import GlassCard from '../components/aurora/GlassCard'
 import NumberFlip from '../components/motion/NumberFlip'
 import StatusDot from '../components/aurora/StatusDot'
 import { cn } from '../lib/cn'
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+  return (
+    <button
+      onClick={handleCopy}
+      className="p-1 rounded bg-[color:var(--color-surface-700)/0.3] hover:bg-[color:var(--color-surface-700)/0.6] transition-colors"
+    >
+      {copied ? <Check size={10} className="text-[color:var(--color-bull-400)]" /> : <Copy size={10} className="text-[color:var(--color-text-dim)]" />}
+    </button>
+  )
+}
 
 function StatCard({
   label,
@@ -93,20 +111,22 @@ function SignalCard({ s, expanded, onToggle }: { s: AlphaSignalRecord; expanded:
   const glow = confidenceGlow(s.confidence)
 
   return (
-    <motion.div layout initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}>
+    <motion.div layout initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }}>
       <GlassCard
         padding="sm"
         glow={glow}
         onClick={onToggle}
-        className="cursor-pointer transition-all hover:scale-[1.004]"
+        className="cursor-pointer transition-all hover:ring-1 hover:ring-[color:var(--color-aurora-1)/0.3]"
       >
-        <div className="flex items-center justify-between mb-1.5">
+        <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
             <span className={cn(
-              'text-xs font-bold uppercase tracking-[0.1em]',
-              s.side === 'Buy' ? 'text-[color:var(--color-bull-400)]' : 'text-[color:var(--color-bear-400)]',
+              'text-[10px] font-black uppercase tracking-[0.2em] px-1.5 py-0.5 rounded',
+              s.side === 'Buy'
+                ? 'bg-[color:var(--color-bull-500)/0.1] text-[color:var(--color-bull-400)]'
+                : 'bg-[color:var(--color-bear-500)/0.1] text-[color:var(--color-bear-400)]',
             )}>
-              {s.side === 'Buy' ? '▲ Buy' : '▼ Sell'}
+              {s.side === 'Buy' ? '▲ Long' : '▼ Short'}
             </span>
             {actionBadge(s.status)}
             {hasPnl && (
@@ -118,20 +138,27 @@ function SignalCard({ s, expanded, onToggle }: { s: AlphaSignalRecord; expanded:
           <span className="text-[10px] text-[color:var(--color-text-dim)] tabular font-mono">{timeStr}</span>
         </div>
 
-        <div className="text-xs text-[color:var(--color-text-secondary)] truncate mb-1.5">
+        <div className="text-xs text-[color:var(--color-text-secondary)] font-medium truncate mb-2 group flex items-center gap-1.5">
           {s.market_question || s.token_id.slice(0, 16) + '…'}
+          <CopyButton text={s.token_id} />
         </div>
 
-        <div className="flex items-center gap-3 text-[10px] text-[color:var(--color-text-muted)] tabular font-mono">
-          <span className="flex items-center gap-1">
-            <Target size={10} /> {(s.confidence * 100).toFixed(0)}%
-          </span>
-          <span>Price <span className="text-[color:var(--color-text-secondary)]">{s.recommended_price.toFixed(3)}</span></span>
-          <span>Size <span className="text-[color:var(--color-text-secondary)]">${s.recommended_size_usdc.toFixed(2)}</span></span>
-          {s.entry_price != null && <span>Entry {s.entry_price.toFixed(3)}</span>}
-          {s.unrealized_pnl != null && (
-            <span className={pnlColor(s.unrealized_pnl)}>uPnL {formatPnl(s.unrealized_pnl)}</span>
-          )}
+        <div className="grid grid-cols-2 gap-y-1.5 gap-x-3 text-[10px] text-[color:var(--color-text-muted)] tabular font-mono">
+          <div className="flex items-center gap-1.5">
+            <Target size={10} className="text-[color:var(--color-aurora-3)]" />
+            <span>Conf <span className="text-[color:var(--color-text-primary)]">{(s.confidence * 100).toFixed(0)}%</span></span>
+          </div>
+          <div className="text-right">
+            Price <span className="text-[color:var(--color-text-primary)]">{s.recommended_price.toFixed(3)}</span>
+          </div>
+          <div>
+            Size <span className="text-[color:var(--color-text-primary)]">${s.recommended_size_usdc.toFixed(2)}</span>
+          </div>
+          <div className="text-right">
+            {s.unrealized_pnl != null && (
+              <span className={cn('font-bold', pnlColor(s.unrealized_pnl))}>uPnL {formatPnl(s.unrealized_pnl)}</span>
+            )}
+          </div>
         </div>
 
         <AnimatePresence>
@@ -140,12 +167,12 @@ function SignalCard({ s, expanded, onToggle }: { s: AlphaSignalRecord; expanded:
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
-              className="mt-2.5 pt-2.5 border-t border-[color:var(--color-border-subtle)] overflow-hidden"
+              className="mt-3 pt-3 border-t border-[color:var(--color-border-subtle)] overflow-hidden"
             >
-              <div className="text-[10px] text-[color:var(--color-aurora-1)] uppercase tracking-[0.14em] mb-1 flex items-center gap-1">
+              <div className="text-[10px] text-[color:var(--color-aurora-1)] uppercase tracking-[0.14em] mb-1.5 flex items-center gap-1">
                 <Brain size={10} /> AI reasoning
               </div>
-              <p className="text-xs text-[color:var(--color-text-secondary)] leading-relaxed whitespace-pre-wrap">{s.reasoning}</p>
+              <p className="text-xs text-[color:var(--color-text-secondary)] leading-relaxed italic">{s.reasoning}</p>
             </motion.div>
           )}
         </AnimatePresence>
@@ -157,31 +184,46 @@ function SignalCard({ s, expanded, onToggle }: { s: AlphaSignalRecord; expanded:
 function AiPositionsPanel({ positions, closedTrades }: { positions: AlphaPosition[]; closedTrades: AlphaClosedTrade[] }) {
   return (
     <GlassCard padding="md">
-      <div className="text-[10px] text-[color:var(--color-text-muted)] uppercase tracking-[0.14em] mb-3">
-        AI positions {positions.length > 0 && (
-          <span className="text-[color:var(--color-bull-400)] ml-1">({positions.length} open)</span>
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-[10px] text-[color:var(--color-text-muted)] uppercase tracking-[0.14em]">
+          AI positions
+        </div>
+        {positions.length > 0 && (
+          <Badge variant="bull" dot>{positions.length} active</Badge>
         )}
       </div>
 
       {positions.length === 0 && closedTrades.length === 0 && (
-        <div className="text-xs text-[color:var(--color-text-dim)] text-center py-5">No AI positions yet</div>
+        <div className="flex flex-col items-center justify-center py-8 text-center">
+          <Clock size={20} className="text-[color:var(--color-text-dim)] mb-2 opacity-20" />
+          <div className="text-xs text-[color:var(--color-text-dim)]">No active trades in this cycle</div>
+        </div>
       )}
 
       {positions.length > 0 && (
-        <div className="space-y-2 mb-4">
+        <div className="space-y-3 mb-5">
           {positions.map(pos => {
             const title = pos.market_title?.replace('[ALPHA] ', '') ?? pos.token_id.slice(0, 16)
             return (
-              <div key={pos.id} className="flex items-center justify-between py-1.5 border-b border-[color:var(--color-border-subtle)] last:border-0">
+              <div key={pos.id} className="group relative flex items-center justify-between py-2 border-b border-[color:var(--color-border-subtle)] last:border-0 hover:bg-[color:var(--color-surface-800)/0.2] transition-colors rounded-sm -mx-1 px-1">
                 <div className="flex-1 min-w-0">
-                  <div className="text-xs text-[color:var(--color-text-secondary)] truncate">{title}</div>
-                  <div className="text-[10px] text-[color:var(--color-text-muted)] tabular font-mono">
-                    {pos.side} @ {pos.entry_price.toFixed(3)} → {pos.current_price.toFixed(3)} · ${pos.usdc_spent.toFixed(2)} · {formatDuration(pos.duration_secs)}
+                  <div className="flex items-center gap-1.5">
+                    <div className="text-xs text-[color:var(--color-text-secondary)] truncate font-medium">{title}</div>
+                    <CopyButton text={pos.token_id} />
+                  </div>
+                  <div className="text-[10px] text-[color:var(--color-text-muted)] tabular font-mono mt-0.5">
+                    <span className={pos.side === 'Buy' ? 'text-[color:var(--color-bull-400)]' : 'text-[color:var(--color-bear-400)]'}>{pos.side}</span>
+                    <span className="mx-1">·</span>
+                    {pos.entry_price.toFixed(3)} → {pos.current_price.toFixed(3)}
+                    <span className="mx-1">·</span>
+                    ${pos.usdc_spent.toFixed(1)}
+                    <span className="mx-1">·</span>
+                    {formatDuration(pos.duration_secs)}
                   </div>
                 </div>
                 <div className={cn('text-sm font-bold tabular font-mono ml-3 text-right', pnlColor(pos.unrealized_pnl))}>
                   {formatPnl(pos.unrealized_pnl)}
-                  <div className="text-[10px] text-[color:var(--color-text-dim)]">{pos.unrealized_pnl_pct.toFixed(1)}%</div>
+                  <div className="text-[10px] font-medium opacity-80">{pos.unrealized_pnl_pct.toFixed(1)}%</div>
                 </div>
               </div>
             )
@@ -190,26 +232,26 @@ function AiPositionsPanel({ positions, closedTrades }: { positions: AlphaPositio
       )}
 
       {closedTrades.length > 0 && (
-        <>
-          <div className="text-[10px] text-[color:var(--color-text-muted)] uppercase tracking-[0.14em] mb-2">
-            Recent closed ({closedTrades.length})
+        <div className="pt-3 border-t border-[color:var(--color-border-subtle)]">
+          <div className="text-[10px] text-[color:var(--color-text-dim)] uppercase tracking-[0.14em] mb-2.5">
+            Recent closures
           </div>
-          <div className="space-y-1">
+          <div className="space-y-2">
             {closedTrades.slice(0, 5).map((t, i) => (
-              <div key={i} className="flex items-center justify-between py-1 text-[10px]">
-                <span className="text-[color:var(--color-text-muted)] truncate max-w-[200px]">
-                  {t.market_title?.replace('[ALPHA] ', '') ?? t.token_id.slice(0, 12)}
-                </span>
-                <div className="flex items-center gap-2">
-                  <span className="text-[color:var(--color-text-dim)]">{t.reason}</span>
-                  <span className={cn('font-bold tabular font-mono', pnlColor(t.realized_pnl))}>
-                    {formatPnl(t.realized_pnl)}
+              <div key={i} className="flex items-center justify-between text-[10px]">
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <span className="text-[color:var(--color-text-muted)] truncate">
+                    {t.market_title?.replace('[ALPHA] ', '') ?? t.token_id.slice(0, 12)}
                   </span>
+                  <span className="text-[color:var(--color-text-dim)] text-[9px] px-1 rounded bg-[color:var(--color-surface-700)/0.4]">{t.reason}</span>
                 </div>
+                <span className={cn('font-bold tabular font-mono ml-2', pnlColor(t.realized_pnl))}>
+                  {formatPnl(t.realized_pnl)}
+                </span>
               </div>
             ))}
           </div>
-        </>
+        </div>
       )}
     </GlassCard>
   )
@@ -219,12 +261,12 @@ function MarketRow({ m, expanded, onToggle }: { m: AlphaCycleMarket; expanded: b
   return (
     <>
       <tr
-        className="border-b border-[color:var(--color-border-subtle)] hover:bg-[color:oklch(0.26_0.022_260/0.35)] transition-colors cursor-pointer"
+        className="border-b border-[color:var(--color-border-subtle)] hover:bg-[color:var(--color-surface-800)/0.4] transition-colors cursor-pointer group"
         onClick={onToggle}
       >
-        <td className="py-2 pr-3 text-xs text-[color:var(--color-text-secondary)] max-w-[250px] truncate">{m.question}</td>
+        <td className="py-2 pr-3 text-xs text-[color:var(--color-text-secondary)] max-w-[250px] truncate group-hover:text-[color:var(--color-text-primary)] transition-colors">{m.question}</td>
         <td className="py-2 px-2 text-xs text-[color:var(--color-text-secondary)] tabular font-mono text-right">{m.yes_price.toFixed(2)}</td>
-        <td className="py-2 px-2 text-xs text-[color:var(--color-aurora-3)] tabular font-mono text-right">
+        <td className="py-2 px-2 text-xs text-[color:var(--color-aurora-3)] tabular font-mono text-right font-semibold">
           {m.llm_probability != null ? m.llm_probability.toFixed(2) : '—'}
         </td>
         <td className="py-2 px-2 text-xs text-[color:var(--color-text-muted)] tabular font-mono text-right">

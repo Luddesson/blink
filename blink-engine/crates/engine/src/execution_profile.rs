@@ -129,10 +129,22 @@ mod tests {
 
     #[test]
     fn parse_accepts_known_variants_and_aliases() {
-        assert_eq!("passive".parse::<ExecutionProfile>().unwrap(), ExecutionProfile::Passive);
-        assert_eq!("Balanced".parse::<ExecutionProfile>().unwrap(), ExecutionProfile::Balanced);
-        assert_eq!("hft_taker".parse::<ExecutionProfile>().unwrap(), ExecutionProfile::HftTaker);
-        assert_eq!("hft-maker".parse::<ExecutionProfile>().unwrap(), ExecutionProfile::HftMaker);
+        assert_eq!(
+            "passive".parse::<ExecutionProfile>().unwrap(),
+            ExecutionProfile::Passive
+        );
+        assert_eq!(
+            "Balanced".parse::<ExecutionProfile>().unwrap(),
+            ExecutionProfile::Balanced
+        );
+        assert_eq!(
+            "hft_taker".parse::<ExecutionProfile>().unwrap(),
+            ExecutionProfile::HftTaker
+        );
+        assert_eq!(
+            "hft-maker".parse::<ExecutionProfile>().unwrap(),
+            ExecutionProfile::HftMaker
+        );
         assert!("turbo".parse::<ExecutionProfile>().is_err());
     }
 

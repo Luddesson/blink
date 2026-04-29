@@ -111,7 +111,7 @@ fn jittered(d: Duration) -> Duration {
 pub async fn run_ws(
     config: Arc<Config>,
     book_store: Arc<OrderBookStore>,
-    signal_tx: tokio::sync::mpsc::Sender<RN1Signal>,
+    signal_tx: crossbeam_channel::Sender<RN1Signal>,
     ws_live: Arc<AtomicBool>,
     activity: Option<ActivityLog>,
     msg_count: Arc<AtomicU64>,
@@ -129,7 +129,9 @@ pub async fn run_ws(
     loop {
         info!(url = %config.ws_url, consecutive_failures, "Connecting to WebSocket feed");
         // Increment reconnect counter and record gap since last disconnect.
-        hot_counters().ws_reconnects_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        hot_counters()
+            .ws_reconnects_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if let Some(dis) = last_disconnect_at {
             hot_counters().ws_gap_ms_last.store(
                 dis.elapsed().as_millis() as i64,
@@ -270,7 +272,7 @@ async fn connect_and_run(
     config: &Config,
     book_store: &Arc<OrderBookStore>,
     sniffer: &Sniffer,
-    signal_tx: &tokio::sync::mpsc::Sender<RN1Signal>,
+    signal_tx: &crossbeam_channel::Sender<RN1Signal>,
     ws_live: &Arc<AtomicBool>,
     activity: &Option<ActivityLog>,
     msg_count: &Arc<AtomicU64>,
@@ -480,7 +482,7 @@ mod tests {
         }"#;
         let store = Arc::new(OrderBookStore::new());
         let sniffer = Sniffer::new("0xdeadbeef");
-        let (signal_tx, _rx) = tokio::sync::mpsc::channel(16);
+        let (signal_tx, _rx) = crossbeam_channel::unbounded();
         let msg_count = Arc::new(AtomicU64::new(0));
         let mut counters = MessageParseCounters::default();
         let buffer_pool = BufferPool::default();
@@ -527,7 +529,7 @@ mod tests {
         ]"#;
         let store = Arc::new(OrderBookStore::new());
         let sniffer = Sniffer::new("0xdeadbeef");
-        let (signal_tx, _rx) = tokio::sync::mpsc::channel(16);
+        let (signal_tx, _rx) = crossbeam_channel::unbounded();
         let msg_count = Arc::new(AtomicU64::new(0));
         let mut counters = MessageParseCounters::default();
         let buffer_pool = BufferPool::default();
@@ -567,7 +569,7 @@ fn handle_message(
     msg: Message,
     book_store: &Arc<OrderBookStore>,
     sniffer: &Sniffer,
-    signal_tx: &tokio::sync::mpsc::Sender<RN1Signal>,
+    signal_tx: &crossbeam_channel::Sender<RN1Signal>,
     msg_count: &Arc<AtomicU64>,
     tick_tx: &Option<crossbeam_channel::Sender<TickRecord>>,
     parse_counters: &mut MessageParseCounters,
@@ -630,8 +632,8 @@ fn handle_message(
                     if let Some(mut signal) = sniffer.check_order_event(&event) {
                         let _detect = StageTimer::from_instant(HotStage::Detect, frame_received_at);
                         signal.enqueued_at = std::time::Instant::now();
-                        if let Err(err) = signal_tx.try_send(signal) {
-                            warn!(error = %err, "RN1 signal channel full — signal dropped");
+                        if let Err(err) = signal_tx.send(signal) {
+                            warn!(error = %err, "RN1 signal channel closed — signal dropped");
                         }
                     }
                 }
@@ -662,10 +664,13 @@ fn handle_message(
                                 }
                                 book_store.apply_update(&event);
                                 if let Some(mut signal) = sniffer.check_order_event(&event) {
-                                    let _detect = StageTimer::from_instant(HotStage::Detect, frame_received_at);
+                                    let _detect = StageTimer::from_instant(
+                                        HotStage::Detect,
+                                        frame_received_at,
+                                    );
                                     signal.enqueued_at = std::time::Instant::now();
-                                    if let Err(send_err) = signal_tx.try_send(signal) {
-                                        warn!(error = %send_err, "RN1 signal channel full — signal dropped");
+                                    if let Err(send_err) = signal_tx.send(signal) {
+                                        warn!(error = %send_err, "RN1 signal channel closed — signal dropped");
                                     }
                                 }
                             }

@@ -68,11 +68,11 @@
   --color-whale-400: oklch(0.80 0.17 85);
   --color-whale-500: oklch(0.72 0.18 85);
 
-  /* Text hierarchy */
-  --color-text-primary: oklch(0.96 0.005 260);
-  --color-text-secondary: oklch(0.75 0.012 260);
-  --color-text-muted: oklch(0.55 0.015 260);
-  --color-text-dim: oklch(0.40 0.015 260);
+  /* Text hierarchy - Boosted for better contrast */
+  --color-text-primary: oklch(0.99 0.001 260);
+  --color-text-secondary: oklch(0.88 0.01 260);
+  --color-text-muted: oklch(0.75 0.01 260);
+  --color-text-dim: oklch(0.60 0.01 260);
 
   /* Borders */
   --color-border-subtle: oklch(0.30 0.015 260 / 0.4);
@@ -174,6 +174,7 @@
     text-rendering: optimizeLegibility;
     letter-spacing: -0.005em;
     overscroll-behavior: none;
+    scroll-behavior: smooth;
     padding-left: env(safe-area-inset-left, 0px);
     padding-right: env(safe-area-inset-right, 0px);
   }

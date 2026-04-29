@@ -71,27 +71,43 @@ impl MetadataFetcher {
     }
 
     async fn fetch_from_api(&self, token_id: &str) -> Result<MarketMetadata, String> {
-        // Try Gamma API: /markets?token_id=<token_id>
-        let url = format!("{}/markets?token_id={}", self.gamma_api_url, token_id);
+        let urls = [
+            // Official Gamma query parameter for CLOB token IDs.
+            format!("{}/markets?clob_token_ids={}", self.gamma_api_url, token_id),
+            // Legacy fallback kept for older deployments and local fixtures.
+            format!("{}/markets?token_id={}", self.gamma_api_url, token_id),
+        ];
 
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("API request failed: {}", e))?;
+        let mut last_err = None;
+        for url in urls {
+            let response = match self.client.get(&url).send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    last_err = Some(format!("API request failed: {}", e));
+                    continue;
+                }
+            };
 
-        if !response.status().is_success() {
-            return Err(format!("API returned {}", response.status()));
+            if !response.status().is_success() {
+                last_err = Some(format!("API returned {}", response.status()));
+                continue;
+            }
+
+            let data: Value = match response.json().await {
+                Ok(data) => data,
+                Err(e) => {
+                    last_err = Some(format!("JSON parse failed: {}", e));
+                    continue;
+                }
+            };
+
+            match self.parse_gamma_response(token_id, &data) {
+                Ok(metadata) => return Ok(metadata),
+                Err(e) => last_err = Some(e),
+            }
         }
 
-        let data: Value = response
-            .json()
-            .await
-            .map_err(|e| format!("JSON parse failed: {}", e))?;
-
-        // Parse response (adjust based on actual API structure)
-        self.parse_gamma_response(token_id, &data)
+        Err(last_err.unwrap_or_else(|| "metadata fetch failed".to_string()))
     }
 
     fn parse_gamma_response(&self, token_id: &str, data: &Value) -> Result<MarketMetadata, String> {
@@ -105,37 +121,33 @@ impl MetadataFetcher {
         let market = &markets[0];
 
         // Extract fields (adjust based on actual API response)
-        let market_id = market
-            .get("condition_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let market_id =
+            string_field(market, &["conditionId", "condition_id", "id"]).unwrap_or_default();
 
-        let category = market
-            .get("category")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
+        let category = string_field(market, &["category"]).unwrap_or_else(|| "unknown".to_string());
 
         let tags: Vec<String> = market
             .get("tags")
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|t| t.as_str().map(|s| s.to_string()))
+                    .filter_map(|t| {
+                        t.as_str()
+                            .map(|s| s.to_string())
+                            .or_else(|| string_field(t, &["label", "slug", "name"]))
+                    })
                     .collect()
             })
             .unwrap_or_default();
 
-        let volume_24h = market
-            .get("volume24hr")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
+        let volume_24h = f64_field(
+            market,
+            &["volume24hr", "volume24hrClob", "volumeNum", "volume"],
+        )
+        .unwrap_or(0.0);
 
-        let liquidity = market
-            .get("liquidity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
+        let liquidity =
+            f64_field(market, &["liquidityNum", "liquidityClob", "liquidity"]).unwrap_or(0.0);
 
         // Flexible timestamp parser: RFC3339 → NaiveDateTime → date-only
         let parse_ts = |s: &str| -> Option<i64> {
@@ -187,10 +199,39 @@ impl MetadataFetcher {
         .iter()
         .find_map(|k| market.get(*k)?.as_str().and_then(|s| parse_ts(s)));
 
-        let closed = market
-            .get("closed")
-            .and_then(|v| v.as_bool())
+        let closed = bool_field(market, &["closed"]).unwrap_or(false);
+        let market_neg_risk = bool_field(
+            market,
+            &["negRisk", "neg_risk", "enableNegRisk", "enable_neg_risk"],
+        )
+        .unwrap_or(false);
+        let event_neg_risk = market
+            .get("events")
+            .and_then(|v| v.as_array())
+            .map(|events| {
+                events.iter().any(|event| {
+                    bool_field(
+                        event,
+                        &["negRisk", "neg_risk", "enableNegRisk", "enable_neg_risk"],
+                    )
+                    .unwrap_or(false)
+                })
+            })
             .unwrap_or(false);
+        let enable_neg_risk = bool_field(market, &["enableNegRisk", "enable_neg_risk"])
+            .unwrap_or(false)
+            || event_neg_risk;
+        let minimum_tick_size = string_field(
+            market,
+            &[
+                "minimum_tick_size",
+                "minimumTickSize",
+                "orderPriceMinTickSize",
+                "order_price_min_tick_size",
+                "tickSize",
+                "tick_size",
+            ],
+        );
 
         Ok(MarketMetadata {
             market_id,
@@ -202,6 +243,9 @@ impl MetadataFetcher {
             event_start_time,
             event_end_time,
             closed,
+            neg_risk: market_neg_risk || event_neg_risk,
+            enable_neg_risk,
+            minimum_tick_size,
         })
     }
 
@@ -210,6 +254,42 @@ impl MetadataFetcher {
         let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
         cache.retain(|_, entry| entry.cached_at.elapsed() < self.cache_ttl);
     }
+}
+
+fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        let v = value.get(*key)?;
+        v.as_str()
+            .map(|s| s.to_string())
+            .or_else(|| v.as_f64().map(|n| n.to_string()))
+            .or_else(|| v.as_i64().map(|n| n.to_string()))
+            .or_else(|| v.as_u64().map(|n| n.to_string()))
+    })
+}
+
+fn bool_field(value: &Value, keys: &[&str]) -> Option<bool> {
+    keys.iter().find_map(|key| {
+        let v = value.get(*key)?;
+        v.as_bool().or_else(|| {
+            v.as_str().and_then(|s| {
+                if s.eq_ignore_ascii_case("true") || s == "1" {
+                    Some(true)
+                } else if s.eq_ignore_ascii_case("false") || s == "0" {
+                    Some(false)
+                } else {
+                    None
+                }
+            })
+        })
+    })
+}
+
+fn f64_field(value: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter().find_map(|key| {
+        let v = value.get(*key)?;
+        v.as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok()))
+    })
 }
 
 impl Default for MetadataFetcher {
@@ -238,6 +318,9 @@ mod tests {
             event_start_time: None,
             event_end_time: None,
             closed: false,
+            neg_risk: false,
+            enable_neg_risk: false,
+            minimum_tick_size: None,
         };
 
         // Should fail - liquidity too low
@@ -260,11 +343,44 @@ mod tests {
             event_start_time: None,
             event_end_time: None,
             closed: false,
+            neg_risk: false,
+            enable_neg_risk: false,
+            minimum_tick_size: None,
         };
 
         assert_eq!(metadata.extract_sport(), Some("NFL".to_string()));
 
         metadata.tags = vec!["Soccer".to_string(), "Premier League".to_string()];
         assert_eq!(metadata.extract_sport(), Some("Soccer".to_string()));
+    }
+
+    #[test]
+    fn parses_neg_risk_and_tick_size_from_gamma_market() {
+        let fetcher = MetadataFetcher::new();
+        let data = serde_json::json!([
+            {
+                "conditionId": "0xabc",
+                "category": "sports",
+                "volume24hr": "123.45",
+                "liquidityNum": 100000.0,
+                "closed": false,
+                "negRisk": true,
+                "orderPriceMinTickSize": 0.01,
+                "events": [
+                    { "enableNegRisk": true }
+                ],
+                "tags": [
+                    { "label": "Soccer" }
+                ]
+            }
+        ]);
+
+        let metadata = fetcher.parse_gamma_response("token", &data).unwrap();
+        assert_eq!(metadata.market_id, "0xabc");
+        assert!(metadata.neg_risk);
+        assert!(metadata.enable_neg_risk);
+        assert_eq!(metadata.minimum_tick_size.as_deref(), Some("0.01"));
+        assert_eq!(metadata.volume_24h, 123.45);
+        assert_eq!(metadata.tags, vec!["Soccer"]);
     }
 }

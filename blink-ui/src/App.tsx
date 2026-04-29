@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useState } from 'react'
+import { lazy, Suspense, useCallback, useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { useEngineSocket } from './hooks/useEngineSocket'
 import { usePoll } from './hooks/usePoll'
@@ -24,10 +24,11 @@ import ErrorBoundary from './components/ErrorBoundary'
 import BullpenHealth from './components/BullpenHealth'
 import DiscoveryPanel from './components/DiscoveryPanel'
 import ConvergencePanel from './components/ConvergencePanel'
-import AuroraBackground from './components/aurora/AuroraBackground'
+import ShaderBackground from './components/aurora/ShaderBackground'
 import CommandPalette from './components/CommandPalette'
 import HelpSheet from './components/HelpSheet'
 import { ToastProvider } from './components/ui'
+import { audio } from './lib/audioContext'
 
 import type { RiskSummary } from './types'
 
@@ -117,9 +118,37 @@ export default function App() {
     onHelp: () => setHelpOpen((v) => !v),
   })
 
+  // Initialize AudioEngine on first click
+  useEffect(() => {
+    const initAudio = () => {
+      audio.init()
+      window.removeEventListener('click', initAudio)
+      window.removeEventListener('keydown', initAudio)
+    }
+    window.addEventListener('click', initAudio)
+    window.addEventListener('keydown', initAudio)
+    return () => {
+      window.removeEventListener('click', initAudio)
+      window.removeEventListener('keydown', initAudio)
+    }
+  }, [])
+
+  // Play sound on new activity
+  useEffect(() => {
+    if (activity.length > 0) {
+      const latest = activity[0]
+      if (latest.kind === 'ORDER_FILLED') {
+        const isSell = latest.message.toLowerCase().includes('sell')
+        audio.playTrade(isSell ? 'sell' : 'buy', 0.6)
+      } else if (latest.kind === 'REJECTED' || latest.kind === 'ERROR') {
+        audio.playAlert()
+      }
+    }
+  }, [activity])
+
   return (
     <ToastProvider>
-      <AuroraBackground intensity={isLive ? 'intense' : 'normal'} />
+      <ShaderBackground />
       <div className="relative flex h-[100dvh] min-h-[100dvh] flex-col overflow-hidden text-[color:var(--color-text-primary)]">
         <Header
           wsConnected={connected}
@@ -137,7 +166,7 @@ export default function App() {
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              className="overflow-hidden border-b border-[color:oklch(0.65_0.24_25/0.4)] bg-[color:oklch(0.30_0.12_25/0.35)] backdrop-blur-sm text-[color:var(--color-bear-300)] text-xs flex items-center justify-center gap-2 py-1.5 z-30 shrink-0"
+              className="overflow-hidden border-b border-[color:var(--color-bear-500)/0.4] bg-[color:var(--color-bear-600)/0.35] backdrop-blur-sm text-[color:var(--color-bear-300)] text-xs flex items-center justify-center gap-2 py-1.5 z-30 shrink-0"
             >
               <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--color-bear-500)] animate-pulse" />
               WebSocket disconnected — reconnecting ({wsDownSecs}s ago)
@@ -153,17 +182,22 @@ export default function App() {
         <AnimatePresence mode="wait">
           <motion.div key={activeTab} {...pageTransition} className="flex-1 flex flex-col overflow-hidden min-h-0">
             {activeTab === 'dashboard' && (
-              <main className="flex-1 grid min-h-0 grid-cols-1 gap-2.5 overflow-y-auto p-2.5 md:overflow-hidden md:grid-cols-[230px_1fr] xl:grid-cols-[230px_1fr_270px]">
-                <aside className="order-2 flex flex-col gap-2.5 md:min-h-0 md:overflow-y-auto md:pr-1 xl:order-1">
+              <main className="flex-1 flex flex-col gap-4 overflow-y-auto p-4 md:grid md:grid-cols-[240px_1fr_300px] md:overflow-hidden">
+                {/* Left Sidebar */}
+                <aside className="order-2 flex flex-col gap-4 md:min-h-0 md:overflow-y-auto md:pr-1 xl:order-1">
                   <ErrorBoundary label="RiskPanel">
                     <RiskPanel risk={risk} />
                   </ErrorBoundary>
                   <ErrorBoundary label="PortfolioStats">
                     <PortfolioStats portfolio={portfolio} />
                   </ErrorBoundary>
+                  <ErrorBoundary label="BullpenHealth">
+                    <BullpenHealth health={bullpenHealth} />
+                  </ErrorBoundary>
                 </aside>
 
-                <section className="order-1 flex min-h-0 flex-col gap-2.5 md:order-2 md:overflow-y-auto">
+                {/* Main Content: Forced Vertical Stacking */}
+                <section className="order-1 flex min-h-0 flex-col gap-4 md:order-2 md:overflow-y-auto">
                   <ErrorBoundary label="NavCard">
                     <NavCard
                       nav={nav}
@@ -176,6 +210,20 @@ export default function App() {
                       portfolio={portfolio}
                     />
                   </ErrorBoundary>
+                  
+                  {/* TWO ROWS: Positions on top, Activity below */}
+                  <div className="flex flex-col gap-4">
+                    <ErrorBoundary label="PositionsTable">
+                      <PositionsTable positions={positions} loading={!snapshot && connected} isLive={isLive} />
+                    </ErrorBoundary>
+                    <ErrorBoundary label="ActivityFeed">
+                      <ActivityFeed wsEntries={activity} />
+                    </ErrorBoundary>
+                  </div>
+                </section>
+
+                {/* Right Sidebar */}
+                <aside className="order-3 flex flex-col gap-4 md:min-h-0 xl:overflow-y-auto xl:pl-1">
                   <ErrorBoundary label="AuroraMetricStrip">
                     <AuroraMetricStrip
                       nav={nav}
@@ -186,20 +234,8 @@ export default function App() {
                       closedTrades={portfolio?.closed_trades_count ?? 0}
                     />
                   </ErrorBoundary>
-                  <div className="grid min-h-0 grid-cols-1 gap-2.5 xl:grid-cols-2">
-                    <ErrorBoundary label="PositionsTable">
-                      <PositionsTable positions={positions} loading={!snapshot && connected} isLive={isLive} />
-                    </ErrorBoundary>
-                    <ErrorBoundary label="ActivityFeed">
-                      <ActivityFeed wsEntries={activity} />
-                    </ErrorBoundary>
-                  </div>
-                </section>
-
-                <aside className="order-3 flex flex-col gap-2.5 md:min-h-0 xl:overflow-y-auto xl:pl-1">
                   <ErrorBoundary label="LatencyPanel"><LatencyPanel /></ErrorBoundary>
                   <ErrorBoundary label="FailsafePanel"><FailsafePanel /></ErrorBoundary>
-                  <ErrorBoundary label="BullpenHealth"><BullpenHealth health={bullpenHealth} /></ErrorBoundary>
                   <ErrorBoundary label="DiscoveryPanel"><DiscoveryPanel discovery={bullpenDiscovery} /></ErrorBoundary>
                   <ErrorBoundary label="ConvergencePanel"><ConvergencePanel convergence={bullpenConvergence} variant="compact" /></ErrorBoundary>
                 </aside>

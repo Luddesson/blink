@@ -23,46 +23,47 @@ interface Props {
 }
 
 const TONE_RING: Record<NonNullable<Metric['tone']>, string> = {
-  neutral: 'oklch(0.62 0.02 260 / 0.25)',
-  bull: 'oklch(0.72 0.18 152 / 0.35)',
-  bear: 'oklch(0.65 0.24 25 / 0.35)',
-  iris: 'oklch(0.72 0.16 285 / 0.38)',
+  neutral: 'var(--color-surface-600)/0.3',
+  bull: 'var(--color-bull-500)/0.3',
+  bear: 'var(--color-bear-500)/0.3',
+  iris: 'var(--color-aurora-2)/0.3',
 }
 
 const TONE_GLOW: Record<NonNullable<Metric['tone']>, string> = {
-  neutral: '0 14px 34px -16px oklch(0.62 0.02 260 / 0.3)',
-  bull: '0 14px 34px -14px oklch(0.72 0.18 152 / 0.45)',
-  bear: '0 14px 34px -14px oklch(0.65 0.24 25 / 0.45)',
-  iris: '0 14px 34px -14px oklch(0.72 0.16 285 / 0.45)',
+  neutral: '0 8px 32px -12px var(--color-surface-950)/0.5',
+  bull: '0 8px 32px -12px var(--color-bull-500)/0.2',
+  bear: '0 8px 32px -12px var(--color-bear-500)/0.2',
+  iris: '0 8px 32px -12px var(--color-aurora-2)/0.2',
 }
 
 function MetricCard({ label, value, format, icon, tone = 'neutral', subtitle, index }: Metric & { index: number }) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: index * 0.04, duration: 0.24, ease: [0.2, 0, 0, 1] }}
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ delay: index * 0.05, duration: 0.3 }}
       className={cn(
-        'relative rounded-xl px-3.5 py-3 glass flex flex-col gap-1 min-w-0',
+        'relative rounded-xl px-4 py-3.5 glass flex flex-col gap-2 min-w-0 border',
       )}
       style={{
+        borderColor: `rgba(255, 255, 255, 0.05)`,
         boxShadow: `inset 0 0 0 1px ${TONE_RING[tone]}, ${TONE_GLOW[tone]}`,
       }}
     >
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-muted)] font-semibold truncate">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--color-text-primary)] font-black opacity-90">
           {label}
         </span>
         <span
-          className="opacity-70"
+          className="opacity-100"
           style={{
             color: tone === 'bull'
               ? 'var(--color-bull-400)'
               : tone === 'bear'
                 ? 'var(--color-bear-400)'
                 : tone === 'iris'
-                  ? 'oklch(0.78 0.14 285)'
-                  : 'var(--color-text-muted)',
+                  ? 'var(--color-aurora-2)'
+                  : 'var(--color-aurora-1)',
           }}
         >
           {icon}
@@ -71,10 +72,10 @@ function MetricCard({ label, value, format, icon, tone = 'neutral', subtitle, in
       <NumberFlip
         value={value}
         format={format}
-        className="text-lg font-semibold text-[color:var(--color-text-primary)]"
+        className="text-xl font-black text-white tabular drop-shadow-sm"
       />
       {subtitle && (
-        <span className="text-[10px] text-[color:var(--color-text-muted)] font-mono truncate">
+        <span className="text-[9px] text-[color:var(--color-text-secondary)] font-bold uppercase tracking-widest opacity-80">
           {subtitle}
         </span>
       )}
@@ -82,16 +83,12 @@ function MetricCard({ label, value, format, icon, tone = 'neutral', subtitle, in
   )
 }
 
-/**
- * AuroraMetricStrip — compact row of glass metric cards with NumberFlip animation.
- * Sits above the equity chart as the Dashboard hero.
- */
 export default function AuroraMetricStrip({ nav, realized, unrealized, fees, winRate, closedTrades }: Props) {
   const netPnl = realized + unrealized - fees
 
   const metrics: Metric[] = [
     {
-      label: 'Net asset value',
+      label: 'NAV',
       value: nav,
       format: (v) => `$${fmt(v, 2)}`,
       icon: <Wallet size={14} />,
@@ -105,7 +102,7 @@ export default function AuroraMetricStrip({ nav, realized, unrealized, fees, win
       tone: netPnl >= 0 ? 'bull' : 'bear',
     },
     {
-      label: 'Unrealized',
+      label: 'uPnL',
       value: unrealized,
       format: (v) => `${v >= 0 ? '+' : ''}$${fmt(v, 2)}`,
       icon: <Activity size={14} />,
@@ -119,17 +116,17 @@ export default function AuroraMetricStrip({ nav, realized, unrealized, fees, win
       tone: 'neutral',
     },
     {
-      label: 'Win rate',
+      label: 'Win Rate',
       value: winRate,
       format: (v) => `${fmt(v, 1)}%`,
       icon: <Target size={14} />,
       tone: winRate >= 55 ? 'bull' : winRate >= 45 ? 'neutral' : 'bear',
-      subtitle: `${closedTrades} closed`,
+      subtitle: `${closedTrades} trades`,
     },
   ]
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+    <div className="flex flex-col gap-3">
       {metrics.map((m, i) => (
         <MetricCard key={m.label} {...m} index={i} />
       ))}

@@ -1449,14 +1449,6 @@ fn render_modern_sidepanel(
             " twin: {}",
             if twin.enabled { "ACTIVE" } else { "IDLE" }
         )),
-        Line::from(format!(
-            " bullpen: {}",
-            if std::env::var("BULLPEN_ENABLED").unwrap_or_default() == "true" {
-                "ENABLED"
-            } else {
-                "OFF"
-            }
-        )),
     ];
     f.render_widget(
         Paragraph::new(status_card).block(

@@ -119,9 +119,7 @@ impl GateConfig {
     /// Resolve gate config from a specific execution profile. Per-knob env
     /// overrides (`BLINK_GATE_STALE_MS`, `BLINK_GATE_MAX_DRIFT_BPS`,
     /// `BLINK_GATE_POST_ONLY`) still win when present.
-    pub fn from_profile_and_env(
-        profile: crate::execution_profile::ExecutionProfile,
-    ) -> Self {
+    pub fn from_profile_and_env(profile: crate::execution_profile::ExecutionProfile) -> Self {
         let knobs = profile.knobs();
         let stale_ms = std::env::var("BLINK_GATE_STALE_MS")
             .ok()
@@ -148,10 +146,7 @@ impl GateConfig {
     ///
     /// Pass [`MarketClass::Other`] when classification isn't available — that
     /// yields the unmodified profile/env default.
-    pub fn max_drift_bps_for_class(
-        &self,
-        class: crate::market_class::MarketClass,
-    ) -> u16 {
+    pub fn max_drift_bps_for_class(&self, class: crate::market_class::MarketClass) -> u16 {
         crate::drift_overrides::effective_bps(class, self.max_drift_bps)
     }
 }

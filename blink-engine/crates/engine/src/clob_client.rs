@@ -41,10 +41,10 @@ impl ClobClient {
 
     /// Fetches the current order-book snapshot for `token_id`.
     ///
-    /// `GET /order-book/{token_id}`
+    /// `GET /book?token_id={token_id}`
     #[instrument(skip(self), fields(token_id, latency_ms))]
     pub async fn get_order_book(&self, token_id: &str) -> Result<serde_json::Value> {
-        let url = format!("{}/order-book/{}", self.base_url, token_id);
+        let url = format!("{}/book?token_id={}", self.base_url, token_id);
         self.get_json(&url).await
     }
 

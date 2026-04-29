@@ -16,10 +16,13 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use native_tls::TlsConnector;
+use postgres_native_tls::MakeTlsConnector;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::broadcast;
+use tokio_postgres::Client;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -30,12 +33,12 @@ use crate::backtest_engine::{
     SweepAxes, WalkForwardAggregate,
 };
 use crate::blink_twin::TwinSnapshot;
-use crate::clickhouse_logger;
 use crate::latency_tracker::LatencyTracker;
 use crate::live_engine::LiveEngine;
 use crate::order_book::OrderBookStore;
 use crate::paper_engine::PaperEngine;
 use crate::paper_portfolio::PaperPortfolio;
+use crate::postgres_logger;
 use crate::risk_manager::RiskManager;
 use crate::strategy::{StrategyController, StrategyMode, StrategySwitchError};
 use crate::timed_mutex::TimedMutex;
@@ -65,13 +68,6 @@ pub struct AppState {
     pub provider: Option<Arc<dyn crate::execution_provider::ExecutionProvider>>,
     /// Optional live engine — present only in live trading mode.
     pub live_engine: Option<Arc<LiveEngine>>,
-    /// Optional Bullpen bridge for enrichment data.
-    pub bullpen: Option<Arc<crate::bullpen_bridge::BullpenBridge>>,
-    /// Optional discovery store from Bullpen scanner.
-    pub discovery_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_discovery::DiscoveryStore>>>,
-    /// Optional convergence store from smart money monitor.
-    pub convergence_store:
-        Option<Arc<tokio::sync::RwLock<crate::bullpen_smart_money::ConvergenceStore>>>,
     /// In-memory cache of token_id → Polymarket event slug.
     pub slug_cache: SlugCache,
     /// Last successfully-built portfolio JSON for the WS snapshot.
@@ -150,6 +146,83 @@ struct RejectionsQuery {
 // ─── Router ─────────────────────────────────────────────────────────────────
 
 /// Builds the axum router with all API endpoints.
+
+/// Starts the web server on the given address.
+pub async fn run_web_server(
+    addr: &str,
+    state: AppState,
+    static_dir: Option<String>,
+    broadcast_interval_secs: u64,
+) {
+    let router = build_router(state.clone(), static_dir);
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .unwrap_or_else(|e| panic!("Failed to bind web UI on {addr}: {e}"));
+    tracing::info!(addr, broadcast_interval_secs, "Web UI server listening");
+
+    // Portfolio cache refresher. In live mode the live engine owns the same
+    // PaperPortfolio-shaped accounting object, so feed the dashboard from it.
+    let portfolio_source = state
+        .paper
+        .as_ref()
+        .map(|paper| Arc::clone(&paper.portfolio))
+        .or_else(|| {
+            state
+                .live_engine
+                .as_ref()
+                .map(|live| Arc::clone(&live.portfolio))
+        });
+    if let Some(portfolio) = portfolio_source {
+        let cache = Arc::clone(&state.portfolio_cache);
+        let started_at = Arc::clone(&state.started_at);
+        let cached_at = Arc::clone(&state.portfolio_cached_at_ms);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+            loop {
+                interval.tick().await;
+                let p = match tokio::time::timeout(
+                    std::time::Duration::from_millis(500),
+                    portfolio.lock(),
+                )
+                .await
+                {
+                    Ok(guard) => guard,
+                    Err(_) => continue,
+                };
+                let uptime_secs = started_at.elapsed().as_secs();
+                let portfolio_json = build_portfolio_json(&p, uptime_secs, 300);
+                drop(p);
+                if let Ok(mut c) = cache.write() {
+                    *c = Some(portfolio_json);
+                    cached_at.store(
+                        chrono::Utc::now().timestamp_millis() as u64,
+                        Ordering::Relaxed,
+                    );
+                }
+            }
+        });
+    }
+
+    // Broadcast state snapshots
+    let broadcast_state = state.clone();
+    tokio::spawn(async move {
+        let interval_ms = if broadcast_interval_secs <= 1 {
+            250
+        } else {
+            broadcast_interval_secs * 1000
+        };
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(interval_ms));
+        loop {
+            interval.tick().await;
+            if let Ok(snapshot) = build_snapshot(&broadcast_state).await {
+                let _ = broadcast_state.broadcast_tx.send(snapshot);
+            }
+        }
+    });
+
+    let _ = axum::serve(listener, router).await;
+}
+
 pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -159,6 +232,7 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
     let api = Router::new()
         .route("/health", get(get_health))
         .route("/api/status", get(get_status))
+        .route("/api/geoblock", get(get_geoblock))
         .route("/api/portfolio", get(get_portfolio))
         .route("/api/history", get(get_history))
         .route("/api/activity", get(get_activity))
@@ -180,6 +254,8 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/strategy/rollback", post(post_strategy_rollback))
         .route("/api/live/portfolio", get(get_live_portfolio))
         .route("/api/pause", post(post_pause))
+        .route("/api/emergency_stop", post(post_emergency_stop))
+        .route("/api/emergency-stop", post(post_emergency_stop))
         .route(
             "/api/risk/reset_circuit_breaker",
             post(post_reset_circuit_breaker),
@@ -189,143 +265,26 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/positions/{id}/sell", post(post_sell_position))
         .route("/api/metrics", get(get_metrics))
         .route("/api/fill-window", get(get_fill_window))
-        .route("/api/bullpen/health", get(get_bullpen_health))
-        .route("/api/bullpen/discovery", get(get_bullpen_discovery))
-        .route("/api/bullpen/convergence", get(get_bullpen_convergence))
-        .route("/api/bullpen/short_markets", get(get_bullpen_short_markets))
-        .route("/api/market-url/{token_id}", get(get_market_url))
-        .route("/api/pnl-attribution", get(get_pnl_attribution))
-        .route("/api/backtest", post(post_backtest))
-        .route("/api/backtest/sweep", post(post_backtest_sweep))
-        .route(
-            "/api/backtest/walk-forward",
-            post(post_backtest_walk_forward),
-        )
         .route("/api/analytics/equity", get(get_analytics_equity))
+        .route("/api/analytics/quant", get(get_analytics_quant))
         .route("/api/alpha", get(get_alpha_status))
-        .route("/api/alpha/calibration", get(get_alpha_calibration))
-        .route("/api/project-inventory", get(get_project_inventory))
-        .route("/api/gates", get(get_gates))
-        .route("/ws", get(ws_handler))
+        .route("/ws", get(ws_handler));
+
+    Router::new()
+        .merge(api)
+        .fallback_service(
+            static_dir
+                .map(|dir| {
+                    ServeDir::new(dir.clone())
+                        .not_found_service(ServeFile::new(format!("{}/index.html", dir)))
+                })
+                .unwrap_or_else(|| {
+                    ServeDir::new("static/ui")
+                        .not_found_service(ServeFile::new("static/ui/index.html"))
+                }),
+        )
+        .layer(cors)
         .with_state(state)
-        .layer(cors);
-
-    if let Some(dir) = static_dir {
-        let index_path = format!("{dir}/index.html");
-        api.route_service("/", ServeFile::new(index_path))
-            .fallback_service(ServeDir::new(dir))
-    } else {
-        api
-    }
-}
-
-/// Builds a portfolio JSON snapshot from a locked `PaperPortfolio`.
-///
-/// `max_equity_points` caps the equity curve length so WS payloads stay small.
-/// Pass `usize::MAX` to include the full curve (e.g. for the HTTP endpoint cache).
-fn build_portfolio_json(
-    p: &PaperPortfolio,
-    uptime_secs: u64,
-    max_equity_points: usize,
-) -> serde_json::Value {
-    let attempts = (p.filled_orders + p.aborted_orders + p.skipped_orders).max(1) as f64;
-    let fill_rate_pct = (p.filled_orders as f64 / attempts) * 100.0;
-    let reject_rate_pct = ((p.skipped_orders + p.aborted_orders) as f64 / attempts) * 100.0;
-    let wins = p
-        .closed_trades
-        .iter()
-        .filter(|t| t.realized_pnl > 0.0)
-        .count();
-    let win_rate_pct = if p.closed_trades.is_empty() {
-        0.0
-    } else {
-        (wins as f64 / p.closed_trades.len() as f64) * 100.0
-    };
-    let avg_slippage_bps = if p.closed_trades.is_empty() {
-        0.0
-    } else {
-        p.closed_trades
-            .iter()
-            .map(|t| t.scorecard.slippage_bps)
-            .sum::<f64>()
-            / p.closed_trades.len() as f64
-    };
-
-    let equity_len = p.equity_curve.len();
-    let (equity_curve, equity_timestamps) = if equity_len <= max_equity_points {
-        (p.equity_curve.clone(), p.equity_timestamps.clone())
-    } else {
-        // Downsample but always include the very last point so the chart
-        // reflects the most recent NAV, not data from minutes ago.
-        let n = max_equity_points.max(2);
-        let step = equity_len as f64 / (n - 1) as f64;
-        let mut indices: Vec<usize> = (0..n - 1)
-            .map(|i| ((i as f64 * step) as usize).min(equity_len - 1))
-            .collect();
-        indices.push(equity_len - 1); // always include last
-        indices.dedup(); // remove duplicate if last was already included
-        let curve: Vec<f64> = indices.iter().map(|&i| p.equity_curve[i]).collect();
-        let ts: Vec<i64> = if p.equity_timestamps.len() == equity_len {
-            indices.iter().map(|&i| p.equity_timestamps[i]).collect()
-        } else {
-            vec![]
-        };
-        (curve, ts)
-    };
-
-    let positions: Vec<serde_json::Value> = p
-        .positions
-        .iter()
-        .map(|pos| {
-            let now_ts = chrono::Utc::now().timestamp();
-            let secs_to_event = pos
-                .event_start_time
-                .or(pos.event_end_time)
-                .map(|ts| ts - now_ts);
-            json!({
-                "id": pos.id,
-                "token_id": pos.token_id,
-                "market_title": pos.market_title,
-                "market_outcome": pos.market_outcome,
-                "side": pos.side.to_string(),
-                "entry_price": pos.entry_price,
-                "shares": pos.shares,
-                "usdc_spent": pos.usdc_spent,
-                "current_price": pos.current_price,
-                "unrealized_pnl": pos.unrealized_pnl(),
-                "unrealized_pnl_pct": pos.unrealized_pnl_pct(),
-                "opened_at": pos.opened_at_wall.to_rfc3339(),
-                "opened_age_secs": pos.opened_at.elapsed().as_secs(),
-                "fee_category": pos.fee_category,
-                "fee_rate": pos.fee_rate,
-                "event_start_time": pos.event_start_time,
-                "event_end_time": pos.event_end_time,
-                "secs_to_event": secs_to_event,
-            })
-        })
-        .collect();
-
-    json!({
-        "cash_usdc": p.cash_usdc,
-        "nav_usdc": p.nav(),
-        "invested_usdc": p.total_invested(),
-        "unrealized_pnl_usdc": p.unrealized_pnl(),
-        "realized_pnl_usdc": p.realized_pnl(),
-        "fees_paid_usdc": p.total_fees_paid_usdc,
-        "open_positions": positions,
-        "closed_trades_count": p.closed_trades.len(),
-        "total_signals": p.total_signals,
-        "filled_orders": p.filled_orders,
-        "skipped_orders": p.skipped_orders,
-        "aborted_orders": p.aborted_orders,
-        "equity_curve": equity_curve,
-        "equity_timestamps": equity_timestamps,
-        "fill_rate_pct": fill_rate_pct,
-        "reject_rate_pct": reject_rate_pct,
-        "avg_slippage_bps": avg_slippage_bps,
-        "win_rate_pct": win_rate_pct,
-        "uptime_secs": uptime_secs,
-    })
 }
 
 fn strategy_json(state: &AppState) -> serde_json::Value {
@@ -347,77 +306,88 @@ fn strategy_json(state: &AppState) -> serde_json::Value {
     value
 }
 
-/// Starts the web server on the given address.
-pub async fn run_web_server(
-    addr: &str,
-    state: AppState,
-    static_dir: Option<String>,
-    broadcast_interval_secs: u64,
-) {
-    let router = build_router(state.clone(), static_dir);
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .unwrap_or_else(|e| panic!("Failed to bind web UI on {addr}: {e}"));
-    tracing::info!(addr, broadcast_interval_secs, "Web UI server listening");
-
-    // Portfolio cache refresher — properly awaits the tokio Mutex every 2s so
-    // the UI always has fresh portfolio data regardless of signal-loop contention.
-    // build_snapshot() and get_portfolio() both read from this cache.
-    if let Some(ref paper) = state.paper {
-        let paper = Arc::clone(paper);
-        let cache = Arc::clone(&state.portfolio_cache);
-        let started_at = Arc::clone(&state.started_at);
-        let cached_at = Arc::clone(&state.portfolio_cached_at_ms);
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-            loop {
-                interval.tick().await;
-                let p = match tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    paper.portfolio.lock(),
-                )
-                .await
-                {
-                    Ok(guard) => guard,
-                    Err(_) => {
-                        tracing::warn!(
-                            "portfolio cache refresher: lock timeout (2s) — skipping refresh"
-                        );
-                        continue;
-                    }
-                };
-                let uptime_secs = started_at.elapsed().as_secs();
-                let portfolio_json = build_portfolio_json(&p, uptime_secs, 300);
-                drop(p);
-                if let Ok(mut c) = cache.write() {
-                    *c = Some(portfolio_json);
-                    cached_at.store(
-                        chrono::Utc::now().timestamp_millis() as u64,
-                        Ordering::Relaxed,
-                    );
-                }
+fn build_portfolio_json(
+    p: &PaperPortfolio,
+    uptime_secs: u64,
+    _limit_trades: usize,
+) -> serde_json::Value {
+    let positions: Vec<PositionJson> = p
+        .positions
+        .iter()
+        .map(|pos| {
+            let now_ts = chrono::Utc::now().timestamp();
+            let secs_to_event = pos
+                .event_start_time
+                .or(pos.event_end_time)
+                .map(|ts| ts - now_ts);
+            PositionJson {
+                id: pos.id,
+                token_id: pos.token_id.clone(),
+                market_title: pos.market_title.clone(),
+                market_outcome: pos.market_outcome.clone(),
+                side: pos.side.to_string(),
+                entry_price: pos.entry_price,
+                shares: pos.shares,
+                usdc_spent: pos.usdc_spent,
+                current_price: pos.current_price,
+                unrealized_pnl: pos.unrealized_pnl(),
+                unrealized_pnl_pct: pos.unrealized_pnl_pct(),
+                opened_at: pos.opened_at_wall.to_rfc3339(),
+                opened_age_secs: pos.opened_at.elapsed().as_secs(),
+                fee_category: pos.fee_category.clone(),
+                fee_rate: pos.fee_rate,
+                event_start_time: pos.event_start_time,
+                event_end_time: pos.event_end_time,
+                secs_to_event,
             }
-        });
-    }
+        })
+        .collect();
 
-    // Broadcast state snapshots at the configured interval (default 10s).
-    let broadcast_state = state.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(
-            broadcast_interval_secs.max(1),
-        ));
-        loop {
-            interval.tick().await;
-            if let Ok(snapshot) = build_snapshot(&broadcast_state).await {
-                let _ = broadcast_state.broadcast_tx.send(snapshot);
-            }
-        }
-    });
+    let attempts = (p.filled_orders + p.aborted_orders + p.skipped_orders).max(1) as f64;
+    let fill_rate_pct = (p.filled_orders as f64 / attempts) * 100.0;
+    let reject_rate_pct = ((p.skipped_orders + p.aborted_orders) as f64 / attempts) * 100.0;
+    let avg_slippage_bps = if p.closed_trades.is_empty() {
+        0.0
+    } else {
+        p.closed_trades
+            .iter()
+            .map(|t| t.scorecard.slippage_bps)
+            .sum::<f64>()
+            / p.closed_trades.len() as f64
+    };
 
-    match axum::serve(listener, router).await {
-        Ok(_) => {}
-        Err(e) => tracing::error!("Web UI server error: {e}"),
-    }
+    let wins = p
+        .closed_trades
+        .iter()
+        .filter(|t| t.realized_pnl > 0.0)
+        .count();
+    let win_rate_pct = if !p.closed_trades.is_empty() {
+        (wins as f64 / p.closed_trades.len() as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    json!({
+        "cash_usdc": p.cash_usdc,
+        "nav_usdc": p.nav(),
+        "invested_usdc": p.total_invested(),
+        "unrealized_pnl_usdc": p.unrealized_pnl(),
+        "realized_pnl_usdc": p.realized_pnl(),
+        "fees_paid_usdc": p.total_fees_paid_usdc,
+        "open_positions": positions,
+        "closed_trades_count": p.closed_trades.len(),
+        "total_signals": p.total_signals,
+        "filled_orders": p.filled_orders,
+        "skipped_orders": p.skipped_orders,
+        "aborted_orders": p.aborted_orders,
+        "equity_curve": p.equity_curve,
+        "equity_timestamps": p.equity_timestamps,
+        "fill_rate_pct": fill_rate_pct,
+        "reject_rate_pct": reject_rate_pct,
+        "avg_slippage_bps": avg_slippage_bps,
+        "win_rate_pct": win_rate_pct,
+        "uptime_secs": uptime_secs,
+    })
 }
 
 // ─── Handlers ───────────────────────────────────────────────────────────────
@@ -462,15 +432,46 @@ async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
     }))
 }
 
+async fn get_geoblock() -> Json<serde_json::Value> {
+    if !crate::geo_guard::guard_enabled() {
+        return Json(json!({
+            "guard_enabled": false,
+            "launch_status": "DISABLED_KEEP_KILL_SWITCH_OFF",
+        }));
+    }
+    match crate::geo_guard::check_geoblock().await {
+        Ok(status) => Json(json!({
+            "guard_enabled": true,
+            "launch_status": if status.blocked { "BLOCKED_KEEP_KILL_SWITCH_OFF" } else { "ELIGIBLE" },
+            "geoblock": status.public_json(),
+        })),
+        Err(e) => Json(json!({
+            "guard_enabled": true,
+            "launch_status": "UNVERIFIED_KEEP_KILL_SWITCH_OFF",
+            "error": e.to_string(),
+        })),
+    }
+}
+
 async fn get_portfolio(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let Some(ref paper) = state.paper else {
-        return Json(json!({"error": "Paper mode not active"}));
+    let portfolio = state
+        .paper
+        .as_ref()
+        .map(|paper| Arc::clone(&paper.portfolio))
+        .or_else(|| {
+            state
+                .live_engine
+                .as_ref()
+                .map(|live| Arc::clone(&live.portfolio))
+        });
+    let Some(portfolio) = portfolio else {
+        return Json(json!({"error": "Portfolio not active"}));
     };
 
     // Use try_lock first for a fresh response; fall back to the portfolio cache
     // (populated every 2s by the background refresher task) when the signal loop
     // holds the mutex.
-    let Ok(p) = paper.portfolio.try_lock() else {
+    let Ok(p) = portfolio.try_lock() else {
         if let Ok(cached) = state.portfolio_cache.read() {
             if let Some(ref v) = *cached {
                 return Json(v.clone());
@@ -549,8 +550,14 @@ async fn get_portfolio(State(state): State<AppState>) -> Json<serde_json::Value>
     };
     drop(p);
     let uptime_secs = state.started_at.elapsed().as_secs();
+    let is_live = state.live_engine.is_some();
 
     Json(json!({
+        "mode": if is_live { "live" } else { "paper" },
+        "accounting_source": if is_live { "exchange_confirmed_fills_only" } else { "paper_simulation" },
+        "balance_source": if is_live { "onchain_pusd_seed_plus_confirmed_exchange_fills" } else { "paper_simulation" },
+        "confirmed_only": is_live,
+        "queued_orders_affect_nav": false,
         "cash_usdc": cash,
         "nav_usdc": nav,
         "invested_usdc": invested,
@@ -579,12 +586,46 @@ async fn get_portfolio(State(state): State<AppState>) -> Json<serde_json::Value>
 struct HistoryQuery {
     page: Option<usize>,
     per_page: Option<usize>,
+    range: Option<String>,
 }
 
 async fn get_history(
     State(state): State<AppState>,
     Query(params): Query<HistoryQuery>,
 ) -> Json<serde_json::Value> {
+    let range = params.range.as_deref().unwrap_or("all");
+    let per_page = params.per_page.unwrap_or(50).clamp(1, 5000);
+    let page = params.page.unwrap_or(1);
+
+    // ── Attempt Database Query (Postgres) ─────────────────────────────────────
+    if let Some(ref url) = state.clickhouse_url {
+        let minutes: Option<u64> = match range {
+            "24h" => Some(1440),
+            "7d" => Some(10080),
+            "30d" => Some(43200),
+            _ => None,
+        };
+
+        match fetch_history_from_db(url, minutes, page, per_page).await {
+            Ok((trades, total_count)) => {
+                let total_pages = (total_count as f64 / per_page as f64).ceil() as i64;
+                let total_pages = total_pages.max(1);
+                return Json(json!({
+                    "trades": trades,
+                    "total": total_count,
+                    "page": page,
+                    "per_page": per_page,
+                    "total_pages": total_pages,
+                    "source": "postgres"
+                }));
+            }
+            Err(e) => {
+                tracing::warn!(err = %e, "get_history: DB query failed — falling back to memory");
+            }
+        }
+    }
+
+    // ── Fallback: in-memory trades ────────────────────────────────────────────
     let Some(ref paper) = state.paper else {
         return Json(json!({"error": "Paper mode not active"}));
     };
@@ -592,16 +633,29 @@ async fn get_history(
     let Ok(p) = paper.portfolio.try_lock() else {
         return Json(json!({"error": "Portfolio busy", "retry": true}));
     };
-    let per_page = params.per_page.unwrap_or(50).clamp(1, 5000);
-    let total = p.closed_trades.len();
-    let total_pages = total.div_ceil(per_page).max(1);
-    let page = params.page.unwrap_or(1).clamp(1, total_pages);
+
+    let cutoff = match range {
+        "24h" => Some(chrono::Local::now() - chrono::Duration::hours(24)),
+        "7d" => Some(chrono::Local::now() - chrono::Duration::days(7)),
+        "30d" => Some(chrono::Local::now() - chrono::Duration::days(30)),
+        _ => None,
+    };
+    let filtered: Vec<_> = p
+        .closed_trades
+        .iter()
+        .filter(|t| cutoff.map(|c| t.closed_at_wall >= c).unwrap_or(true))
+        .collect();
+
+    let total = filtered.len();
+    let total_pages = (total as f64 / per_page as f64).ceil() as usize;
+    let total_pages = total_pages.max(1);
+    let page = page.clamp(1, total_pages);
     let skip = (page - 1) * per_page;
 
-    // Serve newest trades first so page 1 always has the most recent results.
     let trades: Vec<ClosedTradeJson> = p
         .closed_trades
         .iter()
+        .filter(|t| cutoff.map(|c| t.closed_at_wall >= c).unwrap_or(true))
         .rev()
         .skip(skip)
         .take(per_page)
@@ -630,6 +684,8 @@ async fn get_history(
         "page": page,
         "per_page": per_page,
         "total_pages": total_pages,
+        "source": "memory",
+        "range": range,
     }))
 }
 
@@ -711,52 +767,18 @@ async fn get_all_orderbooks(State(state): State<AppState>) -> Json<serde_json::V
         .iter()
         .map(|token_id| {
             // Prefer discovery title, fallback to open-position map.
-            let market_title: Option<String> = state
-                .discovery_store
-                .as_ref()
-                .and_then(|store| {
-                    store
-                        .try_read()
-                        .ok()
-                        .and_then(|s| s.get(token_id).and_then(|m| m.title.clone()))
-                })
-                .or_else(|| title_map.get(token_id).cloned());
-            if let Some(ob) = state.book_store.get_book_snapshot(token_id) {
-                let bids: Vec<[f64; 2]> = ob
-                    .bids
-                    .iter()
-                    .rev()
-                    .take(15)
-                    .map(|(&p, &s)| [p as f64 / 1000.0, s as f64 / 1000.0])
-                    .collect();
-                let asks: Vec<[f64; 2]> = ob
-                    .asks
-                    .iter()
-                    .take(15)
-                    .map(|(&p, &s)| [p as f64 / 1000.0, s as f64 / 1000.0])
-                    .collect();
-                json!({
-                    "token_id": token_id,
-                    "market_title": market_title,
-                    "best_bid": ob.best_bid().map(|p| p as f64 / 1000.0),
-                    "best_ask": ob.best_ask().map(|p| p as f64 / 1000.0),
-                    "spread_bps": ob.spread_bps(),
-                    "bids": bids,
-                    "asks": asks,
-                })
-            } else {
-                json!({
-                    "token_id": token_id,
-                    "market_title": market_title,
-                    "best_bid": null,
-                    "best_ask": null,
-                    "spread_bps": null,
-                    "bids": [],
-                    "asks": [],
-                })
-            }
+            let market_title: Option<String> = title_map.get(token_id).cloned();
+            let ob = state.book_store.get_book_snapshot(token_id);
+            json!({
+                "token_id": token_id,
+                "title": market_title,
+                "best_bid": ob.as_ref().and_then(|o| o.best_bid()).map(|p| p as f64 / 1000.0),
+                "best_ask": ob.as_ref().and_then(|o| o.best_ask()).map(|p| p as f64 / 1000.0),
+                "spread_bps": ob.as_ref().and_then(|o| o.spread_bps()),
+            })
         })
         .collect();
+
     Json(json!({ "orderbooks": books }))
 }
 
@@ -1004,6 +1026,27 @@ async fn get_live_portfolio(State(state): State<AppState>) -> Json<serde_json::V
     };
     let failsafe = live.failsafe_metrics_snapshot();
     let pending_count = live.pending_orders_count().await;
+    let p = live.portfolio.lock().await;
+    let cash = p.cash_usdc;
+    let nav = p.nav();
+    let invested = p.total_invested();
+    let unrealized = p.unrealized_pnl();
+    let realized = p.realized_pnl();
+    let fees_paid = p.total_fees_paid_usdc;
+    let open_positions_count = p.positions.len();
+    drop(p);
+    let exchange_positions = match std::env::var("POLYMARKET_FUNDER_ADDRESS") {
+        Ok(user) => fetch_polymarket_positions_value(&user).await,
+        Err(_) => None,
+    };
+    let (exchange_position_value_usdc, exchange_positions_count, exchange_positions_preview) =
+        exchange_positions.unwrap_or((0.0, 0usize, Vec::new()));
+    let nav_with_exchange_positions = if exchange_positions_count > 0 {
+        cash + exchange_position_value_usdc
+    } else {
+        nav
+    };
+    let open_positions_count = open_positions_count.max(exchange_positions_count);
     let (daily_pnl, cb_tripped, max_daily_loss_pct, trading_enabled) =
         if let Some(ref risk) = state.risk {
             let r = risk.lock_or_recover();
@@ -1028,11 +1071,75 @@ async fn get_live_portfolio(State(state): State<AppState>) -> Json<serde_json::V
         "max_daily_loss_pct": max_daily_loss_pct,
         "circuit_breaker_tripped": cb_tripped,
         "trading_enabled": trading_enabled,
+        "accounting_source": "onchain_pusd_plus_polymarket_position_value",
+        "balance_source": "onchain_pusd_cash_plus_data_api_positions",
+        "confirmed_only": false,
+        "queued_orders_affect_nav": false,
+        "cash_usdc": cash,
+        "nav_usdc": nav_with_exchange_positions,
+        "invested_usdc": invested,
+        "unrealized_pnl_usdc": unrealized,
+        "realized_pnl_usdc": realized,
+        "fees_paid_usdc": fees_paid,
+        "open_positions_count": open_positions_count,
+        "exchange_position_value_usdc": exchange_position_value_usdc,
+        "exchange_positions_count": exchange_positions_count,
+        "exchange_positions_preview": exchange_positions_preview,
+        "emergency_stop_endpoint": "/api/emergency_stop",
         "heartbeat_ok": failsafe.heartbeat_ok_count,
         "heartbeat_fail": failsafe.heartbeat_fail_count,
         "trigger_count": failsafe.trigger_count,
         "uptime_secs": uptime_secs,
     }))
+}
+
+async fn fetch_polymarket_positions_value(
+    user: &str,
+) -> Option<(f64, usize, Vec<serde_json::Value>)> {
+    let url = format!("https://data-api.polymarket.com/positions?user={user}");
+    let resp = tokio::time::timeout(
+        std::time::Duration::from_millis(800),
+        reqwest::Client::new().get(url).send(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: serde_json::Value = resp.json().await.ok()?;
+    let positions: Vec<serde_json::Value> = if let Some(arr) = body.as_array() {
+        arr.clone()
+    } else {
+        body.get("data")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+    };
+    let value = positions
+        .iter()
+        .map(|p| {
+            p.get("currentValue")
+                .or_else(|| p.get("current_value"))
+                .or_else(|| p.get("value"))
+                .and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse::<f64>().ok()))
+                .unwrap_or(0.0)
+        })
+        .sum::<f64>();
+    let preview = positions
+        .iter()
+        .take(5)
+        .map(|p| {
+            json!({
+                "title": p.get("title").or_else(|| p.get("market")).or_else(|| p.get("eventTitle")).cloned(),
+                "outcome": p.get("outcome").cloned(),
+                "size": p.get("size").or_else(|| p.get("tokens")).or_else(|| p.get("quantity")).cloned(),
+                "current_value_usdc": p.get("currentValue").or_else(|| p.get("current_value")).or_else(|| p.get("value")).cloned(),
+                "cash_pnl_usdc": p.get("cashPnl").or_else(|| p.get("cash_pnl")).cloned(),
+            })
+        })
+        .collect::<Vec<_>>();
+    Some((value, positions.len(), preview))
 }
 
 async fn post_pause(
@@ -1045,6 +1152,43 @@ async fn post_pause(
         .unwrap_or(false);
     state.trading_paused.store(paused, Ordering::Relaxed);
     Json(json!({ "trading_paused": paused }))
+}
+
+async fn post_emergency_stop(State(state): State<AppState>) -> Json<serde_json::Value> {
+    state.trading_paused.store(true, Ordering::Relaxed);
+
+    let mut risk_disabled = false;
+    if let Some(ref risk) = state.risk {
+        let mut rm = risk.lock_or_recover();
+        rm.config_mut().trading_enabled = false;
+        risk_disabled = true;
+    }
+
+    crate::activity_log::push(
+        &state.activity_log,
+        crate::activity_log::EntryKind::Warn,
+        "EMERGENCY STOP: trading disabled; systemd hard-stop requested".to_string(),
+    );
+    tracing::error!("Emergency stop requested via API; stopping blink-engine.service");
+
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(75));
+        let _ = std::process::Command::new("/bin/systemctl")
+            .args(["stop", "--no-block", "blink-engine.service"])
+            .status();
+        let _ = std::process::Command::new("/bin/systemctl")
+            .args(["kill", "-s", "SIGKILL", "blink-engine.service"])
+            .status();
+    });
+
+    Json(json!({
+        "ok": true,
+        "trading_paused": true,
+        "risk_trading_enabled": false,
+        "risk_disabled": risk_disabled,
+        "service_stop_requested": true,
+        "hard_kill_signal": "SIGKILL",
+    }))
 }
 
 async fn post_strategy(
@@ -1179,6 +1323,45 @@ async fn post_update_config(
     let Some(ref risk) = state.risk else {
         return Json(json!({ "error": "Risk manager not available" }));
     };
+    let wants_trading_enabled = body
+        .get("trading_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let mut geoblock_status = None;
+    if wants_trading_enabled {
+        if !crate::geo_guard::guard_enabled() {
+            return Json(json!({
+                "ok": false,
+                "error": "geo_guard_disabled",
+                "message": "Refusing to enable live trading while BLINK_GEO_GUARD_ENABLED=false",
+            }));
+        }
+        match crate::geo_guard::check_geoblock().await {
+            Ok(status) if status.blocked => {
+                tracing::warn!(
+                    location = %status.location_label(),
+                    "Geo guard blocked attempt to enable live trading"
+                );
+                return Json(json!({
+                    "ok": false,
+                    "error": "geo_guard_blocked",
+                    "message": format!("Polymarket geoblock reports blocked location {}", status.location_label()),
+                    "geoblock": status.public_json(),
+                }));
+            }
+            Ok(status) => {
+                geoblock_status = Some(status.public_json());
+            }
+            Err(e) => {
+                tracing::warn!(error = ?e, "Geo guard could not verify eligibility");
+                return Json(json!({
+                    "ok": false,
+                    "error": "geo_guard_unverified",
+                    "message": format!("Could not verify Polymarket geoblock before enabling live trading: {e}"),
+                }));
+            }
+        }
+    }
     let mut rm = risk.lock_or_recover();
     let cfg = rm.config_mut();
     let mut changed = Vec::new();
@@ -1212,7 +1395,7 @@ async fn post_update_config(
     }
 
     tracing::warn!(fields = ?changed, "Risk config updated via API");
-    Json(json!({ "ok": true, "updated": changed }))
+    Json(json!({ "ok": true, "updated": changed, "geoblock": geoblock_status }))
 }
 
 async fn post_sell_position(
@@ -1389,14 +1572,16 @@ async fn build_snapshot(state: &AppState) -> Result<String, ()> {
     // Portfolio summary — read from the cache populated by the background
     // refresher task (which properly awaits the tokio Mutex every 2s).
     // This avoids try_lock failures when the signal loop holds the portfolio mutex.
-    if let Some(ref paper) = state.paper {
+    if state.paper.is_some() || state.live_engine.is_some() {
         if let Ok(cached) = state.portfolio_cache.read() {
             if let Some(ref portfolio_json) = *cached {
                 snapshot["portfolio"] = portfolio_json.clone();
             }
         }
-        // Engine-level metrics available without locking portfolio.
-        snapshot["vol_bps"] = json!(paper.vol_bps());
+        if let Some(ref paper) = state.paper {
+            // Engine-level metrics available without locking portfolio.
+            snapshot["vol_bps"] = json!(paper.vol_bps());
+        }
     }
 
     // Risk status
@@ -1414,13 +1599,13 @@ async fn build_snapshot(state: &AppState) -> Result<String, ()> {
         });
     }
 
-    // Recent activity (last 5 entries)
+    // Recent activity (last 50 entries)
     {
         let log = state.activity_log.lock().unwrap_or_else(|e| e.into_inner());
         let recent: Vec<serde_json::Value> = log
             .iter()
             .rev()
-            .take(5)
+            .take(50)
             .map(|e| {
                 json!({
                     "timestamp": e.timestamp,
@@ -1623,164 +1808,6 @@ async fn get_fill_window(State(state): State<AppState>) -> Json<serde_json::Valu
             "elapsed_secs": s.elapsed.as_secs_f64(),
             "countdown_secs": s.countdown.as_secs_f64(),
         })),
-    }
-}
-
-// ─── Bullpen API endpoints ──────────────────────────────────────────────────
-
-async fn get_bullpen_health(State(state): State<AppState>) -> impl IntoResponse {
-    if let Some(ref bridge) = state.bullpen {
-        let health = bridge.health().await;
-        Json(json!({
-            "enabled": true,
-            "authenticated": health.authenticated,
-            "consecutive_failures": health.consecutive_failures,
-            "total_calls": health.total_calls,
-            "total_failures": health.total_failures,
-            "avg_latency_ms": health.avg_latency_ms,
-        }))
-    } else {
-        Json(json!({ "enabled": false }))
-    }
-}
-
-async fn get_bullpen_discovery(State(state): State<AppState>) -> impl IntoResponse {
-    if let Some(ref store) = state.discovery_store {
-        let s = store.read().await;
-        let summary = s.summary();
-        let mut markets: Vec<serde_json::Value> = s
-            .all_markets()
-            .iter()
-            .map(|m| {
-                json!({
-                    "token_id": m.token_id,
-                    "title": m.title,
-                    "lenses": m.discovery_lenses,
-                    "viability_score": m.viability_score,
-                    "conviction_boost": m.conviction_boost,
-                    "smart_money_interest": m.smart_money_interest,
-                    "seen_count": m.seen_count,
-                })
-            })
-            .collect();
-        // Sort by viability descending for consistent display
-        markets.sort_by(|a, b| {
-            let va = a["viability_score"].as_f64().unwrap_or(0.0);
-            let vb = b["viability_score"].as_f64().unwrap_or(0.0);
-            vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        Json(json!({
-            "enabled": true,
-            "total_markets": summary.total_markets,
-            "smart_money_markets": summary.smart_money_markets,
-            "avg_viability": summary.avg_viability,
-            "scan_count": summary.scan_count,
-            "last_scan_ago_secs": summary.last_scan_ago_secs,
-            "markets": markets,
-        }))
-        .into_response()
-    } else {
-        Json(json!({ "enabled": false })).into_response()
-    }
-}
-
-async fn get_bullpen_convergence(State(state): State<AppState>) -> impl IntoResponse {
-    if let Some(ref store) = state.convergence_store {
-        let s = store.read().await;
-        let summary = s.summary();
-        let signals: Vec<serde_json::Value> = s
-            .active_signals
-            .iter()
-            .map(|sig| {
-                json!({
-                    "market_title": sig.market,
-                    "convergence_score": sig.convergence_score,
-                    "net_direction": sig.net_direction,
-                    "total_usd": sig.total_usd,
-                    "wallet_count": sig.wallets.len(),
-                })
-            })
-            .collect();
-        Json(json!({
-            "enabled": true,
-            "active_signals": summary.active_signals,
-            "tracked_markets": summary.tracked_markets,
-            "signals": signals,
-        }))
-    } else {
-        Json(json!({ "enabled": false }))
-    }
-}
-
-async fn get_bullpen_short_markets(State(state): State<AppState>) -> impl IntoResponse {
-    let max_hours: u64 = std::env::var("BULLPEN_DISCOVER_MAX_RESOLVE_HOURS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(6);
-
-    if let Some(ref store) = state.discovery_store {
-        let s = store.read().await;
-        let now_unix = chrono::Utc::now().timestamp();
-        let cutoff = now_unix + max_hours as i64 * 3600;
-
-        // Get convergence signals for direction enrichment (if available).
-        let convergence: Vec<crate::bullpen_smart_money::ConvergenceSignal> =
-            if let Some(ref conv) = state.convergence_store {
-                conv.read().await.active_signals.clone()
-            } else {
-                vec![]
-            };
-
-        let markets: Vec<serde_json::Value> = s
-            .short_term_markets(max_hours)
-            .iter()
-            .map(|m| {
-                let secs_to_close = m.ends_at_ts.map(|ts| ts - now_unix);
-
-                // Look up any SM convergence signal for this market.
-                let conv = m.title.as_deref().and_then(|t| {
-                    let tl = t.to_lowercase();
-                    convergence.iter().find(|c| {
-                        let sl = c.market.to_lowercase();
-                        sl.contains(&tl) || tl.contains(&sl)
-                    })
-                });
-
-                json!({
-                    "token_id": m.token_id,
-                    "title": m.title,
-                    "category": m.category,
-                    "ends_at_ts": m.ends_at_ts,
-                    "secs_to_close": secs_to_close,
-                    "viability_score": m.viability_score,
-                    "smart_money_interest": m.smart_money_interest,
-                    "lenses": m.discovery_lenses,
-                    // SM enrichment — None if no convergence signal found.
-                    "sm_direction": conv.map(|c| &c.net_direction),
-                    "sm_convergence_score": conv.map(|c| c.convergence_score),
-                    "sm_total_usd": conv.map(|c| c.total_usd),
-                })
-            })
-            .collect();
-
-        // Sort by time-to-close ascending (most urgent first).
-        let mut markets = markets;
-        markets.sort_by(|a, b| {
-            let ta = a["secs_to_close"].as_i64().unwrap_or(i64::MAX);
-            let tb = b["secs_to_close"].as_i64().unwrap_or(i64::MAX);
-            ta.cmp(&tb)
-        });
-
-        Json(json!({
-            "enabled": true,
-            "max_hours": max_hours,
-            "cutoff_unix": cutoff,
-            "count": markets.len(),
-            "markets": markets,
-        }))
-        .into_response()
-    } else {
-        Json(json!({ "enabled": false, "reason": "Bullpen discovery not running" })).into_response()
     }
 }
 
@@ -2178,10 +2205,77 @@ struct EquityPoint {
     nav_usdc: f64,
 }
 
-/// GET /api/analytics/equity?range=30m|1h|6h|24h
+async fn fetch_history_from_db(
+    url: &str,
+    minutes: Option<u64>,
+    page: usize,
+    per_page: usize,
+) -> Result<(Vec<ClosedTradeJson>, i64), anyhow::Error> {
+    let connector = TlsConnector::builder()
+        .danger_accept_invalid_certs(true)
+        .build()?;
+    let connector = MakeTlsConnector::new(connector);
+
+    let (client, connection) = tokio_postgres::connect(url, connector).await?;
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            tracing::error!("get_history DB connection error: {}", e);
+        }
+    });
+
+    let offset = (page.saturating_sub(1) * per_page) as i64;
+    let limit = per_page as i64;
+
+    let mut sql = "SELECT * FROM blink.closed_trades_full".to_string();
+    let mut count_sql = "SELECT COUNT(*) FROM blink.closed_trades_full".to_string();
+
+    if let Some(m) = minutes {
+        let cutoff_ms = postgres_logger::now_ms().saturating_sub(m * 60 * 1_000);
+        sql.push_str(&format!(" WHERE timestamp_ms >= {}", cutoff_ms));
+        count_sql.push_str(&format!(" WHERE timestamp_ms >= {}", cutoff_ms));
+    }
+
+    sql.push_str(" ORDER BY timestamp_ms DESC LIMIT $1 OFFSET $2");
+
+    let total_count: i64 = client.query_one(&count_sql, &[]).await?.get(0);
+    let rows = client.query(&sql, &[&limit, &offset]).await?;
+
+    let trades = rows
+        .iter()
+        .map(|row| {
+            let ts_ms: i64 = row.get("timestamp_ms");
+            let dur: i64 = row.get("duration_secs");
+            let closed_at = chrono::DateTime::from_timestamp_millis(ts_ms).unwrap_or_default();
+            let opened_at =
+                chrono::DateTime::from_timestamp_millis(ts_ms - (dur * 1000)).unwrap_or_default();
+
+            ClosedTradeJson {
+                token_id: row.get("token_id"),
+                market_title: row.get("market_title"),
+                side: row.get("side"),
+                entry_price: row.get("entry_price"),
+                exit_price: row.get("exit_price"),
+                shares: row.get("shares"),
+                realized_pnl: row.get("realized_pnl"),
+                fees_paid_usdc: row.get("fees_paid_usdc"),
+                reason: row.get("reason"),
+                opened_at: opened_at.to_rfc3339(),
+                closed_at: closed_at.to_rfc3339(),
+                duration_secs: dur as u64,
+                slippage_bps: 0.0, // Not stored in DB atm
+                event_start_time: None,
+                event_end_time: None,
+            }
+        })
+        .collect();
+
+    Ok((trades, total_count))
+}
+
+/// GET /api/analytics/equity?range=30m|1h|6h|24h|7d|30d
 ///
 /// Returns the NAV curve for the requested time window.
-/// Queries ClickHouse when available; falls back to the in-memory equity curve.
+/// Queries ClickHouse/Postgres when available; falls back to the in-memory equity curve.
 async fn get_analytics_equity(
     Query(params): Query<EquityRangeParams>,
     State(state): State<AppState>,
@@ -2191,51 +2285,27 @@ async fn get_analytics_equity(
         "1h" => 60,
         "6h" => 360,
         "24h" => 1440,
+        "7d" => 10080,
+        "30d" => 43200,
         _ => 30,
     };
 
-    // ── Try ClickHouse first ──────────────────────────────────────────────────
+    // ── Attempt Database Query (Postgres) ─────────────────────────────────────
     if let Some(ref url) = state.clickhouse_url {
-        let client = clickhouse::Client::default().with_url(url);
-        let now_ms = clickhouse_logger::now_ms();
-        let cutoff_ms = now_ms.saturating_sub(minutes * 60 * 1_000);
+        let cutoff_ms = postgres_logger::now_ms().saturating_sub(minutes * 60 * 1_000);
 
-        #[derive(clickhouse::Row, serde::Deserialize)]
-        struct ChRow {
-            timestamp_ms: u64,
-            nav_usdc: f64,
-        }
-
-        match client
-            .query(
-                "SELECT timestamp_ms, nav_usdc \
-                    FROM blink.equity_snapshots \
-                    WHERE timestamp_ms >= ? \
-                    ORDER BY timestamp_ms",
-            )
-            .bind(cutoff_ms)
-            .fetch::<ChRow>()
-        {
-            Ok(mut cursor) => {
-                let mut points: Vec<EquityPoint> = Vec::new();
-                loop {
-                    match cursor.next().await {
-                        Ok(Some(row)) => points.push(EquityPoint {
-                            timestamp_ms: row.timestamp_ms,
-                            nav_usdc: row.nav_usdc,
-                        }),
-                        Ok(None) => break,
-                        Err(_) => break,
-                    }
-                }
-                if !points.is_empty() {
-                    return Json(
-                        json!({ "source": "clickhouse", "range": range, "points": points }),
-                    )
-                    .into_response();
-                }
+        // Connect and query Postgres
+        let points = match query_postgres_equity(url, cutoff_ms).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(err = %e, "get_analytics_equity: DB query failed — falling back to memory");
+                Vec::new()
             }
-            Err(_) => {}
+        };
+
+        if !points.is_empty() {
+            return Json(json!({ "source": "postgres", "range": range, "points": points }))
+                .into_response();
         }
     }
 
@@ -2253,7 +2323,7 @@ async fn get_analytics_equity(
                     .into_response();
             }
         };
-        let cutoff_ms = clickhouse_logger::now_ms().saturating_sub(minutes * 60 * 1_000);
+        let cutoff_ms = postgres_logger::now_ms().saturating_sub(minutes * 60 * 1_000);
         let points: Vec<EquityPoint> = p
             .equity_curve
             .iter()
@@ -2270,6 +2340,132 @@ async fn get_analytics_equity(
 
     let empty: Vec<EquityPoint> = Vec::new();
     Json(json!({ "source": "none", "range": range, "points": empty })).into_response()
+}
+
+/// Connects to Postgres and fetches equity points with downsampling based on the requested window.
+async fn query_postgres_equity(
+    url: &str,
+    cutoff_ms: u64,
+) -> Result<Vec<EquityPoint>, anyhow::Error> {
+    let connector = TlsConnector::builder()
+        .danger_accept_invalid_certs(true)
+        .build()?;
+    let connector = MakeTlsConnector::new(connector);
+
+    let (client, connection) = tokio_postgres::connect(url, connector).await?;
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            tracing::error!("get_analytics_equity DB connection error: {}", e);
+        }
+    });
+
+    // Determine sampling interval in ms to prevent blowing up the UI.
+    // > 24h -> 10m intervals
+    // > 6h  -> 1m intervals
+    // else  -> 10s intervals (engine's default sampling)
+    let total_window_ms = postgres_logger::now_ms().saturating_sub(cutoff_ms);
+    let sample_ms: i64 = if total_window_ms > 48 * 3600 * 1000 {
+        10 * 60 * 1000 // 10 minutes
+    } else if total_window_ms > 6 * 3600 * 1000 {
+        60 * 1000 // 1 minute
+    } else {
+        10 * 1000 // 10 seconds
+    };
+
+    // Use DISTINCT ON to get one point per sample bucket.
+    let rows = client
+        .query(
+            "SELECT DISTINCT ON (timestamp_ms / $1) timestamp_ms, nav_usdc 
+             FROM blink.equity_snapshots 
+             WHERE timestamp_ms > $2 
+             ORDER BY timestamp_ms / $1, timestamp_ms ASC",
+            &[&sample_ms, &(cutoff_ms as i64)],
+        )
+        .await?;
+
+    let points = rows
+        .iter()
+        .map(|row| {
+            let ts: i64 = row.get(0);
+            let nav: f64 = row.get(1);
+            EquityPoint {
+                timestamp_ms: ts as u64,
+                nav_usdc: nav,
+            }
+        })
+        .collect();
+
+    Ok(points)
+}
+
+#[derive(Serialize)]
+struct QuantMetrics {
+    total_trades: i64,
+    wins: i64,
+    losses: i64,
+    win_rate_pct: f64,
+    profit_factor: f64,
+    sharpe_ratio: f64,
+    current_drawdown_pct: f64,
+    net_pnl: f64,
+}
+
+async fn get_analytics_quant(State(state): State<AppState>) -> impl IntoResponse {
+    let Some(ref url) = state.clickhouse_url else {
+        return (StatusCode::NOT_IMPLEMENTED, "Postgres not configured").into_response();
+    };
+
+    let connector = match TlsConnector::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+    {
+        Ok(c) => MakeTlsConnector::new(c),
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "TLS error").into_response(),
+    };
+
+    let (client, connection) = match tokio_postgres::connect(url, connector).await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DB connection error: {e}"),
+            )
+                .into_response()
+        }
+    };
+
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            tracing::error!("get_analytics_quant DB connection error: {}", e);
+        }
+    });
+
+    let row = match client
+        .query_one("SELECT * FROM blink.v_quant_metrics", &[])
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Query error: {e}"),
+            )
+                .into_response()
+        }
+    };
+
+    let metrics = QuantMetrics {
+        total_trades: row.get("total_trades"),
+        wins: row.get("wins"),
+        losses: row.get("losses"),
+        win_rate_pct: row.get("win_rate_pct"),
+        profit_factor: row.get("profit_factor"),
+        sharpe_ratio: row.get("sharpe_ratio"),
+        current_drawdown_pct: row.get("current_drawdown_pct"),
+        net_pnl: row.get("net_pnl"),
+    };
+
+    Json(metrics).into_response()
 }
 
 // ─── Alpha status ─────────────────────────────────────────────────────────────
@@ -2407,8 +2603,7 @@ async fn get_alpha_status(State(state): State<AppState>) -> impl IntoResponse {
         "performance": {
             "win_count": a.win_count,
             "loss_count": a.loss_count,
-            "win_rate_pct": a.win_rate_pct(),
-            "avg_pnl_per_trade": a.avg_pnl_per_trade(),
+            "win_rate_pct": a.win_rate_pct(), "avg_pnl_per_trade": a.avg_pnl_per_trade(),
             "best_trade_pnl": a.best_trade_pnl,
             "worst_trade_pnl": a.worst_trade_pnl,
             "total_fees_paid": a.total_fees_paid,
@@ -2565,9 +2760,6 @@ mod tests {
             started_at: Arc::new(std::time::Instant::now()),
             provider: None,
             live_engine: None,
-            bullpen: None,
-            discovery_store: None,
-            convergence_store: None,
             slug_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
             portfolio_cache: Arc::new(std::sync::RwLock::new(None)),
             clickhouse_url: None,

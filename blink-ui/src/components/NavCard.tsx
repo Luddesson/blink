@@ -28,17 +28,26 @@ interface Props {
   portfolio?: PortfolioSummary
 }
 
-type TimeRange = '30m' | '1h' | '6h' | '24h'
-const RANGES: TimeRange[] = ['30m', '1h', '6h', '24h']
+type TimeRange = '30m' | '1h' | '6h' | '24h' | '7d' | '30d'
+const RANGES: TimeRange[] = ['30m', '1h', '6h', '24h', '7d', '30d']
 
 const WINDOW_MS: Record<TimeRange, number> = {
   '30m': 30 * 60 * 1000,
   '1h':  60 * 60 * 1000,
   '6h':  6 * 60 * 60 * 1000,
   '24h': 24 * 60 * 60 * 1000,
+  '7d':  7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
 }
 
 interface FetchedPoint { timestamp_ms: number; nav_usdc: number }
+interface QuantMetrics {
+  win_rate_pct: number
+  profit_factor: number
+  sharpe_ratio: number
+  current_drawdown_pct: number
+  total_trades: number
+}
 
 function Stat({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
   return (
@@ -97,19 +106,29 @@ export default function NavCard({
 
   const [range, setRange] = useState<TimeRange>('30m')
   const [fetchedPoints, setFetchedPoints] = useState<FetchedPoint[]>([])
+  const [quant, setQuant] = useState<QuantMetrics | null>(null)
 
   useEffect(() => {
     let cancelled = false
     const load = async () => {
       try {
-        const r = await fetch(`http://127.0.0.1:3030/api/analytics/equity?range=${range}`)
+        const r = await fetch(`/api/analytics/equity?range=${range}`)
         if (!r.ok) return
         const data = await r.json() as { points: FetchedPoint[] }
         if (!cancelled && Array.isArray(data.points)) setFetchedPoints(data.points)
       } catch { /* engine may not be running */ }
     }
+    const loadQuant = async () => {
+      try {
+        const r = await fetch(`/api/analytics/quant`)
+        if (!r.ok) return
+        const data = await r.json() as QuantMetrics
+        if (!cancelled) setQuant(data)
+      } catch { }
+    }
     void load()
-    const id = setInterval(load, 30_000)
+    void loadQuant()
+    const id = setInterval(() => { void load(); void loadQuant(); }, 30_000)
     return () => { cancelled = true; clearInterval(id) }
   }, [range])
 
@@ -138,18 +157,33 @@ export default function NavCard({
   }
   const chartData = filteredData
 
-  const TICK_COUNT = 6
-  const tickInterval = chartWindowMs / TICK_COUNT
+  // Professional: Adjust X-domain to stretch data to fill the graph if we have limited history
+  // but stay within the requested window.
+  const dataMinT = chartData.length > 0 ? Math.min(...chartData.map(d => d.t)) : windowStart
+  const dataMaxT = chartData.length > 0 ? Math.max(...chartData.map(d => d.t)) : nowMs
+
+  // If the user selects a large range but data only exists for a small part, 
+  // we zoom in on the data to "fill the graph" as requested.
+  const xDomain = [dataMinT, dataMaxT]
+
+  const TICK_COUNT = 5
+  const tickInterval = (dataMaxT - dataMinT) / TICK_COUNT
   const xTicks: number[] = Array.from({ length: TICK_COUNT + 1 }, (_, i) =>
-    windowStart + i * tickInterval
+    dataMinT + i * tickInterval
   )
 
-  const fmtTickTime = (ms: number) =>
-    new Date(ms).toLocaleTimeString('sv-SE', {
-      timeZone: 'Europe/Stockholm',
+  const fmtTickTime = (ms: number) => {
+    const date = new Date(ms)
+    // If range is large, show date. If we are zoomed in (short duration), show time.
+    const duration = dataMaxT - dataMinT
+    if (duration > 24 * 3600 * 1000) {
+      return `${date.getDate()}/${date.getMonth() + 1}`
+    }
+    return date.toLocaleTimeString('sv-SE', {
       hour: '2-digit',
       minute: '2-digit',
     })
+  }
 
   const uptimeStr = localUptime < 3600
     ? `${Math.floor(localUptime / 60)}m ${localUptime % 60}s`
@@ -261,19 +295,19 @@ export default function NavCard({
                   </linearGradient>
                 </defs>
                 <YAxis
-                  domain={['dataMin - 0.05', 'dataMax + 0.05']}
-                  tickFormatter={(v: number) => (v >= 0 ? `+${v.toFixed(2)}` : v.toFixed(2))}
+                  domain={['dataMin - 0.1', 'dataMax + 0.1']}
+                  tickFormatter={(v: number) => (v >= 0 ? `+$${v.toFixed(2)}` : `-$${Math.abs(v).toFixed(2)}`)}
                   tick={{ fill: 'oklch(0.55 0.015 260)', fontSize: 9 }}
                   axisLine={false}
                   tickLine={false}
-                  width={42}
+                  width={50}
                 />
                 <XAxis
                   dataKey="t"
                   type="number"
                   scale="time"
-                  domain={[windowStart, nowMs]}
-                  allowDataOverflow={true}
+                  domain={xDomain}
+                  allowDataOverflow={false}
                   ticks={xTicks}
                   tickFormatter={fmtTickTime}
                   tick={{ fill: 'oklch(0.55 0.015 260)', fontSize: 9 }}
@@ -285,27 +319,28 @@ export default function NavCard({
                 <Tooltip
                   contentStyle={{
                     background: 'oklch(0.17 0.015 260 / 0.95)',
-                    backdropFilter: 'blur(12px)',
+                    backdropFilter: 'blur(16px)',
                     border: '1px solid oklch(0.45 0.02 260 / 0.6)',
-                    borderRadius: 8,
-                    fontSize: 11,
-                    boxShadow: '0 18px 40px -12px oklch(0 0 0 / 0.6)',
+                    borderRadius: 12,
+                    fontSize: 12,
+                    boxShadow: '0 20px 50px -12px oklch(0 0 0 / 0.8)',
                   }}
-                  cursor={{ stroke: 'oklch(0.75 0.18 170 / 0.35)', strokeWidth: 1 }}
+                  cursor={{ stroke: 'oklch(0.75 0.18 170 / 0.35)', strokeWidth: 1.5 }}
                   labelFormatter={(label) => fmtChartTime(Number(label))}
                   formatter={(value) => {
                     const v = Number(value ?? 0)
-                    return [`${v >= 0 ? '+' : ''}$${Math.abs(v).toFixed(2)}`, 'P&L']
+                    return [`${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`, 'PnL']
                   }}
                 />
                 <Area
                   type="monotone"
                   dataKey="v"
                   stroke={strokeColor}
-                  strokeWidth={2.25}
+                  strokeWidth={3}
                   fill="url(#navGrad)"
                   dot={false}
                   isAnimationActive={false}
+                  activeDot={{ r: 4, strokeWidth: 0, fill: strokeColor }}
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -318,13 +353,12 @@ export default function NavCard({
 
         {/* Stats strip */}
         {portfolio && (
-          <div className="grid grid-cols-6 gap-1 mt-4 pt-4 border-t border-[color:var(--color-border-subtle)]">
-            <Stat label="Cash" value={`$${fmt(portfolio.cash_usdc, 0)}`} />
-            <Stat label="Invested" value={`$${fmt(portfolio.invested_usdc, 0)}`} />
-            <Stat label="Fees" value={feesPaid > 0 ? `−$${fmt(feesPaid)}` : '$0.00'} muted={feesPaid === 0} />
-            <Stat label="Fill %" value={`${fmt(portfolio.fill_rate_pct, 1)}%`} />
-            <Stat label="Win %" value={`${fmt(portfolio.win_rate_pct, 1)}%`} />
-            <Stat label="Trades" value={String(portfolio.closed_trades_count ?? 0)} />
+          <div className="grid grid-cols-5 gap-1 mt-4 pt-4 border-t border-[color:var(--color-border-subtle)]">
+            <Stat label="Win Rate" value={`${quant?.win_rate_pct?.toFixed(1) ?? '0.0'}%`} />
+            <Stat label="Sharpe" value={quant?.sharpe_ratio?.toFixed(2) ?? '0.00'} />
+            <Stat label="Drawdown" value={`${quant?.current_drawdown_pct?.toFixed(1) ?? '0.00'}%`} />
+            <Stat label="Profit Factor" value={quant?.profit_factor?.toFixed(2) ?? '1.00'} />
+            <Stat label="Trades" value={String(quant?.total_trades ?? 0)} />
           </div>
         )}
       </div>

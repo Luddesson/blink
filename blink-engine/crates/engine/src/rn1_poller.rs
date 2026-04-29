@@ -151,7 +151,7 @@ pub async fn run_rn1_poller(
     _config: Arc<Config>,
     wallet: String,
     wallet_weight: f64,
-    signal_tx: tokio::sync::mpsc::Sender<RN1Signal>,
+    signal_tx: crossbeam_channel::Sender<RN1Signal>,
     activity: Option<ActivityLog>,
     diagnostics: Rn1PollDiagnosticsHandle,
 ) {
@@ -335,12 +335,13 @@ pub async fn run_rn1_poller(
                         "🚨 RN1 trade #{total_signals} detected"
                     );
                     if let Some(ref log) = activity {
-                        log_push(log, EntryKind::Engine,
+                        log_push(log, EntryKind::Signal,
                             format!("🚨 RN1 {side} {outcome} @ {price:.2} ×{size:.0} — {title} (#{total_signals})"));
                     }
 
-                    if let Err(e) = signal_tx.try_send(signal) {
-                        warn!(error = %e, "signal channel full — RN1 signal dropped");
+                    if let Err(e) = signal_tx.send(signal) {
+                        warn!(error = %e, "signal channel closed — RN1 poller exiting");
+                        break;
                     }
                 }
 
@@ -625,9 +626,7 @@ pub async fn prefetch_rn1_active_markets(wallet: &str) -> Vec<String> {
         }
     };
 
-    let url = format!(
-        "{DATA_API}/activity?user={wallet}&limit={limit}"
-    );
+    let url = format!("{DATA_API}/activity?user={wallet}&limit={limit}");
 
     let response = match client.get(&url).send().await {
         Ok(r) => r,

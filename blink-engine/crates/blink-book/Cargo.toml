@@ -1,0 +1,22 @@
+[package]
+name = "blink-book"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Wait-free book & position snapshot stores (ArcSwap) for the Blink HFT hot path."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+arc-swap         = "1"
+dashmap          = { workspace = true }
+blink-types      = { path = "../blink-types", default-features = false }
+blink-timestamps = { path = "../blink-timestamps" }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name    = "bookstore"
+harness = false

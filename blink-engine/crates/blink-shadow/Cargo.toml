@@ -1,0 +1,32 @@
+[package]
+name        = "blink-shadow"
+version     = "0.1.0"
+edition     = "2021"
+license     = "proprietary"
+publish     = false
+description = "Phase 0 parity-replay harness: runs a legacy and a v2 decision kernel over captured inputs and records divergences."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "shadow-selftest"
+path = "src/bin/shadow-selftest.rs"
+
+[[bin]]
+name = "shadow-replay"
+path = "src/bin/shadow-replay.rs"
+
+[[bin]]
+name = "blink-shadow-gate"
+path = "src/bin/blink-shadow-gate.rs"
+
+[dependencies]
+blink-types      = { path = "../blink-types" }
+blink-timestamps = { path = "../blink-timestamps", features = ["serde", "fallback-instant"] }
+blink-rings      = { path = "../blink-rings" }
+serde            = { workspace = true }
+serde_json       = { workspace = true }
+sha3             = { workspace = true }
+chrono           = { workspace = true }
+hex              = "0.4"

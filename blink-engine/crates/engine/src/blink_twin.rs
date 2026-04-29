@@ -202,8 +202,8 @@ impl BlinkTwin {
         };
 
         // 4. Adversarial Fill Window Check
-        let twin_drift_threshold =
-            drift_threshold_for_title(signal.market_title.as_deref()) * current_cfg.drift_multiplier;
+        let twin_drift_threshold = drift_threshold_for_title(signal.market_title.as_deref())
+            * current_cfg.drift_multiplier;
 
         let filled = self
             .check_fill_window_adversarial(&signal.token_id, entry_price, twin_drift_threshold)

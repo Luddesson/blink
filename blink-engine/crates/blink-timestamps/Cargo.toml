@@ -1,0 +1,29 @@
+[package]
+name    = "blink-timestamps"
+version = "0.1.0"
+edition = "2021"
+license = "proprietary"
+
+description = "High-resolution monotonic timestamps (TSC-calibrated) for the Blink hot path."
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+tracing = { workspace = true }
+num_cpus = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+serde_json = "1"
+
+[features]
+default = []
+# Adds `Serialize`/`Deserialize` derives to public types. Used by
+# `blink-types` and the decision journal. Kept off by default so the
+# bench / embedded consumers don't pay the monomorphisation cost.
+serde = ["dep:serde"]
+# When enabled, falls back to `std::time::Instant` instead of rdtsc. Useful
+# on CI machines that may not expose invariant TSC, or for unit tests that
+# want deterministic behaviour.
+fallback-instant = []

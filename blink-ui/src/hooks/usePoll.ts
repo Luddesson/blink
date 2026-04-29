@@ -4,6 +4,7 @@ export function usePoll<T>(
   fetchFn: () => Promise<T>,
   intervalMs: number,
   enabled = true,
+  deps: any[] = [],
 ): { data: T | null; loading: boolean; error: string | null } {
   const [data, setData] = useState<T | null>(null)
   const [loading, setLoading] = useState(true)
@@ -22,12 +23,12 @@ export function usePoll<T>(
     let timer: ReturnType<typeof setTimeout>
 
     const run = async () => {
+      if (mountedRef.current) setLoading(true)
       try {
         const result = await fetchFnRef.current()
         if (mountedRef.current) { setData(result); setError(null) }
       } catch (e) {
         if (mountedRef.current) setError(String(e))
-        // keep stale data on error — don't reset to null
       } finally {
         if (mountedRef.current) {
           setLoading(false)
@@ -41,7 +42,7 @@ export function usePoll<T>(
       mountedRef.current = false
       clearTimeout(timer)
     }
-  }, [intervalMs, enabled])
+  }, [intervalMs, enabled, ...deps])
 
   return { data, loading, error }
 }

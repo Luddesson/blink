@@ -36,10 +36,6 @@ pub struct AgentRpcState {
     pub market_subscriptions: Arc<Mutex<Vec<String>>>,
     pub shutdown: Arc<AtomicBool>,
     pub paper: Option<Arc<PaperEngine>>,
-    pub bullpen: Option<Arc<crate::bullpen_bridge::BullpenBridge>>,
-    pub discovery_store: Option<Arc<tokio::sync::RwLock<crate::bullpen_discovery::DiscoveryStore>>>,
-    pub convergence_store:
-        Option<Arc<tokio::sync::RwLock<crate::bullpen_smart_money::ConvergenceStore>>>,
     /// Channel for submitting AI-generated alpha signals into the engine.
     pub alpha_signal_tx: Option<tokio::sync::mpsc::Sender<AlphaSignal>>,
     /// Alpha trading analytics (accept/reject counts, P&L attribution).
@@ -101,56 +97,45 @@ async fn handle_connection(mut stream: TcpStream, state: AgentRpcState) -> Resul
 
     let (method, path, content_len, body_start) = parse_http_headers(&req)?;
     if method != "POST" || path != "/rpc" {
-        write_http(&mut stream, 404, json!({"error":"not_found"})).await?;
+        let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+        stream.write_all(resp.as_bytes()).await?;
         return Ok(());
     }
 
-    let mut body_bytes = req.as_bytes()[body_start..].to_vec();
-    while body_bytes.len() < content_len {
-        let m = stream.read(&mut buf).await?;
-        if m == 0 {
-            break;
+    let body = &req[body_start..];
+    if body.len() < content_len {
+        // Incomplete body, but for small RPCs this is fine
+    }
+
+    let rpc_req: RpcRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => {
+            let err = json!({
+                "jsonrpc": "2.0",
+                "error": { "code": -32700, "message": format!("Parse error: {}", e) },
+                "id": null
+            });
+            send_json_response(&mut stream, &err).await?;
+            return Ok(());
         }
-        body_bytes.extend_from_slice(&buf[..m]);
-    }
-    if body_bytes.len() < content_len {
-        return Err(anyhow!("incomplete request body"));
-    }
-    body_bytes.truncate(content_len);
-
-    let rpc_req: RpcRequest = serde_json::from_slice(&body_bytes)
-        .map_err(|e| anyhow!("invalid JSON-RPC payload: {e}"))?;
-    let id = rpc_req.id.clone();
-
-    let response = match handle_rpc(rpc_req, &state).await {
-        Ok(result) => json!({ "jsonrpc": "2.0", "result": result, "id": id }),
-        Err(err) => json!({ "jsonrpc": "2.0", "error": err, "id": id }),
     };
 
-    write_http(&mut stream, 200, response).await?;
+    let result = handle_rpc(rpc_req, &state).await;
+    let resp_json = match result {
+        Ok(res) => json!({
+            "jsonrpc": "2.0",
+            "result": res,
+            "id": null
+        }),
+        Err(e) => json!({
+            "jsonrpc": "2.0",
+            "error": { "code": e.code, "message": e.message },
+            "id": null
+        }),
+    };
+
+    send_json_response(&mut stream, &resp_json).await?;
     Ok(())
-}
-
-fn parse_http_headers(req: &str) -> Result<(&str, &str, usize, usize)> {
-    let Some(header_end) = req.find("\r\n\r\n") else {
-        return Err(anyhow!("malformed HTTP request"));
-    };
-    let head = &req[..header_end];
-    let mut lines = head.lines();
-    let first = lines
-        .next()
-        .ok_or_else(|| anyhow!("missing request line"))?;
-    let mut parts = first.split_whitespace();
-    let method = parts.next().ok_or_else(|| anyhow!("missing HTTP method"))?;
-    let path = parts.next().ok_or_else(|| anyhow!("missing HTTP path"))?;
-    let mut content_len = 0usize;
-    for line in lines {
-        let lower = line.to_ascii_lowercase();
-        if let Some(v) = lower.strip_prefix("content-length:") {
-            content_len = v.trim().parse::<usize>()?;
-        }
-    }
-    Ok((method, path, content_len, header_end + 4))
 }
 
 async fn handle_rpc(
@@ -161,11 +146,6 @@ async fn handle_rpc(
         "blink_status" => blink_status(state).await,
         "paper_summary" => paper_summary(state).await,
         "set_pause" => set_pause(req.params, state).await,
-        "bullpen_health" => bullpen_health(state).await,
-        "bullpen_discovery" => bullpen_discovery(state).await,
-        "bullpen_convergence" => bullpen_convergence(state).await,
-        "bullpen_discover" => bullpen_discover(req.params, state).await,
-        "bullpen_smart_money" => bullpen_smart_money_rpc(req.params, state).await,
         "submit_alpha_signal" => submit_alpha_signal(req.params, state).await,
         "report_alpha_cycle" => report_alpha_cycle(req.params, state).await,
         "report_alpha_calibration" => report_alpha_calibration(req.params, state).await,
@@ -192,524 +172,222 @@ async fn blink_status(state: &AgentRpcState) -> std::result::Result<Value, RpcEr
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    let mut base = json!({
-        "timestamp_ms": chrono::Utc::now().timestamp_millis(),
-        "ws_connected": state.ws_live.load(Ordering::Relaxed),
-        "trading_paused": state.trading_paused.load(Ordering::Relaxed),
-        "messages_total": state.msg_count.load(Ordering::Relaxed),
-        "risk_status": risk_status,
-        "subscriptions": subscriptions,
-        "strategy": strategy_status_json(&state.strategy_controller),
-    });
 
-    if let Some(ref paper) = state.paper {
-        let (
-            cash_usdc,
-            nav_usdc,
-            invested_usdc,
-            unrealized_pnl_usdc,
-            realized_pnl_usdc,
-            open_positions,
-            closed_trades,
-            total_signals,
-            filled_orders,
-            skipped_orders,
-            aborted_orders,
-        ) = {
-            let p = paper.portfolio.lock().await;
-            (
-                p.cash_usdc,
-                p.nav(),
-                p.total_invested(),
-                p.unrealized_pnl(),
-                p.realized_pnl(),
-                p.positions.len(),
-                p.closed_trades.len(),
-                p.total_signals,
-                p.filled_orders,
-                p.skipped_orders,
-                p.aborted_orders,
-            )
-        };
-        let summary = paper.execution_summary().await;
-        base["paper"] = json!({
-            "cash_usdc": cash_usdc,
-            "nav_usdc": nav_usdc,
-            "invested_usdc": invested_usdc,
-            "unrealized_pnl_usdc": unrealized_pnl_usdc,
-            "realized_pnl_usdc": realized_pnl_usdc,
-            "open_positions": open_positions,
-            "closed_trades": closed_trades,
-            "total_signals": total_signals,
-            "filled_orders": filled_orders,
-            "skipped_orders": skipped_orders,
-            "aborted_orders": aborted_orders,
-            "fill_rate_pct": summary.fill_rate_pct,
-            "reject_rate_pct": summary.reject_rate_pct
-        });
-    }
-    Ok(base)
+    Ok(json!({
+        "ws_live": state.ws_live.load(Ordering::Relaxed),
+        "trading_paused": state.trading_paused.load(Ordering::Relaxed),
+        "msg_count": state.msg_count.load(Ordering::Relaxed),
+        "risk_status": risk_status,
+        "market_subscriptions": subscriptions,
+        "live_active": state.live_active,
+    }))
 }
 
 async fn paper_summary(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
-    let Some(ref paper) = state.paper else {
-        return Err(RpcError {
-            code: -32001,
-            message: "Paper mode not active".to_string(),
-        });
-    };
-    let (cash_usdc, nav_usdc, open_positions, closed_trades) = {
+    if let Some(ref paper) = state.paper {
         let p = paper.portfolio.lock().await;
-        (
-            p.cash_usdc,
-            p.nav(),
-            p.positions.len(),
-            p.closed_trades.len(),
-        )
-    };
-    let summary = paper.execution_summary().await;
-    Ok(json!({
-        "cash_usdc": cash_usdc,
-        "nav_usdc": nav_usdc,
-        "open_positions": open_positions,
-        "closed_trades": closed_trades,
-        "fill_rate_pct": summary.fill_rate_pct,
-        "reject_rate_pct": summary.reject_rate_pct,
-        "avg_slippage_bps": summary.avg_slippage_bps,
-        "avg_queue_delay_ms": summary.avg_queue_delay_ms,
-        "shadow_realism_gap_bps": summary.shadow_realism_gap_bps
-    }))
+        Ok(json!({
+            "nav": p.nav(),
+            "cash": p.cash_usdc,
+            "open_positions": p.positions.len(),
+            "closed_trades": p.closed_trades.len(),
+            "realized_pnl": p.realized_pnl(),
+            "unrealized_pnl": p.unrealized_pnl(),
+            "win_rate": if p.closed_trades.is_empty() { 0.0 } else {
+                (p.closed_trades.iter().filter(|t| t.realized_pnl > 0.0).count() as f64 / p.closed_trades.len() as f64) * 100.0
+            }
+        }))
+    } else {
+        Err(RpcError {
+            code: -32000,
+            message: "Paper engine not enabled".to_string(),
+        })
+    }
 }
 
 async fn set_pause(params: Value, state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
-    let paused = params
-        .get("paused")
-        .and_then(|v| v.as_bool())
-        .ok_or_else(|| RpcError {
-            code: -32602,
-            message: "Invalid params: expected {\"paused\":bool}".to_string(),
-        })?;
-    state.trading_paused.store(paused, Ordering::Relaxed);
-    Ok(json!({ "trading_paused": paused }))
-}
-
-async fn get_strategy_mode(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
-    Ok(strategy_status_json(&state.strategy_controller))
-}
-
-async fn get_strategy_history(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
-    Ok(json!({ "history": state.strategy_controller.history() }))
-}
-
-async fn set_strategy_mode(
-    params: Value,
-    state: &AgentRpcState,
-) -> std::result::Result<Value, RpcError> {
-    let mode_raw = params
-        .get("mode")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| RpcError {
-            code: -32602,
-            message: "Invalid params: expected {\"mode\":\"mirror|conservative|aggressive\"}"
-                .to_string(),
-        })?;
-    let mode = mode_raw.parse::<StrategyMode>().map_err(|e| RpcError {
+    let paused = params["paused"].as_bool().ok_or(RpcError {
         code: -32602,
-        message: format!("Invalid params: {e}"),
+        message: "Missing 'paused' boolean parameter".to_string(),
     })?;
-    let reason = params
-        .get("reason")
-        .and_then(|v| v.as_str())
-        .map(|v| v.to_string());
-    let force_rollback_to_mirror = params
-        .get("force_rollback_to_mirror")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let source = params
-        .get("source")
-        .and_then(|v| v.as_str())
-        .unwrap_or("agent_rpc");
 
-    if force_rollback_to_mirror && mode != StrategyMode::Mirror {
-        return Err(RpcError {
-            code: -32602,
-            message: "Invalid params: force_rollback_to_mirror requires mode=mirror".to_string(),
-        });
-    }
+    state.trading_paused.store(paused, Ordering::SeqCst);
+    tracing::info!(paused, "Trading pause state updated via RPC");
 
-    let snapshot = if force_rollback_to_mirror {
-        state
-            .strategy_controller
-            .rollback_to_mirror(reason, &format!("{source}:rollback"))
-    } else {
-        state
-            .strategy_controller
-            .switch_mode(mode, reason, source, state.live_active)
-            .map_err(to_strategy_rpc_error)?
-    };
-    if force_rollback_to_mirror {
-        tracing::warn!(
-            from_mode = %snapshot
-                .history
-                .last()
-                .map(|record| record.from.to_string())
-                .unwrap_or_else(|| "mirror".to_string()),
-            to_mode = %snapshot.current_mode,
-            switch_seq = snapshot.switch_seq,
-            "Strategy rollback-to-mirror applied via RPC"
-        );
-    } else {
-        tracing::info!(
-            mode = %snapshot.current_mode,
-            switch_seq = snapshot.switch_seq,
-            "Strategy mode updated via RPC"
-        );
-    }
-    Ok(json!(snapshot))
+    Ok(json!({ "paused": paused }))
 }
-
-async fn rollback_strategy_mode(
-    params: Value,
-    state: &AgentRpcState,
-) -> std::result::Result<Value, RpcError> {
-    let reason = params
-        .get("reason")
-        .and_then(|v| v.as_str())
-        .map(|v| v.to_string());
-    let source = params
-        .get("source")
-        .and_then(|v| v.as_str())
-        .unwrap_or("agent_rpc");
-    let snapshot = state
-        .strategy_controller
-        .rollback_to_mirror(reason, &format!("{source}:rollback"));
-    tracing::warn!(
-        from_mode = %snapshot
-            .history
-            .last()
-            .map(|record| record.from.to_string())
-            .unwrap_or_else(|| "mirror".to_string()),
-        to_mode = %snapshot.current_mode,
-        switch_seq = snapshot.switch_seq,
-        "Strategy rollback-to-mirror applied via RPC"
-    );
-    Ok(json!(snapshot))
-}
-
-fn to_strategy_rpc_error(err: StrategySwitchError) -> RpcError {
-    RpcError {
-        code: err.rpc_code(),
-        message: err.message(),
-    }
-}
-
-fn strategy_status_json(controller: &Arc<StrategyController>) -> Value {
-    let snapshot = controller.snapshot();
-    let mut value = json!(snapshot);
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert(
-            "rollback".to_string(),
-            json!({
-                "target_mode": "mirror",
-                "available": true,
-                "active": snapshot.current_mode == StrategyMode::Mirror,
-                "required": snapshot.current_mode != StrategyMode::Mirror,
-                "rpc_method": "rollback_strategy_mode",
-                "rpc_alt_method": "set_strategy_mode with force_rollback_to_mirror=true",
-            }),
-        );
-    }
-    value
-}
-
-async fn write_http(stream: &mut TcpStream, status: u16, body: Value) -> io::Result<()> {
-    let payload = body.to_string();
-    let status_text = match status {
-        200 => "OK",
-        404 => "Not Found",
-        _ => "OK",
-    };
-    let resp = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        status,
-        status_text,
-        payload.len(),
-        payload
-    );
-    stream.write_all(resp.as_bytes()).await
-}
-
-// ── Bullpen RPC methods ──────────────────────────────────────────────────
-
-async fn bullpen_health(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
-    let bridge = state.bullpen.as_ref().ok_or(RpcError {
-        code: -32000,
-        message: "Bullpen bridge not enabled".into(),
-    })?;
-    let health = bridge.health().await;
-    Ok(json!({
-        "authenticated": health.authenticated,
-        "consecutive_failures": health.consecutive_failures,
-        "total_calls": health.total_calls,
-        "total_failures": health.total_failures,
-        "avg_latency_ms": health.avg_latency_ms,
-    }))
-}
-
-async fn bullpen_discovery(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
-    let store = state.discovery_store.as_ref().ok_or(RpcError {
-        code: -32000,
-        message: "Discovery store not available".into(),
-    })?;
-    let s = store.read().await;
-    let summary = s.summary();
-    Ok(json!({
-        "total_markets": summary.total_markets,
-        "smart_money_markets": summary.smart_money_markets,
-        "avg_viability": summary.avg_viability,
-        "scan_count": summary.scan_count,
-        "last_scan_ago_secs": summary.last_scan_ago_secs,
-    }))
-}
-
-async fn bullpen_convergence(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
-    let store = state.convergence_store.as_ref().ok_or(RpcError {
-        code: -32000,
-        message: "Convergence store not available".into(),
-    })?;
-    let s = store.read().await;
-    let summary = s.summary();
-    let signals: Vec<Value> = s
-        .active_signals
-        .iter()
-        .map(|sig| {
-            json!({
-                "market": sig.market,
-                "convergence_score": sig.convergence_score,
-                "net_direction": sig.net_direction,
-                "total_usd": sig.total_usd,
-                "wallets": sig.wallets.len(),
-            })
-        })
-        .collect();
-    Ok(json!({
-        "active_signals": summary.active_signals,
-        "tracked_markets": summary.tracked_markets,
-        "signals": signals,
-    }))
-}
-
-async fn bullpen_discover(
-    params: Value,
-    state: &AgentRpcState,
-) -> std::result::Result<Value, RpcError> {
-    let bridge = state.bullpen.as_ref().ok_or(RpcError {
-        code: -32000,
-        message: "Bullpen bridge not enabled".into(),
-    })?;
-    let lens = params["lens"].as_str().unwrap_or("all");
-    match bridge.discover_markets(lens).await {
-        Ok(resp) => Ok(json!({
-            "lens": resp.lens,
-            "events": resp.events.len(),
-        })),
-        Err(e) => Err(RpcError {
-            code: -32000,
-            message: format!("Discover failed: {e}"),
-        }),
-    }
-}
-
-async fn bullpen_smart_money_rpc(
-    params: Value,
-    state: &AgentRpcState,
-) -> std::result::Result<Value, RpcError> {
-    let bridge = state.bullpen.as_ref().ok_or(RpcError {
-        code: -32000,
-        message: "Bullpen bridge not enabled".into(),
-    })?;
-    let signal_type = params["type"].as_str().unwrap_or("aggregated");
-    match bridge.smart_money(signal_type).await {
-        Ok(json) => Ok(json.0),
-        Err(e) => Err(RpcError {
-            code: -32000,
-            message: format!("Smart money failed: {e}"),
-        }),
-    }
-}
-
-// ── Alpha Signal RPC methods ────────────────────────────────────────────────
 
 async fn submit_alpha_signal(
     params: Value,
     state: &AgentRpcState,
 ) -> std::result::Result<Value, RpcError> {
     let tx = state.alpha_signal_tx.as_ref().ok_or(RpcError {
-        code: -32000,
-        message: "Alpha pipeline not enabled (set ALPHA_ENABLED=true)".into(),
-    })?;
-    let analytics = state.alpha_analytics.as_ref().ok_or(RpcError {
-        code: -32000,
-        message: "Alpha analytics not available".into(),
-    })?;
-    let risk_cfg = state.alpha_risk_config.as_ref().ok_or(RpcError {
-        code: -32000,
-        message: "Alpha risk config not loaded".into(),
+        code: -32001,
+        message: "Alpha pipeline not enabled".into(),
     })?;
 
-    // Deserialize the incoming signal.
-    let mut signal: AlphaSignal = serde_json::from_value(params).map_err(|e| RpcError {
+    let signal: AlphaSignal = serde_json::from_value(params).map_err(|e| RpcError {
         code: -32602,
-        message: format!("Invalid alpha signal: {e}"),
+        message: format!("Invalid alpha signal format: {}", e),
     })?;
-    signal.received_at = Some(std::time::Instant::now());
 
-    // Build the signal record for history tracking
-    let record = AlphaSignalRecord {
-        timestamp: chrono::Utc::now().to_rfc3339(),
-        analysis_id: signal.analysis_id.clone(),
-        token_id: signal.token_id.clone(),
-        market_question: signal.market_question.clone(),
-        side: format!("{:?}", signal.side),
-        confidence: signal.confidence,
-        reasoning: signal.reasoning.clone(),
-        recommended_price: signal.recommended_price,
-        recommended_size_usdc: signal.recommended_size_usdc,
-        status: String::new(), // set below
-        position_id: None,
-        realized_pnl: None,
-        unrealized_pnl: None,
-        entry_price: None,
-        current_price: None,
-    };
-
-    // ── Pre-submission validation ──
-    if !risk_cfg.enabled {
-        let mut rec = record;
-        rec.status = "rejected:alpha_disabled".to_string();
-        let mut a = analytics.lock().unwrap_or_else(|e| e.into_inner());
-        a.record_reject("alpha_disabled");
-        a.record_signal(rec);
-        return Ok(json!({ "accepted": false, "reason": "Alpha trading disabled" }));
+    if let Err(e) = tx.try_send(signal) {
+        return Err(RpcError {
+            code: -32002,
+            message: format!("Failed to queue alpha signal: {}", e),
+        });
     }
 
-    if signal.confidence < risk_cfg.confidence_floor {
-        let mut rec = record;
-        rec.status = format!("rejected:low_confidence({:.2})", signal.confidence);
-        tracing::warn!(
-            analysis_id = %signal.analysis_id,
-            confidence = signal.confidence,
-            floor = risk_cfg.confidence_floor,
-            "Alpha signal rejected — confidence below floor"
-        );
-        let mut a = analytics.lock().unwrap_or_else(|e| e.into_inner());
-        a.record_reject("low_confidence");
-        a.record_signal(rec);
-        return Ok(json!({
-            "accepted": false,
-            "reason": format!("Confidence {:.2} below floor {:.2}", signal.confidence, risk_cfg.confidence_floor)
-        }));
-    }
-
-    if signal.recommended_size_usdc > risk_cfg.max_single_order_usdc {
-        // Clamp rather than reject — the engine decides final sizing.
-        signal.recommended_size_usdc = risk_cfg.max_single_order_usdc;
-    }
-
-    let analysis_id = signal.analysis_id.clone();
-
-    // Enqueue the signal for the engine to process.
-    match tx.try_send(signal) {
-        Ok(()) => {
-            let mut rec = record;
-            rec.status = "accepted".to_string();
-            let mut a = analytics.lock().unwrap_or_else(|e| e.into_inner());
-            a.record_accept();
-            a.record_signal(rec);
-            tracing::info!(analysis_id = %analysis_id, "Alpha signal accepted");
-            Ok(json!({ "accepted": true, "analysis_id": analysis_id }))
-        }
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-            let mut rec = record;
-            rec.status = "rejected:queue_full".to_string();
-            tracing::warn!(analysis_id = %rec.analysis_id, "Alpha signal rejected — queue full");
-            let mut a = analytics.lock().unwrap_or_else(|e| e.into_inner());
-            a.record_reject("queue_full");
-            a.record_signal(rec);
-            Ok(json!({ "accepted": false, "reason": "Signal queue full" }))
-        }
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            let mut rec = record;
-            rec.status = "rejected:engine_shutdown".to_string();
-            let mut a = analytics.lock().unwrap_or_else(|e| e.into_inner());
-            a.record_reject("engine_shutdown");
-            a.record_signal(rec);
-            Err(RpcError {
-                code: -32000,
-                message: "Engine shutting down".into(),
-            })
-        }
-    }
+    Ok(json!({ "status": "queued" }))
 }
 
 async fn report_alpha_cycle(
     params: Value,
     state: &AgentRpcState,
 ) -> std::result::Result<Value, RpcError> {
-    let analytics = state.alpha_analytics.as_ref().ok_or(RpcError {
-        code: -32000,
-        message: "Alpha analytics not available".into(),
-    })?;
-
     let report: AlphaCycleReport = serde_json::from_value(params).map_err(|e| RpcError {
         code: -32602,
-        message: format!("Invalid cycle report: {e}"),
+        message: format!("Invalid cycle report format: {}", e),
     })?;
 
-    let n_markets = report.top_markets.len();
-    analytics
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .record_cycle(report);
-    tracing::info!(markets = n_markets, "Alpha cycle report received");
-
-    Ok(json!({ "ok": true }))
-}
-
-async fn alpha_status(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
-    let analytics = state.alpha_analytics.as_ref().ok_or(RpcError {
-        code: -32000,
-        message: "Alpha pipeline not enabled".into(),
-    })?;
-    let a = analytics.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(json!({
-        "enabled": state.alpha_risk_config.as_ref().map(|c| c.enabled).unwrap_or(false),
-        "signals_received": a.signals_received,
-        "signals_accepted": a.signals_accepted,
-        "signals_rejected": a.signals_rejected,
-        "reject_reasons": a.reject_reasons,
-        "realized_pnl_usdc": a.realized_pnl_usdc,
-        "unrealized_pnl_usdc": a.unrealized_pnl_usdc,
-        "positions_opened": a.positions_opened,
-        "positions_closed": a.positions_closed,
-    }))
+    if let Some(ref analytics) = state.alpha_analytics {
+        let mut a = analytics.lock().unwrap_or_else(|e| e.into_inner());
+        a.add_cycle_report(report);
+        Ok(json!({ "status": "recorded" }))
+    } else {
+        Err(RpcError {
+            code: -32001,
+            message: "Alpha pipeline not enabled".into(),
+        })
+    }
 }
 
 async fn report_alpha_calibration(
     params: Value,
     state: &AgentRpcState,
 ) -> std::result::Result<Value, RpcError> {
-    let analytics = state.alpha_analytics.as_ref().ok_or(RpcError {
-        code: -32000,
-        message: "Alpha analytics not available".into(),
+    let record: AlphaSignalRecord = serde_json::from_value(params).map_err(|e| RpcError {
+        code: -32602,
+        message: format!("Invalid calibration record format: {}", e),
     })?;
 
-    // Store the calibration data as-is (JSON blob from Python sidecar)
-    analytics
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .calibration = Some(params);
-    tracing::info!("Alpha calibration report received");
+    if let Some(ref analytics) = state.alpha_analytics {
+        let mut a = analytics.lock().unwrap_or_else(|e| e.into_inner());
+        a.add_signal_calibration(record);
+        Ok(json!({ "status": "recorded" }))
+    } else {
+        Err(RpcError {
+            code: -32001,
+            message: "Alpha pipeline not enabled".into(),
+        })
+    }
+}
 
-    Ok(json!({ "ok": true }))
+async fn alpha_status(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    if let Some(ref analytics) = state.alpha_analytics {
+        let a = analytics.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(json!(a.clone()))
+    } else {
+        Err(RpcError {
+            code: -32001,
+            message: "Alpha pipeline not enabled".into(),
+        })
+    }
+}
+
+async fn get_strategy_mode(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    let snapshot = state.strategy_controller.snapshot();
+    Ok(json!(snapshot))
+}
+
+async fn set_strategy_mode(
+    params: Value,
+    state: &AgentRpcState,
+) -> std::result::Result<Value, RpcError> {
+    let mode_str = params["mode"].as_str().ok_or(RpcError {
+        code: -32602,
+        message: "Missing 'mode' string parameter".to_string(),
+    })?;
+
+    let reason = params["reason"].as_str().map(|s| s.to_string());
+
+    let mode = match mode_str.to_lowercase().as_str() {
+        "mirror" => StrategyMode::Mirror,
+        "aggressive" => StrategyMode::Aggressive,
+        _ => {
+            return Err(RpcError {
+                code: -32602,
+                message: format!("Unknown strategy mode: {}", mode_str),
+            })
+        }
+    };
+
+    match state
+        .strategy_controller
+        .switch_mode(mode, reason, "agent_rpc", state.live_active)
+    {
+        Ok(snapshot) => Ok(json!({ "status": "switched", "snapshot": snapshot })),
+        Err(e) => Err(RpcError {
+            code: -32004,
+            message: format!("Strategy switch failed: {:?}", e),
+        }),
+    }
+}
+
+async fn rollback_strategy_mode(
+    params: Value,
+    state: &AgentRpcState,
+) -> std::result::Result<Value, RpcError> {
+    let reason = params["reason"].as_str().map(|s| s.to_string());
+
+    let snapshot = state
+        .strategy_controller
+        .rollback_to_mirror(reason, "agent_rpc");
+    Ok(json!({ "status": "rolled_back", "snapshot": snapshot }))
+}
+
+async fn get_strategy_history(state: &AgentRpcState) -> std::result::Result<Value, RpcError> {
+    let history = state.strategy_controller.history();
+    Ok(json!(history))
+}
+
+async fn send_json_response(stream: &mut TcpStream, value: &Value) -> Result<()> {
+    let body = serde_json::to_string(value)?;
+    let resp = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {}",
+        body.len(),
+        body
+    );
+    stream.write_all(resp.as_bytes()).await?;
+    Ok(())
+}
+
+fn parse_http_headers(req: &str) -> Result<(&str, &str, usize, usize)> {
+    let header_end = req
+        .find("\r\n\r\n")
+        .ok_or_else(|| anyhow!("Malformed HTTP request (no header end)"))?;
+    let headers = &req[..header_end];
+
+    let mut lines = headers.lines();
+    let first_line = lines
+        .next()
+        .ok_or_else(|| anyhow!("Malformed HTTP request (empty)"))?;
+    let mut parts = first_line.split_whitespace();
+
+    let method = parts.next().unwrap_or("");
+    let path = parts.next().unwrap_or("");
+
+    let mut content_len = 0;
+    for line in lines {
+        if line.to_lowercase().starts_with("content-length:") {
+            content_len = line["content-length:".len()..].trim().parse().unwrap_or(0);
+        }
+    }
+
+    Ok((method, path, content_len, header_end + 4))
 }

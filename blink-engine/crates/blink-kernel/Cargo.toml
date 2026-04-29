@@ -1,0 +1,25 @@
+[package]
+name = "blink-kernel"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "V1 decision kernel for the Blink v2 pipeline. Zero-alloc hot path."
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+test-support = []
+
+[dependencies]
+blink-types       = { path = "../blink-types" }
+blink-book        = { path = "../blink-book" }
+blink-shadow      = { path = "../blink-shadow" }
+blink-timestamps  = { path = "../blink-timestamps" }
+sha3              = { workspace = true }
+thiserror         = { workspace = true }
+hex               = "0.4"
+
+[dev-dependencies]
+stats_alloc       = "0.1"

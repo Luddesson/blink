@@ -365,10 +365,9 @@ async fn sweep(
         }
     }
 
-    hot_metrics::counters().reconcile_lag_ms_last.store(
-        sweep_start.elapsed().as_millis() as i64,
-        Ordering::Relaxed,
-    );
+    hot_metrics::counters()
+        .reconcile_lag_ms_last
+        .store(sweep_start.elapsed().as_millis() as i64, Ordering::Relaxed);
 }
 
 /// Update fill metrics and notify the fill hook.
@@ -378,7 +377,9 @@ fn update_fill_metrics(delta_u64: u64, is_full: bool, hook: Option<&dyn RouterFi
         .store(delta_u64 as i64, Ordering::Relaxed);
 
     let full = hot_metrics::counters().full_fills.load(Ordering::Relaxed);
-    let partial = hot_metrics::counters().partial_fills.load(Ordering::Relaxed);
+    let partial = hot_metrics::counters()
+        .partial_fills
+        .load(Ordering::Relaxed);
     let total = full + partial;
     if total > 0 {
         // full-fill ratio in per-mille (integer math).

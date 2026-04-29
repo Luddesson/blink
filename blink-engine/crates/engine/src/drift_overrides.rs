@@ -86,9 +86,7 @@ pub fn mode() -> OverrideMode {
         let raw = std::env::var("BLINK_DRIFT_OVERRIDE_MODE").ok();
         let m = OverrideMode::from_env(raw.as_deref());
         if m == OverrideMode::Set {
-            tracing::warn!(
-                "BLINK_DRIFT_OVERRIDE_MODE=set — overrides can LOOSEN profile defaults"
-            );
+            tracing::warn!("BLINK_DRIFT_OVERRIDE_MODE=set — overrides can LOOSEN profile defaults");
         }
         m
     })
@@ -241,7 +239,9 @@ fn parse_kv_pairs(raw: &str) -> Result<Vec<(MarketClass, String)>, String> {
     for (i, segment) in raw.split(',').enumerate() {
         let trimmed = segment.trim();
         if trimmed.is_empty() {
-            return Err(format!("empty segment at position {i} (trailing/duplicate comma?)"));
+            return Err(format!(
+                "empty segment at position {i} (trailing/duplicate comma?)"
+            ));
         }
         let (k, v) = trimmed
             .split_once('=')

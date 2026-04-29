@@ -296,7 +296,10 @@ impl OrderRouter {
             let mut entry = match self.store.get_mut(&intent_id) {
                 Some(e) => e,
                 None => {
-                    warn!(intent_id, "OrderRouter::cancel_order: intent_id not in store");
+                    warn!(
+                        intent_id,
+                        "OrderRouter::cancel_order: intent_id not in store"
+                    );
                     return false;
                 }
             };
@@ -373,10 +376,7 @@ impl Default for OrderRouter {
 /// terminal entries until back under the cap. Every eviction increments
 /// `router_gc_evicted_total` and is pushed into the `terminal_ring` (capped
 /// at `TERMINAL_RING_CAP`).
-fn gc_sweep(
-    store: &PendingOrderStore,
-    ring: &Mutex<VecDeque<TerminalRingEntry>>,
-) {
+fn gc_sweep(store: &PendingOrderStore, ring: &Mutex<VecDeque<TerminalRingEntry>>) {
     // Collect candidates: (intent_id, state, terminal_at) for terminal entries.
     let mut terminals: Vec<(u64, OrderState, Instant)> = store
         .iter()
@@ -398,11 +398,14 @@ fn gc_sweep(
     for (intent_id, state, terminal_at) in terminals.iter() {
         if now.duration_since(*terminal_at) > TERMINAL_RETENTION {
             if store.remove(intent_id).is_some() {
-                push_ring(ring, TerminalRingEntry {
-                    intent_id: *intent_id,
-                    state: state.clone(),
-                    terminal_at: *terminal_at,
-                });
+                push_ring(
+                    ring,
+                    TerminalRingEntry {
+                        intent_id: *intent_id,
+                        state: state.clone(),
+                        terminal_at: *terminal_at,
+                    },
+                );
                 evicted += 1;
             }
         }
@@ -415,11 +418,14 @@ fn gc_sweep(
                 break;
             }
             if store.remove(intent_id).is_some() {
-                push_ring(ring, TerminalRingEntry {
-                    intent_id: *intent_id,
-                    state: state.clone(),
-                    terminal_at: *terminal_at,
-                });
+                push_ring(
+                    ring,
+                    TerminalRingEntry {
+                        intent_id: *intent_id,
+                        state: state.clone(),
+                        terminal_at: *terminal_at,
+                    },
+                );
                 evicted += 1;
             }
         }
@@ -449,9 +455,6 @@ async fn submit_one(
     executor: &OrderExecutor,
     gate: Option<&Arc<StreamRiskGate>>,
 ) {
-    hot_metrics::counters()
-        .submits_started
-        .fetch_add(1, Ordering::Relaxed);
     let _submit_timer = hot_metrics::StageTimer::start(hot_metrics::HotStage::Submit);
 
     if let Some(mut entry) = store.get_mut(&intent.intent_id) {
@@ -492,9 +495,6 @@ async fn submit_one(
                 entry.order_id = order_id;
                 entry.transition(OrderState::Acked);
             }
-            hot_metrics::counters()
-                .submits_ack
-                .fetch_add(1, Ordering::Relaxed);
             if let Some(g) = gate {
                 g.on_order_terminal(&intent.market_id, intent.size_u64);
             }
@@ -558,9 +558,15 @@ fn bump_reject_counter(reason: &str) {
     match reason {
         "rate" => c.risk_rejects_rate.fetch_add(1, Ordering::Relaxed),
         "pending_count" => c.risk_rejects_pending_count.fetch_add(1, Ordering::Relaxed),
-        "market_notional" => c.risk_rejects_market_notional.fetch_add(1, Ordering::Relaxed),
-        "account_notional" => c.risk_rejects_account_notional.fetch_add(1, Ordering::Relaxed),
-        "max_single_order" => c.risk_rejects_max_single_order.fetch_add(1, Ordering::Relaxed),
+        "market_notional" => c
+            .risk_rejects_market_notional
+            .fetch_add(1, Ordering::Relaxed),
+        "account_notional" => c
+            .risk_rejects_account_notional
+            .fetch_add(1, Ordering::Relaxed),
+        "max_single_order" => c
+            .risk_rejects_max_single_order
+            .fetch_add(1, Ordering::Relaxed),
         _ => 0,
     };
 }

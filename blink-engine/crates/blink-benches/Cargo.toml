@@ -1,0 +1,35 @@
+[package]
+name        = "blink-benches"
+version     = "0.1.0"
+edition     = "2021"
+publish     = false
+description = "Hot-path micro-benchmarks for the Blink v2 engine."
+
+autobenches = false
+
+[dependencies]
+blink-timestamps = { path = "../blink-timestamps" }
+blink-types      = { path = "../blink-types" }
+
+[dev-dependencies]
+criterion     = { version = "0.5", features = ["html_reports"] }
+k256          = { workspace = true }
+sha3          = { workspace = true }
+serde_json    = { workspace = true }
+simd-json     = { workspace = true }
+rand          = { workspace = true }
+# Note: iai-callgrind *compiles* without valgrind — it's only invoked
+# when the bench is run. Dev machines without valgrind can still
+# `cargo check --benches`; they just shouldn't run `--bench cycles`.
+iai-callgrind = "0.14"
+
+[features]
+default = []
+
+[[bench]]
+name    = "latency"
+harness = false
+
+[[bench]]
+name    = "cycles"
+harness = false

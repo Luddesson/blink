@@ -76,12 +76,10 @@ fn signal_pipeline_preserves_per_token_ordering_under_burst() {
     rt.block_on(async move {
         let (in_tx, mut in_rx) = tokio::sync::mpsc::channel::<(String, u64)>(4096);
 
-        let (done_tx, mut done_rx) =
-            tokio::sync::mpsc::unbounded_channel::<(String, Vec<u64>)>();
+        let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel::<(String, Vec<u64>)>();
 
-        let token_senders: Arc<
-            dashmap::DashMap<String, tokio::sync::mpsc::Sender<u64>>,
-        > = Arc::new(dashmap::DashMap::new());
+        let token_senders: Arc<dashmap::DashMap<String, tokio::sync::mpsc::Sender<u64>>> =
+            Arc::new(dashmap::DashMap::new());
 
         let dropped = Arc::new(AtomicU64::new(0));
 
@@ -91,8 +89,7 @@ fn signal_pipeline_preserves_per_token_ordering_under_burst() {
         let dispatcher = tokio::spawn(async move {
             while let Some((token_id, per_token_idx)) = in_rx.recv().await {
                 if !token_senders_d.contains_key(&token_id) {
-                    let (tx, mut rx) =
-                        tokio::sync::mpsc::channel::<u64>(per_token_depth);
+                    let (tx, mut rx) = tokio::sync::mpsc::channel::<u64>(per_token_depth);
                     token_senders_d.insert(token_id.clone(), tx);
                     let done_tx = done_tx.clone();
                     let tid = token_id.clone();

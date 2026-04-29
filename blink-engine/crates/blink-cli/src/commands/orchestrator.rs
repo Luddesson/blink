@@ -746,14 +746,17 @@ fn artifact_guardrail_check(
     path: &Path,
     policy: &GuardrailPolicy,
 ) -> std::result::Result<(), GuardrailFailure> {
-    if policy.artifact.deny_absolute_path && path.is_absolute() {
+    let normalized_raw = path.to_string_lossy().replace('\\', "/");
+    let normalized_path = Path::new(&normalized_raw);
+
+    if policy.artifact.deny_absolute_path && (path.is_absolute() || normalized_path.is_absolute()) {
         return Err(GuardrailFailure::denied(
             "artifact.absolute_path",
             format!("absolute artifact path `{}` is denied", path.display()),
         ));
     }
     if policy.artifact.deny_parent_traversal
-        && path
+        && normalized_path
             .components()
             .any(|c| matches!(c, std::path::Component::ParentDir))
     {
@@ -765,7 +768,7 @@ fn artifact_guardrail_check(
             ),
         ));
     }
-    let ext = path
+    let ext = normalized_path
         .extension()
         .and_then(|v| v.to_str())
         .map(|v| format!(".{}", v.to_ascii_lowercase()));
@@ -781,7 +784,7 @@ fn artifact_guardrail_check(
         ));
     }
 
-    let first = path.components().next().and_then(|c| match c {
+    let first = normalized_path.components().next().and_then(|c| match c {
         std::path::Component::Normal(v) => v.to_str().map(ToString::to_string),
         _ => None,
     });

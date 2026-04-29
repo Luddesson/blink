@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use chrono::Timelike;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -26,7 +26,7 @@ use crate::order_signer::{
 };
 #[cfg(feature = "legacy-fill-window")]
 use crate::paper_portfolio::drift_threshold;
-use crate::paper_portfolio::{PaperPortfolio, STARTING_BALANCE_USDC};
+use crate::paper_portfolio::{PaperPortfolio, PaperPosition, STARTING_BALANCE_USDC};
 use crate::pretrade_gate::{GateConfig, GateDecision, PretradeGate};
 use crate::risk_manager::{RiskConfig, RiskManager};
 use crate::strategy::{StrategyController, StrategySnapshot};
@@ -35,6 +35,8 @@ use crate::truth_reconciler::{
     process_order_status, PendingOrder, PendingOrderWal, ReconciliationOutcome,
 };
 use crate::types::{parse_price, MarketMetadata, OrderSide, PriceLevel, RN1Signal, TimeInForce};
+
+const WALLET_TRUTH_PAGE_LIMIT: usize = 500;
 
 // ─── Lock Hierarchy ──────────────────────────────────────────────────────────
 // Two mutex flavours are used.  Always acquire in the order listed below;
@@ -89,6 +91,7 @@ pub struct LiveEngine {
     shadow_audit: ShadowAuditPolicy,
     starting_nav_usdc: f64,
     rest_clob: ClobClient,
+    last_wallet_truth_sync_ms: AtomicU64,
 }
 
 /// Point-in-time snapshot of live SLO metrics for dashboards and alerting.
@@ -311,6 +314,7 @@ impl LiveEngine {
             shadow_audit,
             starting_nav_usdc: starting_cash_usdc,
             rest_clob: ClobClient::new(&config.clob_host),
+            last_wallet_truth_sync_ms: AtomicU64::new(0),
         })
     }
 
@@ -479,6 +483,22 @@ impl LiveEngine {
         });
     }
 
+    pub fn spawn_wallet_truth_worker(self: Arc<Self>) {
+        let poll_interval = std::env::var("BLINK_WALLET_TRUTH_POLL_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|v| v.clamp(1_000, 60_000))
+            .unwrap_or(5_000);
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = self.sync_wallet_positions_from_exchange().await {
+                    warn!(error = %e, "Live wallet truth background sync failed");
+                }
+                sleep(Duration::from_millis(poll_interval)).await;
+            }
+        });
+    }
+
     /// Validates L2 HMAC credentials against the Polymarket exchange before
     /// any live order is attempted.
     ///
@@ -491,6 +511,79 @@ impl LiveEngine {
 
     pub fn risk_status(&self) -> String {
         self.risk.lock_or_recover().status_line()
+    }
+
+    pub fn wallet_truth_last_sync_ms(&self) -> Option<u64> {
+        let last_sync = self.last_wallet_truth_sync_ms.load(Ordering::Relaxed);
+        (last_sync > 0).then_some(last_sync)
+    }
+
+    pub fn wallet_truth_sync_age_ms(&self) -> Option<u64> {
+        self.wallet_truth_last_sync_ms()
+            .map(|last_sync| current_time_ms().saturating_sub(last_sync))
+    }
+
+    async fn sync_wallet_positions_from_exchange(&self) -> Result<()> {
+        if self.executor.dry_run && !env_bool("BLINK_REQUIRE_WALLET_TRUTH_IN_DRY_RUN", false) {
+            return Ok(());
+        }
+        if self.funder_addr.trim().is_empty() {
+            bail!("missing funder wallet");
+        }
+
+        let now_ms = current_time_ms();
+        let sync_ttl_ms = std::env::var("BLINK_WALLET_TRUTH_SYNC_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|v| v.clamp(500, 60_000))
+            .unwrap_or(3_000);
+        let last_sync = self.last_wallet_truth_sync_ms.load(Ordering::Relaxed);
+        if now_ms.saturating_sub(last_sync) < sync_ttl_ms {
+            return Ok(());
+        }
+
+        let mut wallet_positions = fetch_wallet_positions_from_data_api(&self.funder_addr).await?;
+        if wallet_positions.is_empty() {
+            let local_count = self.portfolio.lock().await.positions.len();
+            if local_count > 0 {
+                warn!(
+                    local_positions = local_count,
+                    "Wallet truth returned empty while local ledger had positions; confirming once"
+                );
+                sleep(Duration::from_millis(250)).await;
+                wallet_positions = fetch_wallet_positions_from_data_api(&self.funder_addr).await?;
+            }
+        }
+        let wallet_ids: HashSet<String> = wallet_positions
+            .iter()
+            .map(|pos| pos.token_id.clone())
+            .collect();
+
+        let mut p = self.portfolio.lock().await;
+        let local_ids: HashSet<String> =
+            p.positions.iter().map(|pos| pos.token_id.clone()).collect();
+        if local_ids != wallet_ids {
+            warn!(
+                local_positions = local_ids.len(),
+                wallet_positions = wallet_ids.len(),
+                "Live wallet truth sync replaced local position ledger"
+            );
+            if let Some(ref log) = self.activity {
+                log_push(
+                    log,
+                    EntryKind::Warn,
+                    format!(
+                        "TRUTH-SYNC: local_positions={} wallet_positions={}",
+                        local_ids.len(),
+                        wallet_ids.len()
+                    ),
+                );
+            }
+        }
+        p.positions = wallet_positions;
+        self.last_wallet_truth_sync_ms
+            .store(now_ms, Ordering::Relaxed);
+        Ok(())
     }
 
     /// Flush all open positions from the internal order cache.
@@ -523,6 +616,25 @@ impl LiveEngine {
         let handle_started_at = Instant::now();
         // ── Stage: Enrich (intent classification + price extraction) ────────
         let _enrich_timer = StageTimer::start(HotStage::Enrich);
+        if let Err(e) = self.sync_wallet_positions_from_exchange().await {
+            let reason = format!("wallet_truth_unverified: {e}");
+            warn!(token_id = %signal.token_id, side = %signal.side, reason, "Blocking live signal");
+            if let Some(ref log) = self.activity {
+                log_push(log, EntryKind::Warn, format!("TRUTH-BLOCKED: {reason}"));
+            }
+            let mut p = self.portfolio.lock().await;
+            p.total_signals += 1;
+            p.skipped_orders += 1;
+            self.audit_signal_decision(
+                &signal,
+                "blocked_wallet_truth_unverified",
+                Some(&reason),
+                None,
+                None,
+                handle_started_at,
+            );
+            return;
+        }
         self.sync_risk_closes_from_portfolio().await;
         // reconciliation is now owned by the OrderRouter reconciler task (250 ms sweeps)
 
@@ -1903,6 +2015,196 @@ fn hour_in_window(hour: u8, start: u8, end: u8) -> bool {
     }
 }
 
+async fn fetch_wallet_positions_from_data_api(user: &str) -> Result<Vec<PaperPosition>> {
+    let client = reqwest::Client::new();
+    let attempts = wallet_truth_retries();
+    let max_items = wallet_truth_max_items();
+    let mut raw_positions = Vec::new();
+    let mut seen = HashSet::new();
+
+    for offset in (0..max_items).step_by(WALLET_TRUTH_PAGE_LIMIT) {
+        let limit = WALLET_TRUTH_PAGE_LIMIT.min(max_items - offset);
+        let page_positions =
+            fetch_wallet_positions_page(&client, user, limit, offset, attempts).await?;
+        let page_len = page_positions.len();
+        let mut added = 0usize;
+
+        for position in page_positions {
+            if seen.insert(data_api_position_key(&position)) {
+                raw_positions.push(position);
+                added += 1;
+            }
+        }
+
+        if page_len < limit || added == 0 {
+            break;
+        }
+    }
+
+    raw_positions
+        .iter()
+        .enumerate()
+        .map(|(idx, value)| wallet_position_from_json(idx, value))
+        .collect()
+}
+
+fn wallet_truth_retries() -> usize {
+    std::env::var("BLINK_WALLET_TRUTH_RETRIES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|v| v.clamp(1, 5))
+        .unwrap_or(2)
+}
+
+fn wallet_truth_max_items() -> usize {
+    std::env::var("BLINK_WALLET_TRUTH_MAX_ITEMS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|v| v.clamp(WALLET_TRUTH_PAGE_LIMIT, 50_000))
+        .unwrap_or(10_000)
+}
+
+async fn fetch_wallet_positions_page(
+    client: &reqwest::Client,
+    user: &str,
+    limit: usize,
+    offset: usize,
+    attempts: usize,
+) -> Result<Vec<serde_json::Value>> {
+    let url = format!(
+        "https://data-api.polymarket.com/positions?user={user}&limit={limit}&offset={offset}"
+    );
+    let mut last_error = "Polymarket positions request failed".to_string();
+
+    for attempt in 1..=attempts {
+        let response =
+            tokio::time::timeout(Duration::from_millis(2_000), client.get(&url).send()).await;
+
+        match response {
+            Ok(Ok(resp)) if resp.status().is_success() => {
+                match resp.json::<serde_json::Value>().await {
+                    Ok(value) => {
+                        return Ok(data_api_entries_from_body(value));
+                    }
+                    Err(e) => {
+                        last_error = format!("Polymarket positions response was not JSON: {e}");
+                        warn!(attempt, attempts, error = %e, "Wallet truth JSON parse failed");
+                    }
+                }
+            }
+            Ok(Ok(resp)) => {
+                last_error = format!("Polymarket positions returned HTTP {}", resp.status());
+                warn!(
+                    attempt,
+                    attempts,
+                    status = %resp.status(),
+                    "Wallet truth request returned non-success"
+                );
+            }
+            Ok(Err(e)) => {
+                last_error = format!("Polymarket positions request failed: {e}");
+                warn!(attempt, attempts, error = %e, "Wallet truth request failed");
+            }
+            Err(_) => {
+                last_error = "Polymarket positions request timed out".to_string();
+                warn!(attempt, attempts, "Wallet truth request timed out");
+            }
+        }
+
+        if attempt < attempts {
+            sleep(Duration::from_millis(150)).await;
+        }
+    }
+
+    bail!(last_error)
+}
+
+fn data_api_entries_from_body(body: serde_json::Value) -> Vec<serde_json::Value> {
+    if let Some(arr) = body.as_array() {
+        arr.clone()
+    } else {
+        body.get("data")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+fn data_api_position_key(position: &serde_json::Value) -> String {
+    let asset = json_text(position, &["asset", "token_id", "tokenId", "conditionId"])
+        .unwrap_or_else(|| "no_asset".to_string());
+    let outcome =
+        json_text(position, &["outcome", "side"]).unwrap_or_else(|| "no_outcome".to_string());
+    format!("{asset}:{outcome}")
+}
+
+fn wallet_position_from_json(index: usize, value: &serde_json::Value) -> Result<PaperPosition> {
+    let token_id = json_text(value, &["asset", "token_id", "tokenId", "conditionId"])
+        .with_context(|| format!("wallet position {index} missing asset token id"))?;
+    let entry_price = json_f64(value, &["avgPrice", "avg_price", "averagePrice"]).unwrap_or(0.0);
+    let current_price = json_f64(value, &["curPrice", "currentPrice", "price"])
+        .unwrap_or(entry_price)
+        .clamp(0.0, 1.0);
+    let shares = json_f64(value, &["size", "tokens", "quantity"]).unwrap_or(0.0);
+    let usdc_spent =
+        json_f64(value, &["initialValue", "initial_value"]).unwrap_or_else(|| shares * entry_price);
+    let now_wall = chrono::Local::now();
+
+    Ok(PaperPosition {
+        id: index + 1,
+        token_id: token_id.clone(),
+        market_title: json_text(value, &["title", "market", "eventTitle"]),
+        market_outcome: json_text(value, &["outcome", "side"]),
+        side: OrderSide::Buy,
+        entry_price,
+        shares,
+        usdc_spent,
+        entry_fee_paid_usdc: 0.0,
+        current_price,
+        peak_price: current_price.max(entry_price),
+        fee_category: "exchange".to_string(),
+        fee_rate: 0.0,
+        opened_at: Instant::now(),
+        rn1_order_id: format!("exchange:{token_id}"),
+        opened_at_wall: now_wall,
+        entry_slippage_bps: 0.0,
+        queue_delay_ms: 0,
+        experiment_variant: "exchange_truth".to_string(),
+        event_start_time: None,
+        event_end_time: None,
+        momentum_ref_price: current_price,
+        momentum_ref_ts: now_wall.timestamp(),
+        last_claimed_tier_pct: 0.0,
+        signal_source: "exchange".to_string(),
+        analysis_id: None,
+    })
+}
+
+fn json_f64(value: &serde_json::Value, keys: &[&str]) -> Option<f64> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse::<f64>().ok()))
+    })
+}
+
+fn json_text(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn current_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 fn env_bool(name: &str, default: bool) -> bool {
     std::env::var(name)
         .map(|v| v.eq_ignore_ascii_case("true") || v == "1" || v.eq_ignore_ascii_case("yes"))
@@ -1935,7 +2237,18 @@ fn parse_rest_book_levels(book: &serde_json::Value, side: &str) -> Vec<PriceLeve
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_intent_from_counts, hour_in_window, SignalIntent};
+    use super::{
+        classify_intent_from_counts, data_api_entries_from_body, data_api_position_key,
+        hour_in_window, wallet_position_from_json, SignalIntent,
+    };
+    use serde_json::json;
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "actual={actual} expected={expected}"
+        );
+    }
 
     #[test]
     fn classify_intent_new_exposure() {
@@ -1971,6 +2284,55 @@ mod tests {
         assert!(hour_in_window(23, 22, 6));
         assert!(hour_in_window(2, 22, 6));
         assert!(!hour_in_window(12, 22, 6));
+    }
+
+    #[test]
+    fn wallet_position_from_json_maps_data_api_position_to_internal_ledger() {
+        let raw = json!({
+            "asset": "108335214097330660216497436528140920329790228410878622712875555123360135252984",
+            "conditionId": "0xf8b61bb1849d27296b9413e471bace0b49f53f87e51aea01b7ea545df52e4302",
+            "size": 3.125,
+            "avgPrice": 0.32,
+            "initialValue": 1,
+            "currentValue": 0.9531,
+            "cashPnl": -0.0469,
+            "percentPnl": -4.6899,
+            "curPrice": 0.305,
+            "title": "Club Atletico de Madrid vs. Arsenal FC: O/U 1.5",
+            "outcome": "Under"
+        });
+
+        let position = wallet_position_from_json(0, &raw).expect("position should parse");
+
+        assert_eq!(
+            position.token_id,
+            "108335214097330660216497436528140920329790228410878622712875555123360135252984"
+        );
+        assert_eq!(
+            position.market_title.as_deref(),
+            Some("Club Atletico de Madrid vs. Arsenal FC: O/U 1.5")
+        );
+        assert_eq!(position.market_outcome.as_deref(), Some("Under"));
+        assert_close(position.shares, 3.125);
+        assert_close(position.entry_price, 0.32);
+        assert_close(position.current_price, 0.305);
+        assert_close(position.usdc_spent, 1.0);
+        assert_eq!(position.signal_source, "exchange");
+        assert_eq!(position.experiment_variant, "exchange_truth");
+    }
+
+    #[test]
+    fn wallet_truth_data_api_helpers_parse_wrappers_and_keys() {
+        let direct = data_api_entries_from_body(json!([{ "asset": "direct" }]));
+        let wrapped = data_api_entries_from_body(json!({ "data": [{ "asset": "wrapped" }] }));
+        let position = json!({
+            "tokenId": "asset-a",
+            "outcome": "Under"
+        });
+
+        assert_eq!(direct[0]["asset"], "direct");
+        assert_eq!(wrapped[0]["asset"], "wrapped");
+        assert_eq!(data_api_position_key(&position), "asset-a:Under");
     }
 }
 

@@ -8,7 +8,6 @@
 //! - `set_strategy_mode`
 //! - `rollback_strategy_mode`
 
-use std::io;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
@@ -25,7 +24,7 @@ use crate::alpha_signal::{
     AlphaAnalytics, AlphaCycleReport, AlphaRiskConfig, AlphaSignal, AlphaSignalRecord,
 };
 use crate::paper_engine::PaperEngine;
-use crate::strategy::{StrategyController, StrategyMode, StrategySwitchError};
+use crate::strategy::{StrategyController, StrategyMode};
 
 #[derive(Clone)]
 pub struct AgentRpcState {
@@ -120,17 +119,18 @@ async fn handle_connection(mut stream: TcpStream, state: AgentRpcState) -> Resul
         }
     };
 
+    let rpc_id = rpc_req.id.clone();
     let result = handle_rpc(rpc_req, &state).await;
     let resp_json = match result {
         Ok(res) => json!({
             "jsonrpc": "2.0",
             "result": res,
-            "id": null
+            "id": rpc_id
         }),
         Err(e) => json!({
             "jsonrpc": "2.0",
             "error": { "code": e.code, "message": e.message },
-            "id": null
+            "id": rpc_id
         }),
     };
 

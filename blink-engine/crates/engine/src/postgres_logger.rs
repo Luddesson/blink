@@ -10,7 +10,7 @@ use crossbeam_channel::Receiver;
 use postgres_native_tls::MakeTlsConnector;
 use serde::Serialize;
 use tokio_postgres::Client;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info};
 
 // ─── Event types ─────────────────────────────────────────────────────────────
 

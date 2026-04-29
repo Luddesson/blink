@@ -16,7 +16,7 @@ interface Props {
 
 type SortKey = 'market_title' | 'shares' | 'entry_price' | 'current_price' | 'unrealized_pnl'
 
-function PositionsTable({ positions }: Props) {
+function PositionsTable({ positions, isLive }: Props) {
   const [sort, setSort] = useState<SortKey>('current_price')
   const [asc, setAsc] = useState(false)
   const [closingId, setClosingId] = useState<number | null>(null)
@@ -29,6 +29,8 @@ function PositionsTable({ positions }: Props) {
   const visible = useMemo(() => {
     return positions
   }, [positions])
+  const title = isLive ? 'Blink Positions' : 'Open Positions'
+  const emptyLabel = isLive ? 'No Blink positions' : 'No open positions'
 
   const sorted = useMemo(() => [...visible].sort((a, b) => {
     const va = a[sort] as number | string | undefined
@@ -52,7 +54,7 @@ function PositionsTable({ positions }: Props) {
             <TrendingUp size={14} className="text-[color:var(--color-aurora-1)]" />
           </div>
           <span className="text-[11px] font-black uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            Open Positions
+            {title}
           </span>
           <span className="px-1.5 py-0.5 rounded-full bg-[color:var(--color-surface-700)] text-[10px] font-bold tabular font-mono">{visible.length}</span>
         </div>
@@ -172,7 +174,7 @@ function PositionsTable({ positions }: Props) {
       {visible.length === 0 && (
         <div className="py-12 flex flex-col items-center justify-center text-[color:var(--color-text-dim)]">
           <TrendingDown size={24} className="mb-2 opacity-20" />
-          <p className="text-xs uppercase tracking-widest font-medium">No open positions</p>
+          <p className="text-xs uppercase tracking-widest font-medium">{emptyLabel}</p>
         </div>
       )}
     </div>

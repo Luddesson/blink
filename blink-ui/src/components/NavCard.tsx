@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { TrendingUp, TrendingDown } from 'lucide-react'
 import { motion } from 'motion/react'
 import {
@@ -41,6 +41,7 @@ const WINDOW_MS: Record<TimeRange, number> = {
 }
 
 interface FetchedPoint { timestamp_ms: number; nav_usdc: number }
+interface LiveTruthPoint { t: number; v: number }
 interface QuantMetrics {
   win_rate_pct: number
   profit_factor: number
@@ -77,6 +78,7 @@ export default function NavCard({
 }: Props) {
   const { viewMode } = useMode()
   const isLive = viewMode === 'live'
+  const isVerifiedLive = isLive && portfolio?.exchange_positions_verified === true
   const positive = netPnl >= 0
 
   const [localUptime, setLocalUptime] = useState(portfolio?.uptime_secs ?? 0)
@@ -106,9 +108,17 @@ export default function NavCard({
 
   const [range, setRange] = useState<TimeRange>('30m')
   const [fetchedPoints, setFetchedPoints] = useState<FetchedPoint[]>([])
+  const [liveTruthPoints, setLiveTruthPoints] = useState<LiveTruthPoint[]>([])
+  const lastLiveTruthKey = useRef('')
   const [quant, setQuant] = useState<QuantMetrics | null>(null)
 
   useEffect(() => {
+    if (isLive) {
+      setFetchedPoints([])
+      setQuant(null)
+      return
+    }
+
     let cancelled = false
     const load = async () => {
       try {
@@ -124,13 +134,39 @@ export default function NavCard({
         if (!r.ok) return
         const data = await r.json() as QuantMetrics
         if (!cancelled) setQuant(data)
-      } catch { }
+      } catch {
+        if (!cancelled) setQuant(null)
+      }
     }
     void load()
     void loadQuant()
     const id = setInterval(() => { void load(); void loadQuant(); }, 30_000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [range])
+  }, [range, isLive])
+
+  useEffect(() => {
+    if (!isVerifiedLive) {
+      setLiveTruthPoints([])
+      lastLiveTruthKey.current = ''
+      return
+    }
+
+    const checkedAt = typeof portfolio?.truth_checked_at_ms === 'number'
+      ? portfolio.truth_checked_at_ms
+      : Date.now()
+    const livePnl = Number.isFinite(netPnl) ? netPnl : 0
+    const key = `${checkedAt}:${livePnl.toFixed(8)}`
+    if (lastLiveTruthKey.current === key) return
+    lastLiveTruthKey.current = key
+
+    const cutoff = Date.now() - WINDOW_MS['30d']
+    setLiveTruthPoints((prev) => {
+      const withoutDuplicate = prev.filter((point) => point.t !== checkedAt)
+      return [...withoutDuplicate, { t: checkedAt, v: livePnl }]
+        .filter((point) => point.t >= cutoff)
+        .slice(-2000)
+    })
+  }, [isVerifiedLive, netPnl, portfolio?.truth_checked_at_ms])
 
   // Stroke color: bull-emerald when profitable, bear-ruby when down.
   // In live mode, tint toward amber for positive moves.
@@ -139,23 +175,28 @@ export default function NavCard({
     : 'oklch(0.72 0.22 25)'
 
   const START_BALANCE = 100
-  const rawChartData: { t: number; v: number }[] = fetchedPoints.length > 0
-    ? fetchedPoints.map(p => ({ t: p.timestamp_ms, v: p.nav_usdc - START_BALANCE }))
-    : equityCurve.map((v, i) => ({ t: equityTimestamps[i] ?? i, v: v - START_BALANCE }))
+  const rawChartData: { t: number; v: number }[] = isLive
+    ? (isVerifiedLive ? liveTruthPoints : [])
+    : fetchedPoints.length > 0
+      ? fetchedPoints.map(p => ({ t: p.timestamp_ms, v: p.nav_usdc - START_BALANCE }))
+      : equityCurve.map((v, i) => ({ t: equityTimestamps[i] ?? i, v: v - START_BALANCE }))
 
   const chartWindowMs = WINDOW_MS[range]
   const windowStart = nowMs - chartWindowMs
 
   const filteredData = rawChartData.filter(d => d.t >= windowStart && d.t <= nowMs)
-  const currentPnl = nav - START_BALANCE
-  if (filteredData.length > 0) {
-    const last = filteredData[filteredData.length - 1]
-    if (nowMs - last.t > 2000) filteredData.push({ t: nowMs, v: currentPnl })
-  } else {
-    filteredData.push({ t: windowStart, v: currentPnl })
-    filteredData.push({ t: nowMs, v: currentPnl })
+  const currentPnl = isVerifiedLive ? netPnl : nav - START_BALANCE
+  const chartTruthBlocked = isLive && !isVerifiedLive
+  if (!chartTruthBlocked) {
+    if (filteredData.length > 0) {
+      const last = filteredData[filteredData.length - 1]
+      if (nowMs - last.t > 2000) filteredData.push({ t: nowMs, v: currentPnl })
+    } else {
+      filteredData.push({ t: windowStart, v: currentPnl })
+      filteredData.push({ t: nowMs, v: currentPnl })
+    }
   }
-  const chartData = filteredData
+  const chartData = chartTruthBlocked ? [] : filteredData
 
   // Professional: Adjust X-domain to stretch data to fill the graph if we have limited history
   // but stay within the requested window.
@@ -188,6 +229,8 @@ export default function NavCard({
   const uptimeStr = localUptime < 3600
     ? `${Math.floor(localUptime / 60)}m ${localUptime % 60}s`
     : `${Math.floor(localUptime / 3600)}h ${Math.floor((localUptime % 3600) / 60)}m`
+  const exchangePositionValue = portfolio?.exchange_position_value_usdc ?? portfolio?.external_position_value_usdc ?? 0
+  const exchangePositionCount = portfolio?.exchange_positions_count ?? 0
 
   return (
     <motion.div
@@ -216,7 +259,7 @@ export default function NavCard({
         {/* Top row */}
         <div className="flex items-center justify-between mb-3">
           <span className="font-sans text-[10px] text-[color:var(--color-text-muted)] uppercase tracking-[0.12em]">
-            PnL since start
+            {isLive ? 'Live wallet PnL' : 'PnL since start'}
           </span>
           <div className="flex items-center gap-2">
             {portfolio && (
@@ -252,8 +295,18 @@ export default function NavCard({
             {fmtPct(navDeltaPct)}
           </span>
           <span className="text-sm text-[color:var(--color-text-muted)] font-mono tabular">
-            NAV <span className="text-[color:var(--color-text-primary)] font-semibold">${fmt(nav)}</span>
+            {isLive ? 'Wallet NAV' : 'NAV'} <span className="text-[color:var(--color-text-primary)] font-semibold">${fmt(nav)}</span>
           </span>
+          {isLive && exchangePositionCount > 0 && (
+            <span className="text-xs text-[color:var(--color-text-muted)] font-mono tabular">
+              wallet positions <span className="text-[color:var(--color-text-primary)] font-semibold">${fmt(exchangePositionValue)}</span>
+            </span>
+          )}
+          {isLive && (portfolio?.open_positions?.length ?? 0) === 0 && exchangePositionCount > 0 && (
+            <span className="text-xs text-[color:var(--color-whale-400)] font-mono tabular">
+              Blink positions 0
+            </span>
+          )}
           {feesPaid > 0 && (
             <span className="text-xs text-[color:var(--color-whale-500)] font-mono tabular">
               fees −${fmt(feesPaid)}
@@ -277,7 +330,10 @@ export default function NavCard({
               {r}
             </button>
           ))}
-          {fetchedPoints.length > 0 && (
+          {isVerifiedLive && liveTruthPoints.length > 0 && (
+            <span className="text-[9px] text-[color:var(--color-text-dim)] ml-1 uppercase tracking-wider">wallet truth</span>
+          )}
+          {!isLive && fetchedPoints.length > 0 && (
             <span className="text-[9px] text-[color:var(--color-text-dim)] ml-1 uppercase tracking-wider">historical</span>
           )}
         </div>
@@ -347,18 +403,30 @@ export default function NavCard({
           </div>
         ) : (
           <div className="h-52 flex items-center justify-center text-[color:var(--color-text-dim)] text-sm mt-3 border border-dashed border-[color:var(--color-border-subtle)] rounded-lg">
-            Waiting for equity data…
+            {isLive ? 'Waiting for verified wallet truth...' : 'Waiting for equity data...'}
           </div>
         )}
 
         {/* Stats strip */}
         {portfolio && (
           <div className="grid grid-cols-5 gap-1 mt-4 pt-4 border-t border-[color:var(--color-border-subtle)]">
-            <Stat label="Win Rate" value={`${quant?.win_rate_pct?.toFixed(1) ?? '0.0'}%`} />
-            <Stat label="Sharpe" value={quant?.sharpe_ratio?.toFixed(2) ?? '0.00'} />
-            <Stat label="Drawdown" value={`${quant?.current_drawdown_pct?.toFixed(1) ?? '0.00'}%`} />
-            <Stat label="Profit Factor" value={quant?.profit_factor?.toFixed(2) ?? '1.00'} />
-            <Stat label="Trades" value={String(quant?.total_trades ?? 0)} />
+            {isLive ? (
+              <>
+                <Stat label="Truth" value={portfolio.reality_status ?? 'unverified'} />
+                <Stat label="Positions" value={isVerifiedLive ? String(portfolio.wallet_positions_count ?? portfolio.open_positions.length) : 'unverified'} />
+                <Stat label="Value" value={isVerifiedLive ? `$${fmt(portfolio.wallet_position_value_usdc ?? exchangePositionValue)}` : 'unverified'} />
+                <Stat label="Basis" value={isVerifiedLive ? `$${fmt(portfolio.wallet_position_initial_value_usdc ?? portfolio.invested_usdc ?? 0)}` : 'unverified'} />
+                <Stat label="Open PnL" value={isVerifiedLive ? `${netPnl >= 0 ? '+' : '−'}$${fmt(Math.abs(netPnl))}` : 'unverified'} />
+              </>
+            ) : (
+              <>
+                <Stat label="Win Rate" value={`${quant?.win_rate_pct?.toFixed(1) ?? '0.0'}%`} />
+                <Stat label="Sharpe" value={quant?.sharpe_ratio?.toFixed(2) ?? '0.00'} />
+                <Stat label="Drawdown" value={`${quant?.current_drawdown_pct?.toFixed(1) ?? '0.00'}%`} />
+                <Stat label="Profit Factor" value={quant?.profit_factor?.toFixed(2) ?? '1.00'} />
+                <Stat label="Trades" value={String(quant?.total_trades ?? 0)} />
+              </>
+            )}
           </div>
         )}
       </div>

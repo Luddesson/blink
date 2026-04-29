@@ -79,7 +79,12 @@ fn realism_mode() -> bool {
 fn dynamic_sizing_enabled() -> bool {
     std::env::var("BLINK_DYNAMIC_SIZING")
         .ok()
-        .map(|v| !matches!(v.to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no"))
+        .map(|v| {
+            !matches!(
+                v.to_ascii_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            )
+        })
         .unwrap_or(true)
 }
 
@@ -1391,11 +1396,10 @@ mod tests {
 
     #[test]
     fn size_capped_at_max_order() {
-        let p = PaperPortfolio::new(); // NAV = 200
-                                       // RN1 trades $20,000 → 10% = $2,000, capped at max_order_usdc ($5 default)
+        let p = PaperPortfolio::new(); // NAV = 100
+                                       // RN1 trades $20,000 → 10% = $2,000, capped by 8% NAV risk tier.
         let size = p.calculate_size_usdc(20_000.0).unwrap();
-        // Data-driven: PAPER_MAX_ORDER_USDC default is $5
-        assert!((size - 5.0).abs() < 1e-9, "size={size} expected cap=5");
+        assert!((size - 8.0).abs() < 1e-9, "size={size} expected cap=8");
     }
 
     #[test]

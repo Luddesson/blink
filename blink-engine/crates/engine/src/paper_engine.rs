@@ -1736,8 +1736,6 @@ impl PaperEngine {
                 Some(GateAbortReason::PostOnlyCross)
             }
         };
-        let filled = gate_abort.is_none();
-
         if let Some(reason) = gate_abort {
             // Record this token in the abort cooldown map
             self.drift_abort_cooldown

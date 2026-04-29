@@ -271,7 +271,10 @@ export default function Dashboard() {
                 <Tooltip 
                   contentStyle={{ backgroundColor: "#171717", borderColor: "#262626", fontSize: "12px" }}
                   labelFormatter={(t) => new Date(t).toLocaleString()}
-                  formatter={(val: number) => [`$${val.toLocaleString()}`, "NAV"]}
+                  formatter={(val) => {
+                    const nav = typeof val === "number" ? val : Number(val ?? 0);
+                    return [`$${nav.toLocaleString()}`, "NAV"];
+                  }}
                 />
                 <Line type="monotone" dataKey="nav_usdc" stroke="#34d399" strokeWidth={2} dot={false} isAnimationActive={false} />
               </LineChart>

@@ -85,7 +85,7 @@ impl PendingOrder {
         token_id: String,
         side: OrderSide,
         size_usdc: f64,
-        size_u64: u64,
+        _size_u64: u64,
         entry_price: f64,
     ) -> Self {
         let now = Instant::now();

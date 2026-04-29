@@ -4,8 +4,7 @@
 //! and submitted via the agent RPC server. It flows through the same risk
 //! management and order execution pipeline as RN1 signals.
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};

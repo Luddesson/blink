@@ -23,35 +23,21 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 // All modules are declared in lib.rs; we access them through the crate name.
 use engine::activity_log::{new_activity_log, push as log_push, EntryKind};
 use engine::agent_rpc::{run_agent_rpc_server, AgentRpcState};
-use engine::alpha_signal::AlphaSignal;
 use engine::backtest_engine::{load_ticks_csv, BacktestConfig, BacktestEngine};
 use engine::blink_twin::TwinSnapshot;
-use engine::buffer_pool::BufferPool;
 use engine::clob_client::ClobClient;
 use engine::config::Config;
-use engine::execution_provider::create_provider_from_env;
-use engine::exit_strategy::ExitAction;
 use engine::gas_oracle::GasOracle;
-use engine::heartbeat::spawn_heartbeat_worker;
 use engine::latency_tracker::LatencyStats;
-use engine::live_engine::LiveEngine;
-use engine::mev_router::PrivateRouter;
 use engine::order_book::OrderBookStore;
-use engine::order_executor::OrderResponse;
-use engine::order_signer::OrderParams;
 use engine::paper_engine::PaperEngine;
-use engine::paper_portfolio::STARTING_BALANCE_USDC;
 use engine::postgres_logger::{PostgresLogger, WarehouseEvent};
 use engine::r2_uploader::start_r2_uploader;
-use engine::risk_manager::RiskConfig;
 use engine::rn1_poller::{
     prefetch_rn1_active_markets, run_rn1_poller, Rn1PollDiagnostics, Rn1PollDiagnosticsHandle,
 };
-use engine::sniffer::Sniffer;
 use engine::strategy::{StrategyController, StrategyControllerConfig};
 use engine::tick_recorder::{TickRecord, TickRecorder};
-use engine::timed_mutex::TimedMutex;
-use engine::truth_reconciler::FillLifecycle;
 use engine::tui_app::run_tui;
 use engine::types::RN1Signal;
 use engine::web_server::{run_web_server, AppState};
@@ -571,7 +557,7 @@ async fn main() -> Result<()> {
     };
 
     let signal_task: tokio::task::JoinHandle<()> = if paper_mode {
-        let mut paper_inner = PaperEngine::new(
+        let paper_inner = PaperEngine::new(
             Arc::clone(&book_store),
             Some(activity.clone()),
             Arc::clone(&market_subscriptions),
@@ -896,7 +882,7 @@ async fn main() -> Result<()> {
         let subs_for_signals = Arc::clone(&market_subscriptions);
         let ws_reconnect_for_signals = Arc::clone(&ws_force_reconnect);
         let dedup = Arc::clone(&shared_dedup);
-        let mut signal_rx = signal_rx;
+        let signal_rx = signal_rx;
         let per_token_queue_depth = engine::signal_pipeline::per_token_queue_depth();
         let token_senders: Arc<
             dashmap::DashMap<String, crossbeam_channel::Sender<engine::types::RN1Signal>>,
@@ -1089,6 +1075,7 @@ async fn main() -> Result<()> {
         live.startup_cancel_all_open_orders().await?;
 
         Arc::clone(&live).spawn_reconciliation_worker();
+        Arc::clone(&live).spawn_wallet_truth_worker();
         live.spawn_router_workers().await;
 
         // Spawn heartbeat — keeps the Polymarket session alive every 8s.
@@ -1274,7 +1261,7 @@ async fn main() -> Result<()> {
         let tp = Arc::clone(&trading_paused);
         let twin_opt = twin_engine.clone();
         let dedup = Arc::clone(&shared_dedup);
-        let mut signal_rx = signal_rx;
+        let signal_rx = signal_rx;
         let per_token_queue_depth = engine::signal_pipeline::per_token_queue_depth();
         let token_senders: Arc<
             dashmap::DashMap<String, crossbeam_channel::Sender<engine::types::RN1Signal>>,
@@ -1390,7 +1377,7 @@ async fn main() -> Result<()> {
         })
     } else {
         // Read-only mode
-        let mut signal_rx = signal_rx;
+        let signal_rx = signal_rx;
         tokio::task::spawn_blocking(move || {
             while let Ok(signal) = signal_rx.recv() {
                 latency

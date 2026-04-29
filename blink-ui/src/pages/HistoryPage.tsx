@@ -18,19 +18,22 @@ import {
   BiggestTrades,
   MarketBreakdown,
   EnhancedTradeTable,
+  LiveExecutionsTable,
 } from '../components/history'
 
 export default function HistoryPage() {
   const [range, setRange] = useState<'24h' | '7d' | '30d' | 'all'>('24h')
-  const { data: allTrades } = usePoll(() => api.historyAll(range), 60_000, true, [range])
+  const { data: allTrades } = usePoll(() => api.liveHistoryAll(range), 30_000, true, range)
+  const { data: liveExecutionsResponse } = usePoll(() => api.liveExecutionsAllResponse(range), 30_000, true, range)
   const [filters, setFilters] = useState<TradeFilters>({})
   const trades = allTrades ?? []
+  const executions = liveExecutionsResponse?.executions ?? []
   const stats = useTradeStats(trades, filters)
 
   return (
     <div className="flex-1 flex flex-col gap-2 p-2 overflow-y-auto min-h-0">
       <div className="flex justify-between items-center bg-neutral-900/50 p-2 rounded border border-neutral-800">
-        <div className="text-sm font-bold text-neutral-400 uppercase tracking-widest ml-2">Trade History</div>
+        <div className="text-sm font-bold text-neutral-400 uppercase tracking-widest ml-2">Live Trade History</div>
         <div className="flex gap-1 bg-neutral-950 p-1 rounded border border-neutral-800">
           {(['24h', '7d', '30d', 'all'] as const).map((r) => (
             <button
@@ -50,6 +53,16 @@ export default function HistoryPage() {
 
       <ErrorBoundary label="FilterBar">
         <FilterBar filters={filters} onChange={setFilters} totalTrades={stats.totalTrades} />
+      </ErrorBoundary>
+
+      <ErrorBoundary label="LiveExecutionsTable">
+        <LiveExecutionsTable
+          executions={executions}
+          realityStatus={liveExecutionsResponse?.reality_status}
+          realityIssues={liveExecutionsResponse?.reality_issues}
+          truthCheckedAtMs={liveExecutionsResponse?.truth_checked_at_ms}
+          source={liveExecutionsResponse?.source}
+        />
       </ErrorBoundary>
 
       <ErrorBoundary label="CalendarHeatmap">

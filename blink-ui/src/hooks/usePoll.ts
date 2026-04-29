@@ -4,7 +4,7 @@ export function usePoll<T>(
   fetchFn: () => Promise<T>,
   intervalMs: number,
   enabled = true,
-  deps: any[] = [],
+  refreshKey?: unknown,
 ): { data: T | null; loading: boolean; error: string | null } {
   const [data, setData] = useState<T | null>(null)
   const [loading, setLoading] = useState(true)
@@ -42,7 +42,7 @@ export function usePoll<T>(
       mountedRef.current = false
       clearTimeout(timer)
     }
-  }, [intervalMs, enabled, ...deps])
+  }, [intervalMs, enabled, refreshKey])
 
   return { data, loading, error }
 }

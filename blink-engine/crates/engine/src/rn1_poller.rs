@@ -336,7 +336,7 @@ pub async fn run_rn1_poller(
                     );
                     if let Some(ref log) = activity {
                         log_push(log, EntryKind::Signal,
-                            format!("🚨 RN1 {side} {outcome} @ {price:.2} ×{size:.0} — {title} (#{total_signals})"));
+                            format!("RN1 signal observed: {side} {outcome} @ {price:.2} ×{size:.0} — {title} (#{total_signals})"));
                     }
 
                     if let Err(e) = signal_tx.send(signal) {

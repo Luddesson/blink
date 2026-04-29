@@ -2,6 +2,7 @@ import { ShieldCheck, ShieldOff, Activity } from 'lucide-react'
 import type { RiskSummary } from '../types'
 import { fmt, fmtPnl, pnlClass } from '../lib/format'
 import GradientBar from './shared/GradientBar'
+import { useMode } from '../hooks/useMode'
 
 interface Props {
   risk: RiskSummary
@@ -11,6 +12,8 @@ interface Props {
 }
 
 export default function RiskPanel({ risk, volBps, equityCurve, currentNav }: Props) {
+  const { viewMode } = useMode()
+  const isLive = viewMode === 'live'
   // Derive daily loss limit from percentage (applied to typical NAV of ~$250)
   const pnl = risk.daily_pnl ?? 0
   const maxLossPct = risk.max_daily_loss_pct ?? 0.05
@@ -76,10 +79,10 @@ export default function RiskPanel({ risk, volBps, equityCurve, currentNav }: Pro
           </div>
         )}
 
-        {/* Daily P&L + progress bar toward daily loss limit */}
+        {/* Risk P&L + progress bar toward daily loss limit */}
         <div>
           <div className="flex justify-between text-xs mb-1">
-            <span className="text-slate-500">Daily P&amp;L</span>
+            <span className="text-slate-500">{isLive ? 'Risk P&L' : 'Daily P&L'}</span>
             <span className={`font-mono font-semibold ${pnlClass(pnl)}`}>
               {fmtPnl(pnl)} USDC
             </span>

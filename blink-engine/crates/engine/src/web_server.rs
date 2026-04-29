@@ -3,9 +3,12 @@
 //! Provides REST endpoints and a WebSocket feed for real-time engine state.
 //! Activated via `WEB_UI=true` environment variable.
 
-use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc, Mutex,
+use std::{
+    collections::HashSet,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use axum::{
@@ -22,7 +25,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::broadcast;
-use tokio_postgres::Client;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -37,7 +39,7 @@ use crate::latency_tracker::LatencyTracker;
 use crate::live_engine::LiveEngine;
 use crate::order_book::OrderBookStore;
 use crate::paper_engine::PaperEngine;
-use crate::paper_portfolio::PaperPortfolio;
+use crate::paper_portfolio::{ClosedTrade, PaperPortfolio};
 use crate::postgres_logger;
 use crate::risk_manager::RiskManager;
 use crate::strategy::{StrategyController, StrategyMode, StrategySwitchError};
@@ -45,6 +47,14 @@ use crate::timed_mutex::TimedMutex;
 use crate::ws_client::WsHealthMetrics;
 
 type SlugCache = Arc<Mutex<std::collections::HashMap<String, String>>>;
+
+const POLYMARKET_PUSD_PROXY: &str = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB";
+const DATA_API_PAGE_LIMIT: usize = 500;
+const DEFAULT_POLYGON_RPCS: &[&str] = &[
+    "https://polygon-bor-rpc.publicnode.com",
+    "https://polygon.drpc.org",
+    "https://1rpc.io/matic",
+];
 
 // ─── Shared application state ───────────────────────────────────────────────
 
@@ -127,6 +137,36 @@ struct ClosedTradeJson {
     slippage_bps: f64,
     event_start_time: Option<i64>,
     event_end_time: Option<i64>,
+    signal_source: String,
+    analysis_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct LiveExecutionJson {
+    transaction_hash: Option<String>,
+    token_id: String,
+    condition_id: Option<String>,
+    market_title: Option<String>,
+    market_outcome: Option<String>,
+    side: String,
+    price: f64,
+    shares: f64,
+    usdc_size: f64,
+    timestamp: i64,
+    traded_at: String,
+    execution_type: String,
+    source: String,
+}
+
+struct ExchangePositionsSnapshot {
+    value_usdc: f64,
+    initial_value_usdc: f64,
+    cash_pnl_usdc: f64,
+    positions_count: usize,
+    preview: Vec<serde_json::Value>,
+    open_positions: Vec<PositionJson>,
+    asset_ids: HashSet<String>,
+    checked_at_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -176,6 +216,7 @@ pub async fn run_web_server(
         let cache = Arc::clone(&state.portfolio_cache);
         let started_at = Arc::clone(&state.started_at);
         let cached_at = Arc::clone(&state.portfolio_cached_at_ms);
+        let cache_is_live = state.live_engine.is_some();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
             loop {
@@ -190,8 +231,11 @@ pub async fn run_web_server(
                     Err(_) => continue,
                 };
                 let uptime_secs = started_at.elapsed().as_secs();
-                let portfolio_json = build_portfolio_json(&p, uptime_secs, 300);
+                let mut portfolio_json = build_portfolio_json(&p, uptime_secs, 300);
                 drop(p);
+                if cache_is_live {
+                    portfolio_json = mark_live_cache_unverified(portfolio_json);
+                }
                 if let Ok(mut c) = cache.write() {
                     *c = Some(portfolio_json);
                     cached_at.store(
@@ -235,10 +279,14 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/geoblock", get(get_geoblock))
         .route("/api/portfolio", get(get_portfolio))
         .route("/api/history", get(get_history))
+        .route("/api/live/history", get(get_live_history))
+        .route("/api/live/executions", get(get_live_executions))
         .route("/api/activity", get(get_activity))
         .route("/api/rejections", get(get_rejections))
         .route("/api/orderbook/{token_id}", get(get_orderbook))
         .route("/api/orderbooks", get(get_all_orderbooks))
+        .route("/api/market-url/{token_id}", get(get_market_url))
+        .route("/api/market-meta/{token_id}", get(get_market_meta))
         .route("/api/risk", get(get_risk))
         .route("/api/wallet", get(get_wallet_status))
         .route(
@@ -267,7 +315,20 @@ pub fn build_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/api/fill-window", get(get_fill_window))
         .route("/api/analytics/equity", get(get_analytics_equity))
         .route("/api/analytics/quant", get(get_analytics_quant))
+        .route("/api/pnl-attribution", get(get_pnl_attribution))
+        .route("/api/bullpen/health", get(get_bullpen_health))
+        .route("/api/bullpen/discovery", get(get_bullpen_discovery))
+        .route("/api/bullpen/convergence", get(get_bullpen_convergence))
+        .route("/api/backtest", post(post_backtest))
+        .route("/api/backtest/sweep", post(post_backtest_sweep))
+        .route(
+            "/api/backtest/walk-forward",
+            post(post_backtest_walk_forward),
+        )
         .route("/api/alpha", get(get_alpha_status))
+        .route("/api/alpha/calibration", get(get_alpha_calibration))
+        .route("/api/project-inventory", get(get_project_inventory))
+        .route("/api/gates", get(get_gates))
         .route("/ws", get(ws_handler));
 
     Router::new()
@@ -390,6 +451,57 @@ fn build_portfolio_json(
     })
 }
 
+fn mark_live_cache_unverified(mut value: serde_json::Value) -> serde_json::Value {
+    let Some(obj) = value.as_object_mut() else {
+        return value;
+    };
+
+    let blink_cash = obj.get("cash_usdc").cloned().unwrap_or(json!(0.0));
+    let blink_nav = obj.get("nav_usdc").cloned().unwrap_or(json!(0.0));
+
+    obj.insert("mode".to_string(), json!("live"));
+    obj.insert(
+        "accounting_source".to_string(),
+        json!("live_ws_cache_unverified"),
+    );
+    obj.insert("balance_source".to_string(), json!("unverified"));
+    obj.insert("cash_source".to_string(), json!("unverified"));
+    obj.insert("reality_status".to_string(), json!("unverified"));
+    obj.insert(
+        "reality_issues".to_string(),
+        json!(["live_wallet_truth_requires_api_poll"]),
+    );
+    obj.insert("wallet_truth_verified".to_string(), json!(false));
+    obj.insert("exchange_positions_verified".to_string(), json!(false));
+    obj.insert("onchain_cash_verified".to_string(), json!(false));
+    obj.insert("blink_cash_usdc".to_string(), blink_cash);
+    obj.insert("blink_nav_usdc".to_string(), blink_nav);
+    obj.insert("cash_usdc".to_string(), serde_json::Value::Null);
+    obj.insert("nav_usdc".to_string(), serde_json::Value::Null);
+    obj.insert("wallet_nav_usdc".to_string(), serde_json::Value::Null);
+    obj.insert("invested_usdc".to_string(), json!(0.0));
+    obj.insert("unrealized_pnl_usdc".to_string(), json!(0.0));
+    obj.insert("wallet_open_pnl_usdc".to_string(), serde_json::Value::Null);
+    obj.insert(
+        "wallet_unrealized_pnl_usdc".to_string(),
+        serde_json::Value::Null,
+    );
+    obj.insert(
+        "wallet_position_value_usdc".to_string(),
+        serde_json::Value::Null,
+    );
+    obj.insert(
+        "wallet_position_initial_value_usdc".to_string(),
+        serde_json::Value::Null,
+    );
+    obj.insert("wallet_positions_count".to_string(), json!(0));
+    obj.insert("exchange_positions_count".to_string(), json!(0));
+    obj.insert("open_positions".to_string(), json!([]));
+    obj.insert("equity_curve".to_string(), json!([]));
+    obj.insert("equity_timestamps".to_string(), json!([]));
+    value
+}
+
 // ─── Handlers ───────────────────────────────────────────────────────────────
 
 async fn get_health(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -454,16 +566,14 @@ async fn get_geoblock() -> Json<serde_json::Value> {
 }
 
 async fn get_portfolio(State(state): State<AppState>) -> Json<serde_json::Value> {
+    if state.live_engine.is_some() {
+        return get_live_portfolio(State(state)).await;
+    }
+
     let portfolio = state
         .paper
         .as_ref()
-        .map(|paper| Arc::clone(&paper.portfolio))
-        .or_else(|| {
-            state
-                .live_engine
-                .as_ref()
-                .map(|live| Arc::clone(&live.portfolio))
-        });
+        .map(|paper| Arc::clone(&paper.portfolio));
     let Some(portfolio) = portfolio else {
         return Json(json!({"error": "Portfolio not active"}));
     };
@@ -597,6 +707,19 @@ async fn get_history(
     let per_page = params.per_page.unwrap_or(50).clamp(1, 5000);
     let page = params.page.unwrap_or(1);
 
+    // In live mode the History tab is an exchange-backed ledger. Do not let
+    // paper/backtest/DB rows leak into the current live history surface.
+    if let Some(ref live) = state.live_engine {
+        let p = live.portfolio.lock().await;
+        return Json(history_response_from_closed_trades(
+            &p.closed_trades,
+            range,
+            page,
+            per_page,
+            "live_memory",
+        ));
+    }
+
     // ── Attempt Database Query (Postgres) ─────────────────────────────────────
     if let Some(ref url) = state.clickhouse_url {
         let minutes: Option<u64> = match range {
@@ -634,59 +757,356 @@ async fn get_history(
         return Json(json!({"error": "Portfolio busy", "retry": true}));
     };
 
-    let cutoff = match range {
-        "24h" => Some(chrono::Local::now() - chrono::Duration::hours(24)),
-        "7d" => Some(chrono::Local::now() - chrono::Duration::days(7)),
-        "30d" => Some(chrono::Local::now() - chrono::Duration::days(30)),
-        _ => None,
+    Json(history_response_from_closed_trades(
+        &p.closed_trades,
+        range,
+        page,
+        per_page,
+        "paper_memory",
+    ))
+}
+
+async fn get_live_history(
+    State(state): State<AppState>,
+    Query(params): Query<HistoryQuery>,
+) -> Json<serde_json::Value> {
+    let range = params.range.as_deref().unwrap_or("all");
+    let per_page = params.per_page.unwrap_or(50).clamp(1, 5000);
+    let page = params.page.unwrap_or(1);
+
+    let Some(ref live) = state.live_engine else {
+        return Json(json!({
+            "trades": [],
+            "total": 0,
+            "page": 1,
+            "per_page": per_page,
+            "total_pages": 1,
+            "source": "live_unavailable",
+            "range": range,
+        }));
     };
-    let filtered: Vec<_> = p
-        .closed_trades
+
+    let p = live.portfolio.lock().await;
+    Json(history_response_from_closed_trades(
+        &p.closed_trades,
+        range,
+        page,
+        per_page,
+        "live_memory",
+    ))
+}
+
+async fn get_live_executions(Query(params): Query<HistoryQuery>) -> Json<serde_json::Value> {
+    let range = params.range.as_deref().unwrap_or("all");
+    let per_page = params.per_page.unwrap_or(50).clamp(1, 5000);
+    let page = params.page.unwrap_or(1);
+
+    let Some(user) = std::env::var("POLYMARKET_FUNDER_ADDRESS").ok() else {
+        return Json(json!({
+            "executions": [],
+            "total": 0,
+            "page": 1,
+            "per_page": per_page,
+            "total_pages": 1,
+            "source": "live_wallet_unavailable",
+            "range": range,
+            "reality_status": "unverified",
+            "truth_checked_at_ms": null,
+            "reality_issues": ["missing_POLYMARKET_FUNDER_ADDRESS"],
+        }));
+    };
+
+    let max_executions = page.saturating_mul(per_page).clamp(1, 10_000);
+    let executions = match fetch_polymarket_activity_executions(&user, max_executions).await {
+        Some(executions) => executions,
+        None => {
+            return Json(json!({
+                "executions": [],
+                "total": 0,
+                "page": 1,
+                "per_page": per_page,
+                "total_pages": 1,
+                "source": "live_wallet_unverified",
+                "range": range,
+                "reality_status": "unverified",
+                "truth_checked_at_ms": null,
+                "reality_issues": ["polymarket_activity_unverified"],
+            }));
+        }
+    };
+
+    Json(live_executions_response(
+        executions,
+        range,
+        page,
+        per_page,
+        "polymarket_data_api_activity",
+    ))
+}
+
+fn history_response_from_closed_trades(
+    closed_trades: &[ClosedTrade],
+    range: &str,
+    page: usize,
+    per_page: usize,
+    source: &str,
+) -> serde_json::Value {
+    let cutoff = history_cutoff(range);
+    let filtered: Vec<&ClosedTrade> = closed_trades
         .iter()
         .filter(|t| cutoff.map(|c| t.closed_at_wall >= c).unwrap_or(true))
         .collect();
 
     let total = filtered.len();
-    let total_pages = (total as f64 / per_page as f64).ceil() as usize;
-    let total_pages = total_pages.max(1);
+    let total_pages = ((total as f64 / per_page as f64).ceil() as usize).max(1);
     let page = page.clamp(1, total_pages);
     let skip = (page - 1) * per_page;
-
-    let trades: Vec<ClosedTradeJson> = p
-        .closed_trades
-        .iter()
-        .filter(|t| cutoff.map(|c| t.closed_at_wall >= c).unwrap_or(true))
+    let trades: Vec<ClosedTradeJson> = filtered
+        .into_iter()
         .rev()
         .skip(skip)
         .take(per_page)
-        .map(|t| ClosedTradeJson {
-            token_id: t.token_id.clone(),
-            market_title: t.market_title.clone(),
-            side: t.side.to_string(),
-            entry_price: t.entry_price,
-            exit_price: t.exit_price,
-            shares: t.shares,
-            realized_pnl: t.realized_pnl,
-            fees_paid_usdc: t.fees_paid_usdc,
-            reason: t.reason.clone(),
-            opened_at: t.opened_at_wall.to_rfc3339(),
-            closed_at: t.closed_at_wall.to_rfc3339(),
-            duration_secs: t.duration_secs,
-            slippage_bps: t.scorecard.slippage_bps,
-            event_start_time: t.event_start_time,
-            event_end_time: t.event_end_time,
-        })
+        .map(closed_trade_json)
         .collect();
 
-    Json(json!({
+    json!({
         "trades": trades,
         "total": total,
         "page": page,
         "per_page": per_page,
         "total_pages": total_pages,
-        "source": "memory",
+        "source": source,
         "range": range,
-    }))
+    })
+}
+
+fn history_cutoff(range: &str) -> Option<chrono::DateTime<chrono::Local>> {
+    match range {
+        "24h" => Some(chrono::Local::now() - chrono::Duration::hours(24)),
+        "7d" => Some(chrono::Local::now() - chrono::Duration::days(7)),
+        "30d" => Some(chrono::Local::now() - chrono::Duration::days(30)),
+        _ => None,
+    }
+}
+
+fn history_cutoff_unix_secs(range: &str) -> Option<i64> {
+    history_cutoff(range).map(|dt| dt.timestamp())
+}
+
+async fn fetch_polymarket_activity_executions(
+    user: &str,
+    max_items: usize,
+) -> Option<Vec<LiveExecutionJson>> {
+    let max_items = max_items.clamp(1, data_api_max_items());
+    let mut entries = Vec::new();
+    let mut seen = HashSet::new();
+
+    for offset in (0..max_items).step_by(DATA_API_PAGE_LIMIT) {
+        let limit = DATA_API_PAGE_LIMIT.min(max_items - offset);
+        let url = format!(
+            "https://data-api.polymarket.com/activity?user={user}&limit={limit}&offset={offset}"
+        );
+        let body = fetch_data_api_json_with_retry(&url, 2_000).await?;
+        let page_entries = data_api_entries_from_body(body);
+        let page_len = page_entries.len();
+        let mut added = 0usize;
+
+        for entry in page_entries {
+            if seen.insert(data_api_entry_key(&entry)) {
+                entries.push(entry);
+                added += 1;
+            }
+        }
+
+        if page_len < limit || added == 0 {
+            break;
+        }
+    }
+
+    Some(live_executions_from_activity_entries(&entries))
+}
+
+fn data_api_max_items() -> usize {
+    std::env::var("BLINK_DATA_API_MAX_ITEMS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|v| v.clamp(DATA_API_PAGE_LIMIT, 50_000))
+        .unwrap_or(10_000)
+}
+
+async fn fetch_data_api_json_with_retry(url: &str, timeout_ms: u64) -> Option<serde_json::Value> {
+    let attempts = std::env::var("BLINK_DATA_API_RETRIES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|v| v.clamp(1, 5))
+        .unwrap_or(2);
+    let client = reqwest::Client::new();
+
+    for attempt in 1..=attempts {
+        let response = tokio::time::timeout(
+            std::time::Duration::from_millis(timeout_ms),
+            client.get(url).header("accept", "application/json").send(),
+        )
+        .await;
+
+        match response {
+            Ok(Ok(resp)) if resp.status().is_success() => {
+                match resp.json::<serde_json::Value>().await {
+                    Ok(body) => return Some(body),
+                    Err(e) => {
+                        tracing::warn!(attempt, attempts, err = %e, "Data API response was not JSON");
+                    }
+                }
+            }
+            Ok(Ok(resp)) => {
+                tracing::warn!(
+                    attempt,
+                    attempts,
+                    status = %resp.status(),
+                    "Data API returned non-success status"
+                );
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(attempt, attempts, err = %e, "Data API request failed");
+            }
+            Err(_) => {
+                tracing::warn!(attempt, attempts, timeout_ms, "Data API request timed out");
+            }
+        }
+
+        if attempt < attempts {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+fn live_executions_from_activity_body(body: serde_json::Value) -> Vec<LiveExecutionJson> {
+    let entries = data_api_entries_from_body(body);
+    live_executions_from_activity_entries(&entries)
+}
+
+fn live_executions_from_activity_entries(entries: &[serde_json::Value]) -> Vec<LiveExecutionJson> {
+    let mut executions = entries
+        .iter()
+        .filter(|entry| {
+            json_text(entry, &["type"])
+                .map(|kind| kind.eq_ignore_ascii_case("TRADE"))
+                .unwrap_or(false)
+        })
+        .map(live_execution_json)
+        .collect::<Vec<_>>();
+    executions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    executions
+}
+
+fn data_api_entries_from_body(body: serde_json::Value) -> Vec<serde_json::Value> {
+    if let Some(arr) = body.as_array() {
+        arr.clone()
+    } else if let Some(arr) = body.get("data").and_then(|v| v.as_array()) {
+        arr.clone()
+    } else {
+        body.get("activity")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+fn data_api_entry_key(entry: &serde_json::Value) -> String {
+    let tx = json_text(entry, &["transactionHash", "transaction_hash", "hash"])
+        .unwrap_or_else(|| "no_tx".to_string());
+    let asset = json_text(entry, &["asset", "token_id", "tokenId", "conditionId"])
+        .unwrap_or_else(|| "no_asset".to_string());
+    let timestamp = json_i64(entry, &["timestamp", "time"]).unwrap_or_default();
+    let side = json_text(entry, &["side"]).unwrap_or_else(|| "no_side".to_string());
+    let kind = json_text(entry, &["type"]).unwrap_or_else(|| "no_type".to_string());
+    format!("{tx}:{asset}:{timestamp}:{side}:{kind}")
+}
+
+fn live_executions_response(
+    executions: Vec<LiveExecutionJson>,
+    range: &str,
+    page: usize,
+    per_page: usize,
+    source: &str,
+) -> serde_json::Value {
+    let cutoff = history_cutoff_unix_secs(range);
+    let filtered = executions
+        .into_iter()
+        .filter(|execution| cutoff.map(|c| execution.timestamp >= c).unwrap_or(true))
+        .collect::<Vec<_>>();
+    let total = filtered.len();
+    let total_pages = ((total as f64 / per_page as f64).ceil() as usize).max(1);
+    let page = page.clamp(1, total_pages);
+    let skip = (page - 1) * per_page;
+    let executions = filtered
+        .into_iter()
+        .skip(skip)
+        .take(per_page)
+        .collect::<Vec<_>>();
+
+    json!({
+        "executions": executions,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": total_pages,
+        "source": source,
+        "range": range,
+        "reality_status": "matched",
+        "truth_checked_at_ms": postgres_logger::now_ms(),
+    })
+}
+
+fn live_execution_json(entry: &serde_json::Value) -> LiveExecutionJson {
+    let timestamp = json_i64(entry, &["timestamp", "time"]).unwrap_or(0);
+    let traded_at = chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default();
+
+    LiveExecutionJson {
+        transaction_hash: json_text(entry, &["transactionHash", "transaction_hash", "hash"]),
+        token_id: json_text(entry, &["asset", "token_id", "tokenId", "conditionId"])
+            .unwrap_or_default(),
+        condition_id: json_text(entry, &["conditionId", "condition_id"]),
+        market_title: json_text(entry, &["title", "market", "eventTitle"]),
+        market_outcome: json_text(entry, &["outcome", "side"]),
+        side: json_text(entry, &["side"])
+            .unwrap_or_else(|| "UNKNOWN".to_string())
+            .to_ascii_uppercase(),
+        price: json_f64(entry, &["price", "avgPrice", "avg_price"]).unwrap_or(0.0),
+        shares: json_f64(entry, &["size", "tokens", "quantity"]).unwrap_or(0.0),
+        usdc_size: json_f64(entry, &["usdcSize", "usdc_size", "value"]).unwrap_or(0.0),
+        timestamp,
+        traded_at,
+        execution_type: json_text(entry, &["type"]).unwrap_or_else(|| "TRADE".to_string()),
+        source: "polymarket_data_api_activity".to_string(),
+    }
+}
+
+fn closed_trade_json(t: &ClosedTrade) -> ClosedTradeJson {
+    ClosedTradeJson {
+        token_id: t.token_id.clone(),
+        market_title: t.market_title.clone(),
+        side: t.side.to_string(),
+        entry_price: t.entry_price,
+        exit_price: t.exit_price,
+        shares: t.shares,
+        realized_pnl: t.realized_pnl,
+        fees_paid_usdc: t.fees_paid_usdc,
+        reason: t.reason.clone(),
+        opened_at: t.opened_at_wall.to_rfc3339(),
+        closed_at: t.closed_at_wall.to_rfc3339(),
+        duration_secs: t.duration_secs,
+        slippage_bps: t.scorecard.slippage_bps,
+        event_start_time: t.event_start_time,
+        event_end_time: t.event_end_time,
+        signal_source: t.signal_source.clone(),
+        analysis_id: t.analysis_id.clone(),
+    }
 }
 
 async fn get_activity(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -1026,27 +1446,147 @@ async fn get_live_portfolio(State(state): State<AppState>) -> Json<serde_json::V
     };
     let failsafe = live.failsafe_metrics_snapshot();
     let pending_count = live.pending_orders_count().await;
+    let blink_wallet_truth_last_sync_ms = live.wallet_truth_last_sync_ms();
+    let blink_wallet_truth_sync_age_ms = live.wallet_truth_sync_age_ms();
     let p = live.portfolio.lock().await;
-    let cash = p.cash_usdc;
+    let local_cash = p.cash_usdc;
     let nav = p.nav();
-    let invested = p.total_invested();
-    let unrealized = p.unrealized_pnl();
     let realized = p.realized_pnl();
     let fees_paid = p.total_fees_paid_usdc;
-    let open_positions_count = p.positions.len();
+    let local_open_positions_count = p.positions.len();
+    let local_position_ids: HashSet<String> =
+        p.positions.iter().map(|pos| pos.token_id.clone()).collect();
     drop(p);
-    let exchange_positions = match std::env::var("POLYMARKET_FUNDER_ADDRESS") {
-        Ok(user) => fetch_polymarket_positions_value(&user).await,
-        Err(_) => None,
+    let funder_address = std::env::var("POLYMARKET_FUNDER_ADDRESS").ok();
+    let onchain_cash = match funder_address.as_deref() {
+        Some(user) => tokio::time::timeout(
+            std::time::Duration::from_millis(1_500),
+            fetch_onchain_pusd_cash(user),
+        )
+        .await
+        .ok()
+        .flatten(),
+        None => None,
     };
-    let (exchange_position_value_usdc, exchange_positions_count, exchange_positions_preview) =
-        exchange_positions.unwrap_or((0.0, 0usize, Vec::new()));
-    let nav_with_exchange_positions = if exchange_positions_count > 0 {
-        cash + exchange_position_value_usdc
+    let onchain_cash_verified = onchain_cash.is_some();
+    let wallet_cash = onchain_cash;
+    let cash_for_blink_nav = onchain_cash.unwrap_or(local_cash);
+    let blink_nav = if onchain_cash_verified {
+        nav - local_cash + cash_for_blink_nav
     } else {
         nav
     };
-    let open_positions_count = open_positions_count.max(exchange_positions_count);
+    let mut exchange_positions_snapshot = match funder_address.as_deref() {
+        Some(user) => fetch_polymarket_positions_value(user).await,
+        None => None,
+    };
+    if local_open_positions_count > 0
+        && exchange_positions_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.positions_count == 0)
+            .unwrap_or(false)
+    {
+        tracing::warn!(
+            local_open_positions_count,
+            "Polymarket positions returned empty while local ledger had positions; confirming once"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        exchange_positions_snapshot = match funder_address.as_deref() {
+            Some(user) => fetch_polymarket_positions_value(user).await,
+            None => None,
+        };
+    }
+    let exchange_positions_verified = exchange_positions_snapshot.is_some();
+    let (
+        exchange_position_value_usdc,
+        exchange_position_initial_value_usdc,
+        exchange_cash_pnl_usdc,
+        exchange_positions_count,
+        exchange_positions_preview,
+        exchange_open_positions,
+        exchange_asset_ids,
+        truth_checked_at_ms,
+    ) = exchange_positions_snapshot
+        .map(|snapshot| {
+            (
+                snapshot.value_usdc,
+                snapshot.initial_value_usdc,
+                snapshot.cash_pnl_usdc,
+                snapshot.positions_count,
+                snapshot.preview,
+                snapshot.open_positions,
+                snapshot.asset_ids,
+                Some(snapshot.checked_at_ms),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                0.0,
+                0.0,
+                0.0,
+                0usize,
+                Vec::new(),
+                Vec::new(),
+                HashSet::new(),
+                None,
+            )
+        });
+    let wallet_nav_verified = exchange_positions_verified && onchain_cash_verified;
+    let wallet_nav = wallet_cash.map(|cash| cash + exchange_position_value_usdc);
+    let reported_nav = wallet_nav_verified.then_some(wallet_nav.unwrap_or(0.0));
+    let external_only_positions_count = exchange_asset_ids.difference(&local_position_ids).count();
+    let local_only_positions_count = local_position_ids.difference(&exchange_asset_ids).count();
+    let open_positions_count = if exchange_positions_verified {
+        exchange_positions_count
+    } else {
+        0
+    };
+    let wallet_positions_count = if exchange_positions_verified {
+        exchange_positions_count
+    } else {
+        0
+    };
+    let invested = if exchange_positions_verified {
+        exchange_position_initial_value_usdc
+    } else {
+        0.0
+    };
+    let unrealized = if exchange_positions_verified {
+        exchange_cash_pnl_usdc
+    } else {
+        0.0
+    };
+    let wallet_position_value = exchange_positions_verified.then_some(exchange_position_value_usdc);
+    let wallet_position_initial_value =
+        exchange_positions_verified.then_some(exchange_position_initial_value_usdc);
+    let wallet_open_pnl = exchange_positions_verified.then_some(exchange_cash_pnl_usdc);
+    let mut reality_issues = Vec::<String>::new();
+    if funder_address.is_none() {
+        reality_issues.push("missing_POLYMARKET_FUNDER_ADDRESS".to_string());
+    }
+    if !onchain_cash_verified {
+        reality_issues.push("onchain_cash_unverified".to_string());
+    }
+    if !exchange_positions_verified {
+        reality_issues.push("polymarket_positions_unverified".to_string());
+    }
+    if external_only_positions_count > 0 {
+        reality_issues.push(format!(
+            "{external_only_positions_count}_exchange_position_not_in_blink_ledger"
+        ));
+    }
+    if local_only_positions_count > 0 {
+        reality_issues.push(format!(
+            "{local_only_positions_count}_blink_position_not_on_exchange"
+        ));
+    }
+    let reality_status = if !exchange_positions_verified || !onchain_cash_verified {
+        "unverified"
+    } else if external_only_positions_count > 0 || local_only_positions_count > 0 {
+        "mismatch"
+    } else {
+        "matched"
+    };
     let (daily_pnl, cb_tripped, max_daily_loss_pct, trading_enabled) =
         if let Some(ref risk) = state.risk {
             let r = risk.lock_or_recover();
@@ -1060,72 +1600,169 @@ async fn get_live_portfolio(State(state): State<AppState>) -> Json<serde_json::V
             (0.0, false, 0.1, false)
         };
     let uptime_secs = state.started_at.elapsed().as_secs();
-    Json(json!({
-        "mode": "live",
-        "pending_orders": pending_count,
-        "confirmed_fills": failsafe.confirmed_fills,
-        "no_fills": failsafe.no_fills,
-        "stale_orders": failsafe.stale_orders,
-        "confirmation_rate_pct": failsafe.confirmation_rate_pct,
-        "daily_pnl_usdc": daily_pnl,
-        "max_daily_loss_pct": max_daily_loss_pct,
-        "circuit_breaker_tripped": cb_tripped,
-        "trading_enabled": trading_enabled,
-        "accounting_source": "onchain_pusd_plus_polymarket_position_value",
-        "balance_source": "onchain_pusd_cash_plus_data_api_positions",
-        "confirmed_only": false,
-        "queued_orders_affect_nav": false,
-        "cash_usdc": cash,
-        "nav_usdc": nav_with_exchange_positions,
-        "invested_usdc": invested,
-        "unrealized_pnl_usdc": unrealized,
-        "realized_pnl_usdc": realized,
-        "fees_paid_usdc": fees_paid,
-        "open_positions_count": open_positions_count,
-        "exchange_position_value_usdc": exchange_position_value_usdc,
-        "exchange_positions_count": exchange_positions_count,
-        "exchange_positions_preview": exchange_positions_preview,
-        "emergency_stop_endpoint": "/api/emergency_stop",
-        "heartbeat_ok": failsafe.heartbeat_ok_count,
-        "heartbeat_fail": failsafe.heartbeat_fail_count,
-        "trigger_count": failsafe.trigger_count,
-        "uptime_secs": uptime_secs,
-    }))
+    let mut payload = serde_json::Map::new();
+    macro_rules! put {
+        ($key:literal, $value:expr) => {
+            payload.insert($key.to_string(), json!($value));
+        };
+    }
+    put!("mode", "live");
+    put!("pending_orders", pending_count);
+    put!("confirmed_fills", failsafe.confirmed_fills);
+    put!("no_fills", failsafe.no_fills);
+    put!("stale_orders", failsafe.stale_orders);
+    put!("confirmation_rate_pct", failsafe.confirmation_rate_pct);
+    put!("daily_pnl_usdc", daily_pnl);
+    put!("max_daily_loss_pct", max_daily_loss_pct);
+    put!("circuit_breaker_tripped", cb_tripped);
+    put!("trading_enabled", trading_enabled);
+    put!(
+        "accounting_source",
+        if wallet_nav_verified {
+            "onchain_pusd_plus_polymarket_position_value"
+        } else {
+            "unverified"
+        }
+    );
+    put!(
+        "balance_source",
+        if wallet_nav_verified {
+            "onchain_pusd_cash_plus_data_api_positions"
+        } else {
+            "unverified"
+        }
+    );
+    put!(
+        "cash_source",
+        if onchain_cash_verified {
+            "onchain_pusd_balance"
+        } else {
+            "unverified"
+        }
+    );
+    put!("reality_status", reality_status);
+    put!("reality_issues", reality_issues);
+    put!("truth_checked_at_ms", truth_checked_at_ms);
+    put!("exchange_positions_verified", exchange_positions_verified);
+    put!("onchain_cash_verified", onchain_cash_verified);
+    put!("wallet_truth_verified", wallet_nav_verified);
+    put!(
+        "blink_wallet_truth_last_sync_ms",
+        blink_wallet_truth_last_sync_ms
+    );
+    put!(
+        "blink_wallet_truth_sync_age_ms",
+        blink_wallet_truth_sync_age_ms
+    );
+    put!(
+        "external_only_positions_count",
+        external_only_positions_count
+    );
+    put!("local_only_positions_count", local_only_positions_count);
+    put!("local_open_positions_count", local_open_positions_count);
+    put!("confirmed_only", false);
+    put!("queued_orders_affect_nav", false);
+    put!("cash_usdc", wallet_cash);
+    put!("nav_usdc", reported_nav);
+    put!("blink_cash_usdc", local_cash);
+    put!("blink_nav_usdc", blink_nav);
+    put!(
+        "wallet_nav_usdc",
+        wallet_nav_verified.then_some(wallet_nav.unwrap_or(0.0))
+    );
+    put!("invested_usdc", invested);
+    put!("unrealized_pnl_usdc", unrealized);
+    put!("wallet_open_pnl_usdc", wallet_open_pnl);
+    put!("wallet_unrealized_pnl_usdc", wallet_open_pnl);
+    put!(
+        "wallet_position_initial_value_usdc",
+        wallet_position_initial_value
+    );
+    put!("wallet_position_value_usdc", wallet_position_value);
+    put!(
+        "wallet_pnl_source",
+        if exchange_positions_verified {
+            "polymarket_data_api_cashPnl"
+        } else {
+            "unverified"
+        }
+    );
+    put!(
+        "pnl_source",
+        if exchange_positions_verified {
+            "polymarket_data_api_cashPnl"
+        } else {
+            "unverified"
+        }
+    );
+    put!("realized_pnl_usdc", realized);
+    put!("fees_paid_usdc", fees_paid);
+    put!("open_positions", exchange_open_positions);
+    put!("open_positions_count", open_positions_count);
+    put!("wallet_positions_count", wallet_positions_count);
+    put!("exchange_position_value_usdc", exchange_position_value_usdc);
+    put!("external_position_value_usdc", exchange_position_value_usdc);
+    put!("exchange_positions_count", exchange_positions_count);
+    put!("exchange_positions_preview", exchange_positions_preview);
+    put!("emergency_stop_endpoint", "/api/emergency_stop");
+    put!("heartbeat_ok", failsafe.heartbeat_ok_count);
+    put!("heartbeat_fail", failsafe.heartbeat_fail_count);
+    put!("trigger_count", failsafe.trigger_count);
+    put!("uptime_secs", uptime_secs);
+    Json(serde_json::Value::Object(payload))
 }
 
-async fn fetch_polymarket_positions_value(
-    user: &str,
-) -> Option<(f64, usize, Vec<serde_json::Value>)> {
-    let url = format!("https://data-api.polymarket.com/positions?user={user}");
-    let resp = tokio::time::timeout(
-        std::time::Duration::from_millis(800),
-        reqwest::Client::new().get(url).send(),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    if !resp.status().is_success() {
-        return None;
+async fn fetch_polymarket_positions_value(user: &str) -> Option<ExchangePositionsSnapshot> {
+    let checked_at_ms = postgres_logger::now_ms();
+    let max_items = data_api_max_items();
+    let mut positions = Vec::new();
+    let mut seen = HashSet::new();
+
+    for offset in (0..max_items).step_by(DATA_API_PAGE_LIMIT) {
+        let limit = DATA_API_PAGE_LIMIT.min(max_items - offset);
+        let url = format!(
+            "https://data-api.polymarket.com/positions?user={user}&limit={limit}&offset={offset}"
+        );
+        let body = fetch_data_api_json_with_retry(&url, 2_000).await?;
+        let page_positions = data_api_entries_from_body(body);
+        let page_len = page_positions.len();
+        let mut added = 0usize;
+
+        for position in page_positions {
+            if seen.insert(data_api_position_key(&position)) {
+                positions.push(position);
+                added += 1;
+            }
+        }
+
+        if page_len < limit || added == 0 {
+            break;
+        }
     }
-    let body: serde_json::Value = resp.json().await.ok()?;
-    let positions: Vec<serde_json::Value> = if let Some(arr) = body.as_array() {
-        arr.clone()
-    } else {
-        body.get("data")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default()
-    };
-    let value = positions
+
+    Some(exchange_positions_snapshot_from_entries(
+        &positions,
+        checked_at_ms,
+    ))
+}
+
+#[cfg(test)]
+fn exchange_positions_snapshot_from_body(
+    body: serde_json::Value,
+    checked_at_ms: u64,
+) -> ExchangePositionsSnapshot {
+    let positions = data_api_entries_from_body(body);
+    exchange_positions_snapshot_from_entries(&positions, checked_at_ms)
+}
+
+fn exchange_positions_snapshot_from_entries(
+    positions: &[serde_json::Value],
+    checked_at_ms: u64,
+) -> ExchangePositionsSnapshot {
+    let asset_ids = positions
         .iter()
-        .map(|p| {
-            p.get("currentValue")
-                .or_else(|| p.get("current_value"))
-                .or_else(|| p.get("value"))
-                .and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse::<f64>().ok()))
-                .unwrap_or(0.0)
-        })
-        .sum::<f64>();
+        .filter_map(|p| json_text(p, &["asset", "token_id", "tokenId", "conditionId"]))
+        .collect::<HashSet<_>>();
     let preview = positions
         .iter()
         .take(5)
@@ -1139,7 +1776,227 @@ async fn fetch_polymarket_positions_value(
             })
         })
         .collect::<Vec<_>>();
-    Some((value, positions.len(), preview))
+    let open_positions = positions
+        .iter()
+        .enumerate()
+        .map(|(idx, p)| exchange_position_json(idx, p))
+        .collect::<Vec<_>>();
+    let value = open_positions
+        .iter()
+        .map(|pos| pos.usdc_spent + pos.unrealized_pnl)
+        .sum::<f64>();
+    let initial_value = open_positions.iter().map(|pos| pos.usdc_spent).sum::<f64>();
+    let cash_pnl = open_positions
+        .iter()
+        .map(|pos| pos.unrealized_pnl)
+        .sum::<f64>();
+    ExchangePositionsSnapshot {
+        value_usdc: value,
+        initial_value_usdc: initial_value,
+        cash_pnl_usdc: cash_pnl,
+        positions_count: positions.len(),
+        preview,
+        open_positions,
+        asset_ids,
+        checked_at_ms,
+    }
+}
+
+fn data_api_position_key(position: &serde_json::Value) -> String {
+    let asset = json_text(position, &["asset", "token_id", "tokenId", "conditionId"])
+        .unwrap_or_else(|| "no_asset".to_string());
+    let outcome =
+        json_text(position, &["outcome", "side"]).unwrap_or_else(|| "no_outcome".to_string());
+    format!("{asset}:{outcome}")
+}
+
+fn exchange_position_json(index: usize, p: &serde_json::Value) -> PositionJson {
+    let token_id = json_text(p, &["asset", "token_id", "tokenId", "conditionId"])
+        .unwrap_or_else(|| format!("exchange-position-{index}"));
+    let title = json_text(p, &["title", "market", "eventTitle"]);
+    let outcome = json_text(p, &["outcome", "side"]);
+    let shares = json_f64(p, &["size", "tokens", "quantity"]).unwrap_or(0.0);
+    let entry_price = json_f64(p, &["avgPrice", "avg_price", "averagePrice"]).unwrap_or(0.0);
+    let current_price = json_f64(p, &["curPrice", "currentPrice", "price"]).unwrap_or(entry_price);
+    let initial_value =
+        json_f64(p, &["initialValue", "initial_value"]).unwrap_or_else(|| shares * entry_price);
+    let current_value = json_f64(p, &["currentValue", "current_value", "value"])
+        .unwrap_or_else(|| shares * current_price);
+    let pnl = json_f64(p, &["cashPnl", "cash_pnl"]).unwrap_or(current_value - initial_value);
+    let pnl_pct = json_f64(p, &["percentPnl", "percent_pnl"]).unwrap_or_else(|| {
+        if initial_value.abs() > f64::EPSILON {
+            (pnl / initial_value) * 100.0
+        } else {
+            0.0
+        }
+    });
+
+    PositionJson {
+        id: index + 1,
+        token_id,
+        market_title: title,
+        market_outcome: outcome,
+        side: "Buy".to_string(),
+        entry_price,
+        shares,
+        usdc_spent: initial_value,
+        current_price,
+        unrealized_pnl: pnl,
+        unrealized_pnl_pct: pnl_pct,
+        opened_at: String::new(),
+        opened_age_secs: 0,
+        fee_category: "exchange".to_string(),
+        fee_rate: 0.0,
+        event_start_time: None,
+        event_end_time: None,
+        secs_to_event: None,
+    }
+}
+
+fn json_f64(value: &serde_json::Value, keys: &[&str]) -> Option<f64> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse::<f64>().ok()))
+    })
+}
+
+fn json_i64(value: &serde_json::Value, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        value.get(*key).and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_u64().and_then(|n| i64::try_from(n).ok()))
+                .or_else(|| v.as_f64().map(|n| n as i64))
+                .or_else(|| v.as_str()?.parse::<i64>().ok())
+        })
+    })
+}
+
+fn json_text(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string)
+    })
+}
+
+async fn fetch_onchain_pusd_cash(user: &str) -> Option<f64> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(900))
+        .build()
+        .ok()?;
+
+    for rpc_url in polygon_rpc_urls() {
+        let decimals = rpc_eth_call(&client, &rpc_url, POLYMARKET_PUSD_PROXY, "0x313ce567")
+            .await
+            .and_then(|raw| parse_quantity_u64(&raw))
+            .map(|v| v.min(u8::MAX as u64) as u8)
+            .unwrap_or(6);
+        let balance_call = format!("0x70a08231{}", abi_address(user)?);
+        if let Some(raw_balance) =
+            rpc_eth_call(&client, &rpc_url, POLYMARKET_PUSD_PROXY, &balance_call).await
+        {
+            if let Some(balance) = parse_token_amount_f64(&raw_balance, decimals) {
+                return Some(balance);
+            }
+        }
+    }
+
+    None
+}
+
+fn polygon_rpc_urls() -> Vec<String> {
+    let mut urls: Vec<String> = std::env::var("POLYGON_RPC_URL")
+        .ok()
+        .into_iter()
+        .flat_map(|v| {
+            v.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for url in DEFAULT_POLYGON_RPCS {
+        if !urls.iter().any(|u| u == url) {
+            urls.push((*url).to_string());
+        }
+    }
+    urls
+}
+
+async fn rpc_eth_call(
+    client: &reqwest::Client,
+    rpc_url: &str,
+    to: &str,
+    data: &str,
+) -> Option<String> {
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_call",
+        "params": [{ "to": to, "data": data }, "latest"],
+    });
+    let response: serde_json::Value = client
+        .post(rpc_url)
+        .json(&body)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    if response.get("error").is_some() {
+        return None;
+    }
+    response
+        .get("result")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+fn abi_address(address: &str) -> Option<String> {
+    let hex = address
+        .strip_prefix("0x")
+        .or_else(|| address.strip_prefix("0X"))
+        .unwrap_or(address);
+    if hex.len() != 40 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("{hex:0>64}").to_lowercase())
+}
+
+fn parse_quantity_u64(hex: &str) -> Option<u64> {
+    let normalized = normalize_quantity(hex);
+    u64::from_str_radix(normalized.trim_start_matches("0x"), 16).ok()
+}
+
+fn parse_token_amount_f64(raw_hex: &str, decimals: u8) -> Option<f64> {
+    let normalized = normalize_quantity(raw_hex);
+    let raw = u128::from_str_radix(normalized.trim_start_matches("0x"), 16).ok()?;
+    let scale = 10u128.checked_pow(decimals as u32)? as f64;
+    if scale == 0.0 {
+        return None;
+    }
+    Some(raw as f64 / scale)
+}
+
+fn normalize_quantity(hex: &str) -> String {
+    let trimmed = hex.trim();
+    let body = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed)
+        .trim_start_matches('0');
+    if body.is_empty() {
+        "0x0".to_string()
+    } else {
+        format!("0x{}", body.to_lowercase())
+    }
 }
 
 async fn post_pause(
@@ -1894,6 +2751,137 @@ async fn get_market_url(
     }
 }
 
+async fn get_market_meta(Path(token_id): Path<String>) -> Json<serde_json::Value> {
+    let gamma_url = format!(
+        "https://gamma-api.polymarket.com/markets?clob_token_ids={}",
+        token_id
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
+
+    match client.get(&gamma_url).send().await {
+        Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+            Ok(data) => Json(gamma_market_meta_payload(&token_id, &data)),
+            Err(e) => Json(json!({
+                "available": false,
+                "token_id": token_id,
+                "error": format!("JSON parse error: {e}"),
+                "source": "gamma_api",
+                "truth_checked_at_ms": postgres_logger::now_ms(),
+            })),
+        },
+        Ok(resp) => Json(json!({
+            "available": false,
+            "token_id": token_id,
+            "error": format!("Gamma API returned {}", resp.status()),
+            "source": "gamma_api",
+            "truth_checked_at_ms": postgres_logger::now_ms(),
+        })),
+        Err(e) => Json(json!({
+            "available": false,
+            "token_id": token_id,
+            "error": format!("HTTP error: {e}"),
+            "source": "gamma_api",
+            "truth_checked_at_ms": postgres_logger::now_ms(),
+        })),
+    }
+}
+
+fn gamma_market_meta_payload(token_id: &str, data: &serde_json::Value) -> serde_json::Value {
+    let Some(market) = gamma_first_market(data) else {
+        return json!({
+            "available": false,
+            "token_id": token_id,
+            "error": "market not found in Gamma response",
+            "source": "gamma_api",
+            "truth_checked_at_ms": postgres_logger::now_ms(),
+        });
+    };
+
+    json!({
+        "available": true,
+        "token_id": token_id,
+        "image": gamma_string(market, &["image", "icon"]).unwrap_or_default(),
+        "question": gamma_string(market, &["question", "title"]).unwrap_or_default(),
+        "volume": gamma_number_or_string(market, &["volume24hr", "volume24hrClob", "volume_24h", "volume"]).unwrap_or_else(|| "0".to_string()),
+        "category": gamma_market_category(market),
+        "url": gamma_market_url(market),
+        "active": market.get("active").and_then(|v| v.as_bool()),
+        "closed": market.get("closed").and_then(|v| v.as_bool()),
+        "accepting_orders": market.get("acceptingOrders").and_then(|v| v.as_bool()),
+        "end_date": gamma_string(market, &["endDate", "endDateIso"]),
+        "source": "gamma_api",
+        "truth_checked_at_ms": postgres_logger::now_ms(),
+    })
+}
+
+fn gamma_first_market(data: &serde_json::Value) -> Option<&serde_json::Value> {
+    data.as_array()?.first()
+}
+
+fn gamma_market_url(market: &serde_json::Value) -> Option<String> {
+    let slug = market
+        .get("events")
+        .and_then(|e| e.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|ev| {
+            ev.get("slug")
+                .or_else(|| ev.get("event_slug"))
+                .or_else(|| ev.get("eventSlug"))
+        })
+        .and_then(|s| s.as_str())
+        .or_else(|| {
+            market
+                .get("market_slug")
+                .or_else(|| market.get("slug"))
+                .or_else(|| market.get("marketSlug"))
+                .and_then(|s| s.as_str())
+        })?;
+    Some(format!("https://polymarket.com/event/{slug}"))
+}
+
+fn gamma_market_category(market: &serde_json::Value) -> String {
+    gamma_string(market, &["category"])
+        .or_else(|| {
+            market
+                .get("events")
+                .and_then(|e| e.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|event| {
+                    event
+                        .get("series")
+                        .and_then(|s| s.as_array())
+                        .and_then(|arr| arr.first())
+                        .and_then(|series| gamma_string(series, &["title", "slug"]))
+                })
+        })
+        .unwrap_or_default()
+}
+
+fn gamma_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn gamma_number_or_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value.get(*key).and_then(|v| {
+            v.as_str()
+                .map(str::to_string)
+                .or_else(|| v.as_f64().map(|n| n.to_string()))
+                .or_else(|| v.as_i64().map(|n| n.to_string()))
+                .or_else(|| v.as_u64().map(|n| n.to_string()))
+        })
+    })
+}
+
 async fn get_pnl_attribution(State(state): State<AppState>) -> Json<serde_json::Value> {
     let Some(ref paper) = state.paper else {
         return Json(json!({ "available": false }));
@@ -2265,6 +3253,8 @@ async fn fetch_history_from_db(
                 slippage_bps: 0.0, // Not stored in DB atm
                 event_start_time: None,
                 event_end_time: None,
+                signal_source: "historical_db".to_string(),
+                analysis_id: None,
             }
         })
         .collect();
@@ -2275,24 +3265,104 @@ async fn fetch_history_from_db(
 /// GET /api/analytics/equity?range=30m|1h|6h|24h|7d|30d
 ///
 /// Returns the NAV curve for the requested time window.
-/// Queries ClickHouse/Postgres when available; falls back to the in-memory equity curve.
+/// In live mode this only serves verified wallet truth; it never falls back to
+/// paper/DB equity. Paper mode queries Postgres when available, then memory.
 async fn get_analytics_equity(
     Query(params): Query<EquityRangeParams>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     let range = params.range.as_deref().unwrap_or("30m");
-    let minutes: u64 = match range {
-        "1h" => 60,
-        "6h" => 360,
-        "24h" => 1440,
-        "7d" => 10080,
-        "30d" => 43200,
-        _ => 30,
-    };
+    let window_ms = equity_window_ms(range);
+    let bucket_ms = equity_bucket_ms(window_ms);
+
+    let live_trading = std::env::var("LIVE_TRADING")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if state.live_engine.is_some() && live_trading {
+        let Some(user) = std::env::var("POLYMARKET_FUNDER_ADDRESS").ok() else {
+            return Json(equity_series_payload(
+                "live_wallet_unverified",
+                range,
+                window_ms,
+                bucket_ms,
+                Vec::<EquityPoint>::new(),
+                json!({
+                    "reality_status": "unverified",
+                    "reality_issues": ["missing_POLYMARKET_FUNDER_ADDRESS"],
+                    "wallet_truth_verified": false,
+                }),
+            ))
+            .into_response();
+        };
+
+        let onchain_cash = tokio::time::timeout(
+            std::time::Duration::from_millis(1_500),
+            fetch_onchain_pusd_cash(&user),
+        )
+        .await
+        .ok()
+        .flatten();
+        let exchange_positions_snapshot = fetch_polymarket_positions_value(&user).await;
+
+        match (onchain_cash, exchange_positions_snapshot) {
+            (Some(cash), Some(snapshot)) => {
+                let wallet_nav = cash + snapshot.value_usdc;
+                let point = EquityPoint {
+                    timestamp_ms: snapshot.checked_at_ms,
+                    nav_usdc: wallet_nav,
+                };
+                return Json(equity_series_payload(
+                    "live_wallet_truth",
+                    range,
+                    window_ms,
+                    bucket_ms,
+                    vec![point],
+                    json!({
+                        "reality_status": "matched",
+                        "truth_checked_at_ms": snapshot.checked_at_ms,
+                        "exchange_positions_verified": true,
+                        "onchain_cash_verified": true,
+                        "wallet_truth_verified": true,
+                        "cash_usdc": cash,
+                        "wallet_nav_usdc": wallet_nav,
+                        "wallet_position_value_usdc": snapshot.value_usdc,
+                        "wallet_position_initial_value_usdc": snapshot.initial_value_usdc,
+                        "wallet_open_pnl_usdc": snapshot.cash_pnl_usdc,
+                        "wallet_pnl_source": "polymarket_data_api_cashPnl",
+                    }),
+                ))
+                .into_response();
+            }
+            (cash, snapshot) => {
+                let mut issues = Vec::new();
+                if cash.is_none() {
+                    issues.push("onchain_cash_unverified");
+                }
+                if snapshot.is_none() {
+                    issues.push("polymarket_positions_unverified");
+                }
+                return Json(equity_series_payload(
+                    "live_wallet_unverified",
+                    range,
+                    window_ms,
+                    bucket_ms,
+                    Vec::<EquityPoint>::new(),
+                    json!({
+                        "reality_status": "unverified",
+                        "reality_issues": issues,
+                        "exchange_positions_verified": snapshot.is_some(),
+                        "onchain_cash_verified": cash.is_some(),
+                        "wallet_truth_verified": false,
+                    }),
+                ))
+                .into_response();
+            }
+        }
+    }
 
     // ── Attempt Database Query (Postgres) ─────────────────────────────────────
     if let Some(ref url) = state.clickhouse_url {
-        let cutoff_ms = postgres_logger::now_ms().saturating_sub(minutes * 60 * 1_000);
+        let cutoff_ms = postgres_logger::now_ms().saturating_sub(window_ms);
 
         // Connect and query Postgres
         let points = match query_postgres_equity(url, cutoff_ms).await {
@@ -2304,26 +3374,38 @@ async fn get_analytics_equity(
         };
 
         if !points.is_empty() {
-            return Json(json!({ "source": "postgres", "range": range, "points": points }))
-                .into_response();
+            return Json(equity_series_payload(
+                "postgres",
+                range,
+                window_ms,
+                bucket_ms,
+                points,
+                json!({}),
+            ))
+            .into_response();
         }
     }
 
     // ── Fallback: in-memory equity curve ──────────────────────────────────────
     if let Some(ref paper) = state.paper {
-        let p = match tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            paper.portfolio.lock(),
-        )
-        .await
-        {
-            Ok(guard) => guard,
-            Err(_) => {
-                return Json(json!({ "source": "timeout", "range": range, "points": Vec::<EquityPoint>::new() }))
+        let p =
+            match tokio::time::timeout(std::time::Duration::from_secs(2), paper.portfolio.lock())
+                .await
+            {
+                Ok(guard) => guard,
+                Err(_) => {
+                    return Json(equity_series_payload(
+                        "timeout",
+                        range,
+                        window_ms,
+                        bucket_ms,
+                        Vec::<EquityPoint>::new(),
+                        json!({}),
+                    ))
                     .into_response();
-            }
-        };
-        let cutoff_ms = postgres_logger::now_ms().saturating_sub(minutes * 60 * 1_000);
+                }
+            };
+        let cutoff_ms = postgres_logger::now_ms().saturating_sub(window_ms);
         let points: Vec<EquityPoint> = p
             .equity_curve
             .iter()
@@ -2334,12 +3416,86 @@ async fn get_analytics_equity(
                 nav_usdc: nav,
             })
             .collect();
-        return Json(json!({ "source": "memory", "range": range, "points": points }))
-            .into_response();
+        return Json(equity_series_payload(
+            "memory",
+            range,
+            window_ms,
+            bucket_ms,
+            points,
+            json!({}),
+        ))
+        .into_response();
     }
 
     let empty: Vec<EquityPoint> = Vec::new();
-    Json(json!({ "source": "none", "range": range, "points": empty })).into_response()
+    Json(equity_series_payload(
+        "none",
+        range,
+        window_ms,
+        bucket_ms,
+        empty,
+        json!({}),
+    ))
+    .into_response()
+}
+
+fn equity_window_ms(range: &str) -> u64 {
+    match range {
+        "1h" => 60 * 60 * 1_000,
+        "6h" => 6 * 60 * 60 * 1_000,
+        "24h" => 24 * 60 * 60 * 1_000,
+        "7d" => 7 * 24 * 60 * 60 * 1_000,
+        "30d" => 30 * 24 * 60 * 60 * 1_000,
+        _ => 30 * 60 * 1_000,
+    }
+}
+
+fn equity_bucket_ms(window_ms: u64) -> u64 {
+    if window_ms > 48 * 60 * 60 * 1_000 {
+        10 * 60 * 1_000
+    } else if window_ms > 6 * 60 * 60 * 1_000 {
+        60 * 1_000
+    } else {
+        10 * 1_000
+    }
+}
+
+fn equity_series_payload(
+    source: &str,
+    range: &str,
+    window_ms: u64,
+    bucket_ms: u64,
+    points: Vec<EquityPoint>,
+    extra: serde_json::Value,
+) -> serde_json::Value {
+    let end_ms = postgres_logger::now_ms();
+    let start_ms = end_ms.saturating_sub(window_ms);
+    let first_ms = points.first().map(|point| point.timestamp_ms);
+    let last_ms = points.last().map(|point| point.timestamp_ms);
+    let truncated = first_ms
+        .map(|ts| ts > start_ms.saturating_add(bucket_ms))
+        .unwrap_or(false);
+
+    let mut payload = json!({
+        "source": source,
+        "range": range,
+        "bucket_ms": bucket_ms,
+        "window_ms": window_ms,
+        "start_ms": start_ms,
+        "end_ms": end_ms,
+        "first_ms": first_ms,
+        "last_ms": last_ms,
+        "truncated": truncated,
+        "points": points,
+    });
+
+    if let (Some(payload), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
+        for (key, value) in extra {
+            payload.insert(key.clone(), value.clone());
+        }
+    }
+
+    payload
 }
 
 /// Connects to Postgres and fetches equity points with downsampling based on the requested window.
@@ -2466,6 +3622,78 @@ async fn get_analytics_quant(State(state): State<AppState>) -> impl IntoResponse
     };
 
     Json(metrics).into_response()
+}
+
+// ─── Bullpen status ──────────────────────────────────────────────────────────
+
+async fn get_bullpen_health() -> Json<serde_json::Value> {
+    Json(bullpen_health_payload(bullpen_enabled_from_env()))
+}
+
+async fn get_bullpen_discovery() -> Json<serde_json::Value> {
+    Json(bullpen_discovery_payload(bullpen_enabled_from_env()))
+}
+
+async fn get_bullpen_convergence() -> Json<serde_json::Value> {
+    Json(bullpen_convergence_payload(bullpen_enabled_from_env()))
+}
+
+fn bullpen_enabled_from_env() -> bool {
+    std::env::var("BULLPEN_ENABLED")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1" || v.eq_ignore_ascii_case("yes"))
+        .unwrap_or(false)
+}
+
+fn bullpen_health_payload(enabled: bool) -> serde_json::Value {
+    if !enabled {
+        return json!({
+            "enabled": false,
+            "authenticated": false,
+            "consecutive_failures": 0,
+            "total_calls": 0,
+            "avg_latency_ms": 0,
+            "last_error": null,
+            "status": "disabled",
+            "source": "blink_engine",
+            "truth_checked_at_ms": postgres_logger::now_ms(),
+        });
+    }
+
+    json!({
+        "enabled": true,
+        "authenticated": false,
+        "consecutive_failures": 1,
+        "total_calls": 0,
+        "avg_latency_ms": 0,
+        "last_error": "bullpen_backend_not_wired",
+        "status": "unwired",
+        "source": "blink_engine",
+        "truth_checked_at_ms": postgres_logger::now_ms(),
+    })
+}
+
+fn bullpen_discovery_payload(enabled: bool) -> serde_json::Value {
+    json!({
+        "enabled": enabled,
+        "total_markets": 0,
+        "scan_count": 0,
+        "markets": [],
+        "status": if enabled { "unwired" } else { "disabled" },
+        "source": "blink_engine",
+        "truth_checked_at_ms": postgres_logger::now_ms(),
+    })
+}
+
+fn bullpen_convergence_payload(enabled: bool) -> serde_json::Value {
+    json!({
+        "enabled": enabled,
+        "active_signals": 0,
+        "tracked_markets": 0,
+        "signals": [],
+        "status": if enabled { "unwired" } else { "disabled" },
+        "source": "blink_engine",
+        "truth_checked_at_ms": postgres_logger::now_ms(),
+    })
 }
 
 // ─── Alpha status ─────────────────────────────────────────────────────────────
@@ -2728,7 +3956,14 @@ async fn get_gates(State(state): State<AppState>) -> Json<serde_json::Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{post_strategy, post_strategy_rollback, AppState};
+    use super::{
+        bullpen_convergence_payload, bullpen_discovery_payload, bullpen_health_payload,
+        data_api_entries_from_body, data_api_entry_key, data_api_position_key, equity_bucket_ms,
+        equity_series_payload, equity_window_ms, exchange_position_json,
+        exchange_positions_snapshot_from_body, gamma_market_meta_payload,
+        live_executions_from_activity_body, live_executions_response, mark_live_cache_unverified,
+        post_strategy, post_strategy_rollback, AppState,
+    };
     use crate::activity_log::new_activity_log;
     use crate::order_book::OrderBookStore;
     use crate::strategy::{StrategyController, StrategyControllerConfig, StrategyMode};
@@ -2741,6 +3976,13 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::{Arc, Mutex};
     use tokio::sync::broadcast;
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "actual={actual} expected={expected}"
+        );
+    }
 
     fn make_test_state(controller: StrategyController, strategy_live_active: bool) -> AppState {
         let (broadcast_tx, _) = broadcast::channel(16);
@@ -2769,6 +4011,364 @@ mod tests {
             strategy_controller: Arc::new(controller),
             strategy_live_active,
         }
+    }
+
+    #[test]
+    fn exchange_position_json_maps_data_api_position_to_blink_position() {
+        let raw = json!({
+            "asset": "108335214097330660216497436528140920329790228410878622712875555123360135252984",
+            "conditionId": "0xf8b61bb1849d27296b9413e471bace0b49f53f87e51aea01b7ea545df52e4302",
+            "size": 3.125,
+            "avgPrice": 0.32,
+            "initialValue": 1,
+            "currentValue": 0.9531,
+            "cashPnl": -0.0469,
+            "percentPnl": -4.6899,
+            "curPrice": 0.305,
+            "title": "Club Atletico de Madrid vs. Arsenal FC: O/U 1.5",
+            "outcome": "Under"
+        });
+
+        let position = exchange_position_json(0, &raw);
+
+        assert_eq!(
+            position.token_id,
+            "108335214097330660216497436528140920329790228410878622712875555123360135252984"
+        );
+        assert_eq!(
+            position.market_title.as_deref(),
+            Some("Club Atletico de Madrid vs. Arsenal FC: O/U 1.5")
+        );
+        assert_eq!(position.market_outcome.as_deref(), Some("Under"));
+        assert_eq!(position.side, "Buy");
+        assert_close(position.shares, 3.125);
+        assert_close(position.entry_price, 0.32);
+        assert_close(position.current_price, 0.305);
+        assert_close(position.usdc_spent, 1.0);
+        assert_close(position.unrealized_pnl, -0.0469);
+        assert_close(position.unrealized_pnl_pct, -4.6899);
+    }
+
+    #[test]
+    fn exchange_positions_snapshot_sums_wallet_truth_fields() {
+        let raw = json!([
+            {
+                "asset": "asset-a",
+                "size": 3.125,
+                "avgPrice": 0.32,
+                "initialValue": 1,
+                "currentValue": 0.9531,
+                "cashPnl": -0.0469,
+                "percentPnl": -4.6899,
+                "curPrice": 0.305,
+                "title": "Club Atletico de Madrid vs. Arsenal FC: O/U 1.5",
+                "outcome": "Under"
+            },
+            {
+                "tokenId": "asset-b",
+                "size": "2",
+                "averagePrice": "0.40",
+                "currentPrice": "0.50",
+                "cash_pnl": "0.20",
+                "title": "Second market",
+                "outcome": "Yes"
+            }
+        ]);
+
+        let snapshot = exchange_positions_snapshot_from_body(raw, 12345);
+
+        assert_eq!(snapshot.positions_count, 2);
+        assert_eq!(snapshot.checked_at_ms, 12345);
+        assert!(snapshot.asset_ids.contains("asset-a"));
+        assert!(snapshot.asset_ids.contains("asset-b"));
+        assert_close(snapshot.value_usdc, 1.9531);
+        assert_close(snapshot.initial_value_usdc, 1.8);
+        assert_close(snapshot.cash_pnl_usdc, 0.1531);
+        assert_eq!(snapshot.open_positions.len(), 2);
+        assert_eq!(snapshot.preview.len(), 2);
+    }
+
+    #[test]
+    fn live_executions_from_activity_body_maps_wallet_trade_without_pnl_claim() {
+        let raw = json!([{
+            "proxyWallet": "0xca357ba96a54f8c2b95bf99a62a2c18be705986b",
+            "timestamp": 1777473614,
+            "conditionId": "0xf8b61bb1849d27296b9413e471bace0b49f53f87e51aea01b7ea545df52e4302",
+            "type": "TRADE",
+            "size": 3.125,
+            "usdcSize": 1.0204,
+            "transactionHash": "0x75359cfabb4531c51510088762a903a94c2e4f1282f6b2f89311eefb2220ccab",
+            "price": 0.32,
+            "asset": "108335214097330660216497436528140920329790228410878622712875555123360135252984",
+            "side": "BUY",
+            "title": "Club Atletico de Madrid vs. Arsenal FC: O/U 1.5",
+            "outcome": "Under"
+        }]);
+
+        let executions = live_executions_from_activity_body(raw);
+
+        assert_eq!(executions.len(), 1);
+        let execution = &executions[0];
+        assert_eq!(execution.execution_type, "TRADE");
+        assert_eq!(execution.side, "BUY");
+        assert_eq!(execution.timestamp, 1777473614);
+        assert_eq!(
+            execution.transaction_hash.as_deref(),
+            Some("0x75359cfabb4531c51510088762a903a94c2e4f1282f6b2f89311eefb2220ccab")
+        );
+        assert_eq!(
+            execution.token_id,
+            "108335214097330660216497436528140920329790228410878622712875555123360135252984"
+        );
+        assert_eq!(
+            execution.market_title.as_deref(),
+            Some("Club Atletico de Madrid vs. Arsenal FC: O/U 1.5")
+        );
+        assert_eq!(execution.market_outcome.as_deref(), Some("Under"));
+        assert_close(execution.shares, 3.125);
+        assert_close(execution.price, 0.32);
+        assert_close(execution.usdc_size, 1.0204);
+    }
+
+    #[test]
+    fn live_executions_from_activity_body_ignores_non_trade_activity() {
+        let raw = json!([
+            {
+                "timestamp": 1777473614,
+                "type": "REDEEM",
+                "size": 3.125,
+                "asset": "not-a-trade"
+            },
+            {
+                "timestamp": 1777473615,
+                "size": 1.0,
+                "asset": "missing-type-is-not-trusted"
+            },
+            {
+                "timestamp": 1777473616,
+                "type": "TRADE",
+                "size": 2.0,
+                "usdcSize": 1.0,
+                "price": 0.5,
+                "asset": "trade-asset",
+                "side": "SELL"
+            }
+        ]);
+
+        let executions = live_executions_from_activity_body(raw);
+
+        assert_eq!(executions.len(), 1);
+        assert_eq!(executions[0].token_id, "trade-asset");
+        assert_eq!(executions[0].side, "SELL");
+    }
+
+    #[test]
+    fn data_api_entries_from_body_accepts_common_wrappers() {
+        let direct = data_api_entries_from_body(json!([{ "asset": "direct" }]));
+        let data = data_api_entries_from_body(json!({ "data": [{ "asset": "data" }] }));
+        let activity = data_api_entries_from_body(json!({ "activity": [{ "asset": "activity" }] }));
+
+        assert_eq!(direct[0]["asset"], "direct");
+        assert_eq!(data[0]["asset"], "data");
+        assert_eq!(activity[0]["asset"], "activity");
+    }
+
+    #[test]
+    fn data_api_dedupe_keys_use_wallet_truth_identifiers() {
+        let trade = json!({
+            "transactionHash": "0xabc",
+            "asset": "asset-a",
+            "timestamp": 1777473614,
+            "side": "BUY",
+            "type": "TRADE"
+        });
+        let same_trade = json!({
+            "transaction_hash": "0xabc",
+            "token_id": "asset-a",
+            "time": "1777473614",
+            "side": "BUY",
+            "type": "TRADE"
+        });
+        let position = json!({
+            "asset": "asset-a",
+            "outcome": "Under"
+        });
+
+        assert_eq!(data_api_entry_key(&trade), data_api_entry_key(&same_trade));
+        assert_eq!(data_api_position_key(&position), "asset-a:Under");
+    }
+
+    #[test]
+    fn live_executions_response_paginates_and_reports_truth_timestamp() {
+        let executions = (0..3)
+            .map(|i| super::LiveExecutionJson {
+                transaction_hash: Some(format!("0x{i}")),
+                token_id: format!("asset-{i}"),
+                condition_id: None,
+                market_title: None,
+                market_outcome: None,
+                side: "BUY".to_string(),
+                price: 0.5,
+                shares: 1.0,
+                usdc_size: 0.5,
+                timestamp: 1777473614 - i,
+                traded_at: String::new(),
+                execution_type: "TRADE".to_string(),
+                source: "test".to_string(),
+            })
+            .collect::<Vec<_>>();
+
+        let response = live_executions_response(executions, "all", 2, 2, "test_source");
+
+        assert_eq!(response["source"], "test_source");
+        assert_eq!(response["reality_status"], "matched");
+        assert_eq!(response["total"], 3);
+        assert_eq!(response["page"], 2);
+        assert_eq!(response["per_page"], 2);
+        assert_eq!(response["total_pages"], 2);
+        assert_eq!(response["executions"].as_array().unwrap().len(), 1);
+        assert!(response["truth_checked_at_ms"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn bullpen_payloads_are_explicit_when_disabled() {
+        let health = bullpen_health_payload(false);
+        assert_eq!(health["enabled"], false);
+        assert_eq!(health["authenticated"], false);
+        assert_eq!(health["consecutive_failures"], 0);
+        assert_eq!(health["last_error"], serde_json::Value::Null);
+        assert_eq!(health["status"], "disabled");
+        assert_eq!(health["source"], "blink_engine");
+
+        let discovery = bullpen_discovery_payload(false);
+        assert_eq!(discovery["enabled"], false);
+        assert_eq!(discovery["total_markets"], 0);
+        assert_eq!(discovery["scan_count"], 0);
+        assert_eq!(discovery["markets"].as_array().unwrap().len(), 0);
+        assert_eq!(discovery["status"], "disabled");
+
+        let convergence = bullpen_convergence_payload(false);
+        assert_eq!(convergence["enabled"], false);
+        assert_eq!(convergence["active_signals"], 0);
+        assert_eq!(convergence["tracked_markets"], 0);
+        assert_eq!(convergence["signals"].as_array().unwrap().len(), 0);
+        assert_eq!(convergence["status"], "disabled");
+    }
+
+    #[test]
+    fn bullpen_payloads_do_not_fabricate_data_when_enabled_but_unwired() {
+        let health = bullpen_health_payload(true);
+        assert_eq!(health["enabled"], true);
+        assert_eq!(health["authenticated"], false);
+        assert_eq!(health["consecutive_failures"], 1);
+        assert_eq!(health["total_calls"], 0);
+        assert_eq!(health["last_error"], "bullpen_backend_not_wired");
+        assert_eq!(health["status"], "unwired");
+
+        let discovery = bullpen_discovery_payload(true);
+        assert_eq!(discovery["enabled"], true);
+        assert_eq!(discovery["total_markets"], 0);
+        assert_eq!(discovery["markets"].as_array().unwrap().len(), 0);
+        assert_eq!(discovery["status"], "unwired");
+
+        let convergence = bullpen_convergence_payload(true);
+        assert_eq!(convergence["enabled"], true);
+        assert_eq!(convergence["active_signals"], 0);
+        assert_eq!(convergence["signals"].as_array().unwrap().len(), 0);
+        assert_eq!(convergence["status"], "unwired");
+    }
+
+    #[test]
+    fn equity_series_payload_reports_contract_metadata() {
+        let window_ms = equity_window_ms("1h");
+        let bucket_ms = equity_bucket_ms(window_ms);
+        let response = equity_series_payload(
+            "live_wallet_truth",
+            "1h",
+            window_ms,
+            bucket_ms,
+            vec![super::EquityPoint {
+                timestamp_ms: 123_456,
+                nav_usdc: 42.25,
+            }],
+            json!({
+                "reality_status": "matched",
+                "wallet_truth_verified": true,
+            }),
+        );
+
+        assert_eq!(response["source"], "live_wallet_truth");
+        assert_eq!(response["range"], "1h");
+        assert_eq!(response["bucket_ms"], 10_000);
+        assert_eq!(response["window_ms"], 3_600_000);
+        assert_eq!(response["first_ms"], 123_456);
+        assert_eq!(response["last_ms"], 123_456);
+        assert_eq!(response["points"].as_array().unwrap().len(), 1);
+        assert_eq!(response["reality_status"], "matched");
+        assert_eq!(response["wallet_truth_verified"], true);
+        assert!(response["start_ms"].as_u64().unwrap() <= response["end_ms"].as_u64().unwrap());
+    }
+
+    #[test]
+    fn gamma_market_meta_payload_maps_gamma_market_fields() {
+        let payload = gamma_market_meta_payload(
+            "asset-under",
+            &json!([{
+                "question": "Club Atletico de Madrid vs. Arsenal FC: O/U 1.5",
+                "image": "https://example.com/ucl.png",
+                "volume24hr": 283373.21079099993,
+                "active": true,
+                "closed": false,
+                "acceptingOrders": true,
+                "endDate": "2026-04-29T19:00:00Z",
+                "events": [{
+                    "slug": "ucl-atm1-ars-2026-04-29-more-markets",
+                    "series": [{ "title": "UEFA Champions League 2025" }]
+                }]
+            }]),
+        );
+
+        assert_eq!(payload["available"], true);
+        assert_eq!(payload["token_id"], "asset-under");
+        assert_eq!(
+            payload["question"],
+            "Club Atletico de Madrid vs. Arsenal FC: O/U 1.5"
+        );
+        assert_eq!(payload["image"], "https://example.com/ucl.png");
+        assert_eq!(payload["volume"], "283373.21079099993");
+        assert_eq!(payload["category"], "UEFA Champions League 2025");
+        assert_eq!(
+            payload["url"],
+            "https://polymarket.com/event/ucl-atm1-ars-2026-04-29-more-markets"
+        );
+        assert_eq!(payload["active"], true);
+        assert_eq!(payload["closed"], false);
+        assert_eq!(payload["accepting_orders"], true);
+    }
+
+    #[test]
+    fn live_ws_cache_is_marked_unverified_and_hides_local_positions() {
+        let payload = mark_live_cache_unverified(json!({
+            "cash_usdc": 12.5,
+            "nav_usdc": 13.5,
+            "invested_usdc": 1.0,
+            "unrealized_pnl_usdc": 0.5,
+            "open_positions": [{ "token_id": "local-only" }],
+            "equity_curve": [12.5, 13.5],
+            "equity_timestamps": [1, 2],
+        }));
+
+        assert_eq!(payload["mode"], "live");
+        assert_eq!(payload["reality_status"], "unverified");
+        assert_eq!(payload["wallet_truth_verified"], false);
+        assert_eq!(payload["exchange_positions_verified"], false);
+        assert_eq!(payload["onchain_cash_verified"], false);
+        assert_eq!(payload["blink_cash_usdc"], 12.5);
+        assert_eq!(payload["blink_nav_usdc"], 13.5);
+        assert!(payload["cash_usdc"].is_null());
+        assert!(payload["nav_usdc"].is_null());
+        assert_eq!(payload["open_positions"].as_array().unwrap().len(), 0);
+        assert_eq!(payload["equity_curve"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]

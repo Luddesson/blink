@@ -21,7 +21,7 @@ export interface EquityPoint {
 }
 
 export interface EquitySeriesResponse {
-  source: 'clickhouse' | 'memory' | 'none' | 'timeout'
+  source: 'clickhouse' | 'postgres' | 'memory' | 'none' | 'timeout' | 'live_wallet_truth' | 'live_wallet_unverified'
   range: EquityRange
   bucket_ms: number
   window_ms: number
@@ -31,6 +31,17 @@ export interface EquitySeriesResponse {
   last_ms: number | null
   truncated: boolean
   points: EquityPoint[]
+  reality_status?: 'matched' | 'mismatch' | 'unverified'
+  reality_issues?: string[]
+  truth_checked_at_ms?: number | null
+  wallet_truth_verified?: boolean
+  exchange_positions_verified?: boolean
+  onchain_cash_verified?: boolean
+  wallet_nav_usdc?: number | null
+  wallet_position_value_usdc?: number | null
+  wallet_position_initial_value_usdc?: number | null
+  wallet_open_pnl_usdc?: number | null
+  wallet_pnl_source?: string
 }
 
 export interface EquitySeriesState {
@@ -50,8 +61,6 @@ export interface EquitySeriesState {
 }
 
 // ─── Config ──────────────────────────────────────────────────────────────────
-
-const API_BASE = 'http://127.0.0.1:3030'
 
 /**
  * Adaptive poll cadence per range.
@@ -101,7 +110,7 @@ export function useEquitySeries(initial: EquityRange = '1h'): EquitySeriesState 
     loadingRef.current = true
     setLoading(true)
     try {
-      const resp = await fetch(`${API_BASE}/api/analytics/equity?range=${r}`)
+      const resp = await fetch(`/api/analytics/equity?range=${r}`)
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const data = (await resp.json()) as EquitySeriesResponse
       if (!mountedRef.current) return

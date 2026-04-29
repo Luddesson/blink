@@ -2,13 +2,25 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { Terminal, Search, Zap, ArrowRight, X } from 'lucide-react'
 import { cn } from '../lib/cn'
+import type { LucideIcon } from 'lucide-react'
+import type { TabId } from '../hooks/useTab'
 
 interface CommandPaletteProps {
   open: boolean
   onClose: () => void
-  onSwitchTab: (tab: any) => void
+  onSwitchTab: (tab: TabId) => void
   onPause: () => void
   paused: boolean
+}
+
+type CommandId = 'buy' | 'sell' | 'pause' | 'dashboard' | 'alpha'
+
+interface Command {
+  id: CommandId
+  label: string
+  icon: LucideIcon
+  shortcut: string
+  color?: string
 }
 
 export default function CommandPalette({ open, onClose, onSwitchTab, onPause, paused }: CommandPaletteProps) {
@@ -22,7 +34,7 @@ export default function CommandPalette({ open, onClose, onSwitchTab, onPause, pa
     }
   }, [open])
 
-  const commands = [
+  const commands: Command[] = [
     { id: 'buy', label: 'Buy Asset...', icon: Zap, shortcut: 'B', color: 'text-[color:var(--color-bull-400)]' },
     { id: 'sell', label: 'Sell Asset...', icon: Zap, shortcut: 'S', color: 'text-[color:var(--color-bear-400)]' },
     { id: 'pause', label: paused ? 'Resume Engine' : 'Pause Engine', icon: X, shortcut: 'P', color: 'text-[color:var(--color-whale-400)]' },
@@ -73,7 +85,7 @@ export default function CommandPalette({ open, onClose, onSwitchTab, onPause, pa
                   className="group flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[color:var(--color-surface-700)/0.5]"
                   onClick={() => {
                     if (cmd.id === 'pause') onPause()
-                    else if (['dashboard', 'alpha'].includes(cmd.id)) onSwitchTab(cmd.id)
+                    else if (cmd.id === 'dashboard' || cmd.id === 'alpha') onSwitchTab(cmd.id)
                     onClose()
                   }}
                 >

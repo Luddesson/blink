@@ -21,6 +21,7 @@ use hmac::{Hmac, Mac};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use tee_vault::KeyVault;
 use tracing::{error, info, instrument, warn};
 
 use crate::config::Config;
@@ -179,14 +180,19 @@ impl OrderExecutor {
             }
         }
 
+        let auth_address = if config.signer_private_key.is_empty() {
+            config.funder_address.clone()
+        } else {
+            tee_vault::SoftwareVault::from_hex(&config.signer_private_key)
+                .context("derive signer address for Polymarket L2 auth")?
+                .signer_address()
+                .to_string()
+        };
+
         Ok(Self {
             client,
             base_url: config.clob_host.clone(),
-            auth_address: if config.signer_address.is_empty() {
-                config.funder_address.clone()
-            } else {
-                config.signer_address.clone()
-            },
+            auth_address,
             api_key: config.api_key.clone(),
             api_secret: config.api_secret.clone(),
             passphrase: config.api_passphrase.clone(),
@@ -678,10 +684,7 @@ impl OrderExecutor {
         for (k, v) in headers {
             req = req.header(k, v);
         }
-        let resp = req
-            .send()
-            .await
-            .context("GET /data/orders network error")?;
+        let resp = req.send().await.context("GET /data/orders network error")?;
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
 

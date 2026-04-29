@@ -14,18 +14,28 @@ interface HeaderProps {
   wsConnected: boolean
   tradingPaused: boolean
   nav?: number
+  navLabel?: string
   navDelta?: number
   navDeltaPct?: number
   positionCount?: number
+  walletPositionCount?: number
+  realityStatus?: 'matched' | 'mismatch' | 'unverified'
+  truthCheckedAtMs?: number | null
+  blinkWalletTruthSyncAgeMs?: number | null
 }
 
 export default function Header({
   wsConnected,
   tradingPaused,
   nav,
+  navLabel = 'NAV',
   navDelta,
   navDeltaPct,
   positionCount,
+  walletPositionCount,
+  realityStatus,
+  truthCheckedAtMs,
+  blinkWalletTruthSyncAgeMs,
 }: HeaderProps) {
   const { viewMode, setViewMode, liveAvailable } = useMode()
   const [showConfirm, setShowConfirm] = useState(false)
@@ -60,6 +70,27 @@ export default function Header({
   const hasDelta = navDelta !== undefined && navDelta !== 0
   const deltaPositive = (navDelta ?? 0) >= 0
   const seTimeCompact = seTime.slice(0, 5)
+  const truthCheckedTime = truthCheckedAtMs
+    ? new Date(truthCheckedAtMs).toLocaleTimeString('sv-SE', {
+      timeZone: 'Europe/Stockholm',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+    : null
+  const blinkSyncAgeSecs = typeof blinkWalletTruthSyncAgeMs === 'number'
+    ? Math.max(0, Math.floor(blinkWalletTruthSyncAgeMs / 1000))
+    : null
+  const blinkSyncLabel = blinkSyncAgeSecs === null
+    ? null
+    : blinkSyncAgeSecs < 60
+      ? `${blinkSyncAgeSecs}s`
+      : `${Math.floor(blinkSyncAgeSecs / 60)}m`
+  const truthTone = realityStatus === 'matched'
+    ? 'text-emerald-300 border-emerald-400/20 bg-emerald-500/10'
+    : realityStatus === 'mismatch'
+      ? 'text-red-300 border-red-400/20 bg-red-500/10'
+      : 'text-amber-300 border-amber-400/20 bg-amber-500/10'
 
   return (
     <>
@@ -125,7 +156,7 @@ export default function Header({
           <div className="col-span-2 row-start-2 flex min-w-0 flex-col items-start gap-2 border-t border-[color:var(--color-border-subtle)] pt-2 sm:order-none sm:flex-1 sm:basis-auto sm:flex-row sm:items-center sm:justify-center sm:gap-6 sm:border-t-0 sm:pt-0">
             <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
               <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-muted)]">
-                NAV
+                {navLabel}
               </span>
               <PriceFlash
                 value={nav}
@@ -159,9 +190,17 @@ export default function Header({
 
             {positionCount !== undefined && positionCount > 0 && (
               <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em]">
-                <span className="text-[color:var(--color-text-muted)]">Positions</span>
+                <span className="text-[color:var(--color-text-muted)]">{isLive ? 'Blink positions' : 'Positions'}</span>
                 <span className="px-2 py-0.5 rounded-md font-mono font-semibold text-[11px] bg-[color:var(--color-surface-700)/0.5] border border-[color:var(--color-border-subtle)] text-[color:var(--color-text-primary)]">
                   {positionCount}
+                </span>
+              </div>
+            )}
+            {isLive && walletPositionCount !== undefined && walletPositionCount > 0 && (
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em]">
+                <span className="text-amber-200/80">Wallet positions</span>
+                <span className="px-2 py-0.5 rounded-md font-mono font-semibold text-[11px] bg-amber-500/15 border border-amber-400/20 text-amber-100">
+                  {walletPositionCount}
                 </span>
               </div>
             )}
@@ -194,6 +233,19 @@ export default function Header({
             >
               <TrendingDown size={11} />
               {rejections}/min
+            </span>
+          )}
+          {isLive && realityStatus && (
+            <span
+              className={`hidden items-center gap-1 rounded-md border px-2 py-0.5 font-mono uppercase tracking-[0.1em] sm:flex ${truthTone}`}
+              title={[
+                truthCheckedTime ? `Wallet truth checked ${truthCheckedTime}` : 'Wallet truth check pending',
+                blinkSyncLabel ? `Blink ledger synced ${blinkSyncLabel} ago` : null,
+              ].filter(Boolean).join(' · ')}
+            >
+              truth {realityStatus}
+              {truthCheckedTime && <span className="opacity-70">{truthCheckedTime}</span>}
+              {blinkSyncLabel && <span className="opacity-70">sync {blinkSyncLabel}</span>}
             </span>
           )}
           <span className="flex items-center gap-1.5">

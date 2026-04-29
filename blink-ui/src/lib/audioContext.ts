@@ -5,7 +5,11 @@ class AudioEngine {
 
   init() {
     if (this.ctx) return;
-    this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const AudioContextCtor =
+      window.AudioContext ??
+      (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) return;
+    this.ctx = new AudioContextCtor();
     this.masterGain = this.ctx.createGain();
     this.masterGain.gain.value = 0.2; // Keep it subtle
     this.masterGain.connect(this.ctx.destination);

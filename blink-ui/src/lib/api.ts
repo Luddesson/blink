@@ -7,6 +7,7 @@ import type {
   FullPortfolio,
   HistoryResponse,
   LatencyResponse,
+  LiveExecutionsResponse,
   LivePortfolio,
   MetricsResponse,
   ModeResponse,
@@ -23,21 +24,14 @@ import { useEffect, useState } from 'react'
 
 // Polymarket Gamma API types
 export interface PolymarketMeta {
+  available?: boolean
   image: string
   question: string
   volume: string
   category: string
-}
-
-type GammaMarketMeta = {
-  image?: string
-  question?: string
-  volume_24h?: string
-  category?: string
-}
-
-function isGammaMarketMetaArray(value: unknown): value is GammaMarketMeta[] {
-  return Array.isArray(value)
+  url?: string | null
+  source?: string
+  truth_checked_at_ms?: number
 }
 
 async function get<T>(path: string): Promise<T> {
@@ -71,37 +65,19 @@ export async function resolveMarketUrl(tokenId: string): Promise<string | null> 
 }
 
 /**
- * Fetch Polymarket metadata from Gamma API (public, no auth required)
-/**
- * Fetch Polymarket metadata from Gamma API (public, no auth required)
- * Returns market image, question, 24h volume, and category.
+ * Fetch Polymarket metadata through the Blink backend so browser CORS and
+ * Gamma field drift do not create a different truth surface than the engine.
  */
 export async function fetchPolymarketMeta(tokenId: string): Promise<PolymarketMeta | null> {
   try {
-    const url = `https://gamma-api.polymarket.com/markets?token_id=${tokenId}`
-    const res = await fetch(url, { signal: AbortSignal.timeout(8_000) })
-    if (!res.ok) {
-      console.warn(`[fetchPolymarketMeta] API returned ${res.status} for ${tokenId}`)
-      return null
-    }
-    const data: unknown = await res.json()
-    if (!isGammaMarketMetaArray(data) || data.length === 0) {
-      console.warn(`[fetchPolymarketMeta] Empty or non-array response for ${tokenId}:`, data)
-      return null
-    }
-    const market = data[0]
-    return {
-      image: market.image ?? '',
-      question: market.question ?? '',
-      volume: market.volume_24h ?? '0',
-      category: market.category ?? '',
-    }
+    const data = await get<PolymarketMeta & { error?: string }>(`/api/market-meta/${tokenId}`)
+    if (data.available === false) return null
+    return data
   } catch (err) {
     console.error(`[fetchPolymarketMeta] Error fetching metadata for ${tokenId}:`, err)
     return null
   }
 }
-
 
 /**
  * Hook to fetch Polymarket metadata for multiple token IDs
@@ -166,6 +142,43 @@ export const api = {
     }
 
     return trades.slice(0, maxTrades)
+  },
+  liveHistory: (page = 1, perPage = 50, range = 'all') =>
+    get<HistoryResponse>(`/api/live/history?page=${page}&per_page=${perPage}&range=${range}`),
+  liveHistoryAll: async (range = '24h', maxTrades = 2000) => {
+    const perPage = 500
+    const firstPage = await get<HistoryResponse>(`/api/live/history?page=1&per_page=${perPage}&range=${range}`)
+    const trades = [...firstPage.trades]
+    const maxPages = Math.max(1, Math.ceil(maxTrades / perPage))
+
+    for (let page = 2; page <= Math.min(firstPage.total_pages, maxPages); page++) {
+      const nextPage = await get<HistoryResponse>(`/api/live/history?page=${page}&per_page=${perPage}&range=${range}`)
+      trades.push(...nextPage.trades)
+    }
+
+    return trades.slice(0, maxTrades)
+  },
+  liveExecutions: (page = 1, perPage = 50, range = 'all') =>
+    get<LiveExecutionsResponse>(`/api/live/executions?page=${page}&per_page=${perPage}&range=${range}`),
+  liveExecutionsAll: async (range = '24h', maxExecutions = 2000) => {
+    const response = await api.liveExecutionsAllResponse(range, maxExecutions)
+    return response.executions
+  },
+  liveExecutionsAllResponse: async (range = '24h', maxExecutions = 2000) => {
+    const perPage = 500
+    const firstPage = await get<LiveExecutionsResponse>(`/api/live/executions?page=1&per_page=${perPage}&range=${range}`)
+    const executions = [...firstPage.executions]
+    const maxPages = Math.max(1, Math.ceil(maxExecutions / perPage))
+
+    for (let page = 2; page <= Math.min(firstPage.total_pages, maxPages); page++) {
+      const nextPage = await get<LiveExecutionsResponse>(`/api/live/executions?page=${page}&per_page=${perPage}&range=${range}`)
+      executions.push(...nextPage.executions)
+    }
+
+    return {
+      ...firstPage,
+      executions: executions.slice(0, maxExecutions),
+    }
   },
   risk: () => get<RiskSummary>('/api/risk'),
   latency: () => get<LatencyResponse>('/api/latency'),

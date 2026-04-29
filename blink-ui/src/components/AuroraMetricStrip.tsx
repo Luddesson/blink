@@ -3,6 +3,7 @@ import { TrendingUp, TrendingDown, Wallet, Activity, Target, Coins } from 'lucid
 import NumberFlip from './motion/NumberFlip'
 import { cn } from '../lib/cn'
 import { fmt } from '../lib/format'
+import { useMode } from '../hooks/useMode'
 
 interface Metric {
   label: string
@@ -20,6 +21,12 @@ interface Props {
   fees: number
   winRate: number
   closedTrades: number
+  walletPositionValue?: number
+  walletPositionBasis?: number
+  walletPositions?: number
+  walletTruthVerified?: boolean
+  walletNavVerified?: boolean
+  realityStatus?: string
 }
 
 const TONE_RING: Record<NonNullable<Metric['tone']>, string> = {
@@ -83,10 +90,63 @@ function MetricCard({ label, value, format, icon, tone = 'neutral', subtitle, in
   )
 }
 
-export default function AuroraMetricStrip({ nav, realized, unrealized, fees, winRate, closedTrades }: Props) {
+export default function AuroraMetricStrip({
+  nav,
+  realized,
+  unrealized,
+  fees,
+  winRate,
+  closedTrades,
+  walletPositionValue = 0,
+  walletPositionBasis = 0,
+  walletPositions = 0,
+  walletTruthVerified = false,
+  walletNavVerified = walletTruthVerified,
+  realityStatus,
+}: Props) {
+  const { viewMode } = useMode()
+  const isLive = viewMode === 'live'
   const netPnl = realized + unrealized - fees
 
-  const metrics: Metric[] = [
+  const metrics: Metric[] = isLive ? [
+    {
+      label: 'Wallet NAV',
+      value: nav,
+      format: (v) => walletNavVerified ? `$${fmt(v, 2)}` : 'unverified',
+      icon: <Wallet size={14} />,
+      tone: walletNavVerified ? 'iris' : 'neutral',
+      subtitle: realityStatus ?? 'unverified',
+    },
+    {
+      label: 'Wallet P&L',
+      value: walletTruthVerified ? unrealized : 0,
+      format: (v) => `${v >= 0 ? '+' : ''}$${fmt(v, 2)}`,
+      icon: unrealized >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />,
+      tone: unrealized >= 0 ? 'bull' : 'bear',
+      subtitle: 'open positions',
+    },
+    {
+      label: 'Position Value',
+      value: walletTruthVerified ? walletPositionValue : 0,
+      format: (v) => `$${fmt(v, 2)}`,
+      icon: <Activity size={14} />,
+      tone: 'iris',
+    },
+    {
+      label: 'Position Basis',
+      value: walletTruthVerified ? walletPositionBasis : 0,
+      format: (v) => `$${fmt(v, 2)}`,
+      icon: <Coins size={14} />,
+      tone: 'neutral',
+    },
+    {
+      label: 'Positions',
+      value: walletTruthVerified ? walletPositions : 0,
+      format: (v) => fmt(v, 0),
+      icon: <Target size={14} />,
+      tone: walletTruthVerified ? 'bull' : 'neutral',
+    },
+  ] : [
     {
       label: 'NAV',
       value: nav,

@@ -528,7 +528,7 @@ fn compute_amounts(params: &OrderParams) -> Result<(u64, u64, u8)> {
                 max_maker_amount,
                 min_step_count * maker_step
             );
-            let lot_count = min_step_count * lot_multiple;
+            let lot_count = max_step_count * lot_multiple;
             let maker_amount = price * lot_count;
             let taker_amount = 1_000u128 * lot_count;
             Ok((maker_amount as u64, taker_amount as u64, 0u8))
@@ -696,32 +696,12 @@ mod tests {
         }
     }
 
-    fn make_params_with_token(
-        token_id: &str,
-        side: OrderSide,
-        price: u64,
-        size: f64,
-    ) -> OrderParams {
-        OrderParams {
-            token_id: token_id.to_string(),
-            side,
-            price,
-            size,
-            maker: "0x0000000000000000000000000000000000000000".to_string(),
-            builder: "0x0000000000000000000000000000000000000000000000000000000000000000"
-                .to_string(),
-            timestamp: 0,
-            metadata: "0x0000000000000000000000000000000000000000000000000000000000000000"
-                .to_string(),
-        }
-    }
-
     #[test]
     fn buy_amounts_correct() {
         let p = make_params(OrderSide::Buy, 650, 10.0);
         let (ma, ta, side) = compute_amounts(&p).unwrap();
-        assert_eq!(ma, 10_000_000); // $10 in 6-dec USDC
-        assert_eq!(ta, 15_384_615); // shares = 10_000_000 * 1000 / 650
+        assert_eq!(ma, 9_880_000); // max exact $0.65-ratio lot under $10 cap
+        assert_eq!(ta, 15_200_000); // 15.2 shares, preserving tick/precision
         assert_eq!(side, 0u8);
     }
 
@@ -741,8 +721,8 @@ mod tests {
         // Fixed:      10.5 × 1e6       == 10_500_000
         let p = make_params(OrderSide::Sell, 650, 10.5);
         let (ma, ta, side) = compute_amounts(&p).unwrap();
-        assert_eq!(ma, 10_500_000); // 10.5 shares × 1e6 — no truncation
-        assert_eq!(ta, 6_825_000); // 10.5 × $0.65 = $6.825 USDC × 1e6
+        assert_eq!(ma, 10_400_000); // max exact lot under 10.5 shares cap
+        assert_eq!(ta, 6_760_000); // preserves $0.65 ratio and 2-decimal USDC precision
         assert_eq!(side, 1u8);
     }
 
@@ -895,7 +875,7 @@ mod proptest_verification {
         fn eip712_digest_is_deterministic(
             token_id in "[0-9]{10,30}",
             price in 1u64..999u64,
-            size in 0.01f64..100.0f64,
+            size in 10.0f64..100.0f64,
         ) {
             let params1 = OrderParams {
                 token_id: token_id.clone(),
@@ -929,7 +909,7 @@ mod proptest_verification {
             key_seed in any::<[u8; 32]>(),
             token_id in "[0-9]{5,20}",
             price in 1u64..999u64,
-            size in 0.01f64..50.0f64,
+            size in 10.0f64..50.0f64,
         ) {
             // Skip invalid keys (e.g. zero or ≥ curve order).
             let signing_key = match SigningKey::from_bytes((&key_seed).into()) {

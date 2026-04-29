@@ -24,6 +24,10 @@ const LEVEL_COLORS: Record<string, string> = {
   Warn: 'text-yellow-400',
 }
 
+function isSignalEntry(kind: string): boolean {
+  return kind.toLowerCase() === 'signal'
+}
+
 export default function ActivityFeed({ wsEntries }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -68,17 +72,25 @@ export default function ActivityFeed({ wsEntries }: Props) {
         {merged.length === 0 && (
           <p className="text-slate-600 text-center py-4">No recent activity</p>
         )}
-        {merged.map((e, i) => (
-          <div key={i} className="flex gap-2 leading-5">
-            <span className="text-cyan-400 shrink-0">
-              {fmtNeonTime(e.timestamp)}
-            </span>
-            <span className={`shrink-0 w-14 ${LEVEL_COLORS[e.kind] ?? 'text-slate-400'}`}>
-              [{e.kind.toUpperCase()}]
-            </span>
-            <span className="text-slate-300 break-all">{e.message}</span>
-          </div>
-        ))}
+        {merged.map((e, i) => {
+          const signal = isSignalEntry(e.kind)
+          return (
+            <div key={i} className="flex flex-wrap gap-x-2 gap-y-0.5 leading-5">
+              <span className="text-cyan-400 shrink-0">
+                {fmtNeonTime(e.timestamp)}
+              </span>
+              <span className={`shrink-0 w-14 ${LEVEL_COLORS[e.kind] ?? 'text-slate-400'}`}>
+                [{e.kind.toUpperCase()}]
+              </span>
+              {signal && (
+                <span className="shrink-0 rounded border border-sky-400/20 bg-sky-400/10 px-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-300">
+                  observed
+                </span>
+              )}
+              <span className="min-w-0 flex-1 text-slate-300 break-all">{e.message}</span>
+            </div>
+          )
+        })}
         <div ref={bottomRef} />
       </div>
     </div>

@@ -597,7 +597,7 @@ mod tests {
 
     #[test]
     fn exit_stop_loss_small() {
-        let mut pos = make_position(0.50, 0.20, 5.0); // $5 position, -60% loss (exceeds -50% stop)
+        let pos = make_position(0.50, 0.20, 5.0); // $5 position, -60% loss (exceeds -50% stop)
         let config = ExitConfig::default();
         let decisions = evaluate_exits(&[pos], &config, |_| true, |_| None);
         assert_eq!(decisions.len(), 1);

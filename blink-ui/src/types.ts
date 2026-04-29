@@ -63,10 +63,37 @@ export interface WsSnapshot {
 export interface PortfolioSummary {
   cash_usdc: number
   nav_usdc: number
+  blink_cash_usdc?: number
+  blink_nav_usdc?: number
+  wallet_nav_usdc?: number | null
   invested_usdc: number
   unrealized_pnl_usdc: number
   realized_pnl_usdc: number
   fees_paid_usdc: number
+  cash_source?: string
+  balance_source?: string
+  exchange_position_value_usdc?: number
+  external_position_value_usdc?: number
+  wallet_position_value_usdc?: number | null
+  wallet_position_initial_value_usdc?: number | null
+  wallet_open_pnl_usdc?: number | null
+  wallet_unrealized_pnl_usdc?: number | null
+  wallet_pnl_source?: string
+  pnl_source?: string
+  exchange_positions_count?: number
+  exchange_positions_preview?: WalletPositionPreview[]
+  wallet_positions_count?: number
+  reality_status?: 'matched' | 'mismatch' | 'unverified'
+  reality_issues?: string[]
+  truth_checked_at_ms?: number | null
+  exchange_positions_verified?: boolean
+  onchain_cash_verified?: boolean
+  wallet_truth_verified?: boolean
+  blink_wallet_truth_last_sync_ms?: number | null
+  blink_wallet_truth_sync_age_ms?: number | null
+  external_only_positions_count?: number
+  local_only_positions_count?: number
+  local_open_positions_count?: number
   // WS snapshot sends open_positions as Position[]; REST /api/portfolio also sends array
   open_positions: Position[]
   closed_trades_count: number
@@ -102,6 +129,14 @@ export interface Position {
   secs_to_event?: number     // seconds until market resolution (pre-computed by engine, can be negative)
 }
 
+export interface WalletPositionPreview {
+  title?: string | null
+  outcome?: string | null
+  size?: number | string | null
+  current_value_usdc?: number | string | null
+  cash_pnl_usdc?: number | string | null
+}
+
 // /api/portfolio returns same shape as PortfolioSummary; alias for clarity
 export type FullPortfolio = PortfolioSummary
 
@@ -133,6 +168,35 @@ export interface HistoryResponse {
   total_pages: number
 }
 
+export interface LiveExecution {
+  transaction_hash?: string | null
+  token_id: string
+  condition_id?: string | null
+  market_title?: string | null
+  market_outcome?: string | null
+  side: string
+  price: number
+  shares: number
+  usdc_size: number
+  timestamp: number
+  traded_at: string
+  execution_type: string
+  source: string
+}
+
+export interface LiveExecutionsResponse {
+  executions: LiveExecution[]
+  total: number
+  page: number
+  per_page: number
+  total_pages: number
+  source?: string
+  range?: string
+  reality_status?: 'matched' | 'mismatch' | 'unverified'
+  truth_checked_at_ms?: number | null
+  reality_issues?: string[]
+}
+
 // ─── Risk ────────────────────────────────────────────────────────────────────
 export interface RiskSummary {
   trading_enabled: boolean
@@ -150,6 +214,44 @@ export interface RiskSummary {
 // ─── Live portfolio ──────────────────────────────────────────────────────────
 export interface LivePortfolio {
   mode: 'live'
+  accounting_source?: string
+  balance_source?: string
+  cash_source?: string
+  confirmed_only?: boolean
+  queued_orders_affect_nav?: boolean
+  cash_usdc?: number | null
+  nav_usdc?: number | null
+  blink_cash_usdc?: number
+  blink_nav_usdc?: number
+  wallet_nav_usdc?: number | null
+  invested_usdc?: number
+  unrealized_pnl_usdc?: number
+  realized_pnl_usdc?: number
+  fees_paid_usdc?: number
+  open_positions_count?: number
+  wallet_positions_count?: number
+  exchange_position_value_usdc?: number
+  external_position_value_usdc?: number
+  wallet_position_value_usdc?: number | null
+  wallet_position_initial_value_usdc?: number | null
+  wallet_open_pnl_usdc?: number | null
+  wallet_unrealized_pnl_usdc?: number | null
+  wallet_pnl_source?: string
+  pnl_source?: string
+  exchange_positions_count?: number
+  exchange_positions_preview?: WalletPositionPreview[]
+  reality_status?: 'matched' | 'mismatch' | 'unverified'
+  reality_issues?: string[]
+  truth_checked_at_ms?: number | null
+  exchange_positions_verified?: boolean
+  onchain_cash_verified?: boolean
+  wallet_truth_verified?: boolean
+  blink_wallet_truth_last_sync_ms?: number | null
+  blink_wallet_truth_sync_age_ms?: number | null
+  external_only_positions_count?: number
+  local_only_positions_count?: number
+  local_open_positions_count?: number
+  open_positions?: Position[]
   pending_orders: number
   confirmed_fills: number
   no_fills: number
@@ -235,6 +337,9 @@ export interface BullpenHealthResponse {
   total_calls?: number
   avg_latency_ms?: number
   last_error?: string | null
+  status?: 'disabled' | 'unwired' | string
+  source?: string
+  truth_checked_at_ms?: number
 }
 
 export interface BullpenDiscoveryResponse {
@@ -242,6 +347,9 @@ export interface BullpenDiscoveryResponse {
   total_markets?: number
   scan_count?: number
   markets?: BullpenDiscoveredMarket[]
+  status?: 'disabled' | 'unwired' | string
+  source?: string
+  truth_checked_at_ms?: number
 }
 
 export interface BullpenDiscoveredMarket {
@@ -259,6 +367,9 @@ export interface BullpenConvergenceResponse {
   active_signals?: number
   tracked_markets?: number
   signals?: BullpenConvergenceSignal[]
+  status?: 'disabled' | 'unwired' | string
+  source?: string
+  truth_checked_at_ms?: number
 }
 
 export interface BullpenConvergenceSignal {

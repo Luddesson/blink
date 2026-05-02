@@ -45,37 +45,46 @@ pub enum ExitAction {
     PreEventClose { secs_left: i64 },
     /// Exit a profitable position due to adverse price momentum (4A).
     /// Closes `fraction` of the position (default 0.5 = scale out, not dump).
-    AdverseMomentum { price_change_bps: i64, fraction: f64 },
+    AdverseMomentum {
+        price_change_bps: i64,
+        fraction: f64,
+    },
 }
 
 impl ExitAction {
     /// Human-readable reason string for ClosedTrade records.
     pub fn reason(&self) -> String {
         match self {
-            Self::TakeProfit { threshold_pct, fraction } =>
-                format!("autoclaim@{threshold_pct:.0}%[{:.0}%]", fraction * 100.0),
-            Self::StopLoss { threshold_pct } =>
-                format!("stop_loss@-{threshold_pct:.0}%"),
-            Self::TrailingStop { .. } =>
-                "trailing_stop".to_string(),
-            Self::StagnantExit { .. } =>
-                "stagnant_exit".to_string(),
-            Self::Resolved { winner, .. } =>
-                if *winner { "resolved@winner".to_string() } else { "resolved@loser".to_string() },
-            Self::MarketNotLive { .. } =>
-                "autoclaim@market_not_live".to_string(),
-            Self::MaxHoldExpired { held_secs } =>
-                format!("max_hold@{}s", held_secs),
-            Self::TimeStop { held_secs, .. } =>
-                format!("time_stop@{}s", held_secs),
-            Self::WideSpread { spread_bps } =>
-                format!("wide_spread@{}bps", spread_bps),
-            Self::PreResolutionStop { remaining_secs, .. } =>
-                format!("pre_resolution_stop@{}s_left", remaining_secs),
-            Self::PreEventClose { secs_left } =>
-                format!("pre_event_close@{}s_left", secs_left),
-            Self::AdverseMomentum { price_change_bps, fraction } =>
-                format!("adverse_momentum@{}bps[{:.0}%]", price_change_bps, fraction * 100.0),
+            Self::TakeProfit {
+                threshold_pct,
+                fraction,
+            } => format!("autoclaim@{threshold_pct:.0}%[{:.0}%]", fraction * 100.0),
+            Self::StopLoss { threshold_pct } => format!("stop_loss@-{threshold_pct:.0}%"),
+            Self::TrailingStop { .. } => "trailing_stop".to_string(),
+            Self::StagnantExit { .. } => "stagnant_exit".to_string(),
+            Self::Resolved { winner, .. } => {
+                if *winner {
+                    "resolved@winner".to_string()
+                } else {
+                    "resolved@loser".to_string()
+                }
+            }
+            Self::MarketNotLive { .. } => "autoclaim@market_not_live".to_string(),
+            Self::MaxHoldExpired { held_secs } => format!("max_hold@{}s", held_secs),
+            Self::TimeStop { held_secs, .. } => format!("time_stop@{}s", held_secs),
+            Self::WideSpread { spread_bps } => format!("wide_spread@{}bps", spread_bps),
+            Self::PreResolutionStop { remaining_secs, .. } => {
+                format!("pre_resolution_stop@{}s_left", remaining_secs)
+            }
+            Self::PreEventClose { secs_left } => format!("pre_event_close@{}s_left", secs_left),
+            Self::AdverseMomentum {
+                price_change_bps,
+                fraction,
+            } => format!(
+                "adverse_momentum@{}bps[{:.0}%]",
+                price_change_bps,
+                fraction * 100.0
+            ),
         }
     }
 
@@ -268,7 +277,9 @@ where
                 if remaining > 0 && remaining <= config.pre_event_close_secs as i64 {
                     decisions.push(ExitDecision {
                         position_idx: idx,
-                        action: ExitAction::PreEventClose { secs_left: remaining },
+                        action: ExitAction::PreEventClose {
+                            secs_left: remaining,
+                        },
                     });
                     continue;
                 }
@@ -278,10 +289,7 @@ where
         // 1.7. Time stop: underwater position held past `time_stop_secs`.
         //      Fires BEFORE the stop-loss percentage check so losers exit at a
         //      bounded time cost rather than bleeding to -50%.
-        if config.time_stop_secs > 0
-            && held_secs >= config.time_stop_secs
-            && pnl_pct < 0.0
-        {
+        if config.time_stop_secs > 0 && held_secs >= config.time_stop_secs && pnl_pct < 0.0 {
             decisions.push(ExitDecision {
                 position_idx: idx,
                 action: ExitAction::TimeStop { held_secs, pnl_pct },
@@ -313,7 +321,9 @@ where
         if pnl_pct <= -sl_threshold {
             decisions.push(ExitDecision {
                 position_idx: idx,
-                action: ExitAction::StopLoss { threshold_pct: sl_threshold },
+                action: ExitAction::StopLoss {
+                    threshold_pct: sl_threshold,
+                },
             });
             continue;
         }
@@ -323,12 +333,16 @@ where
             if let Some(end_ts) = pos.event_end_time {
                 let now_ts = chrono::Utc::now().timestamp();
                 let remaining = end_ts - now_ts;
-                if remaining > 0 && remaining < config.event_aware_exit_secs as i64
+                if remaining > 0
+                    && remaining < config.event_aware_exit_secs as i64
                     && pnl_pct <= -config.event_aware_exit_loss_pct
                 {
                     decisions.push(ExitDecision {
                         position_idx: idx,
-                        action: ExitAction::PreResolutionStop { remaining_secs: remaining, pnl_pct },
+                        action: ExitAction::PreResolutionStop {
+                            remaining_secs: remaining,
+                            pnl_pct,
+                        },
                     });
                     continue;
                 }
@@ -337,7 +351,8 @@ where
 
         // 2.7. Adverse momentum exit (4A): exit profitable position if price moved adversely.
         //      Grace period: skip if position is younger than momentum_grace_secs.
-        if config.momentum_exit_threshold_bps > 0 && pnl_pct > 0.0
+        if config.momentum_exit_threshold_bps > 0
+            && pnl_pct > 0.0
             && held_secs >= config.momentum_grace_secs
         {
             let now_ts = chrono::Utc::now().timestamp();
@@ -346,8 +361,12 @@ where
                     / pos.momentum_ref_price.max(0.001)
                     * 10_000.0) as i64;
                 let adverse = match pos.side {
-                    OrderSide::Buy => price_change_bps < -(config.momentum_exit_threshold_bps as i64),
-                    OrderSide::Sell => price_change_bps > (config.momentum_exit_threshold_bps as i64),
+                    OrderSide::Buy => {
+                        price_change_bps < -(config.momentum_exit_threshold_bps as i64)
+                    }
+                    OrderSide::Sell => {
+                        price_change_bps > (config.momentum_exit_threshold_bps as i64)
+                    }
                 };
                 if adverse {
                     decisions.push(ExitDecision {
@@ -390,7 +409,10 @@ where
         if let Some((threshold_pct, fraction)) = best_tier {
             decisions.push(ExitDecision {
                 position_idx: idx,
-                action: ExitAction::TakeProfit { threshold_pct, fraction },
+                action: ExitAction::TakeProfit {
+                    threshold_pct,
+                    fraction,
+                },
             });
             continue;
         }
@@ -410,7 +432,10 @@ where
             if move_pct < config.stagnant_threshold_pct {
                 decisions.push(ExitDecision {
                     position_idx: idx,
-                    action: ExitAction::StagnantExit { held_secs, move_pct },
+                    action: ExitAction::StagnantExit {
+                        held_secs,
+                        move_pct,
+                    },
                 });
                 continue;
             }
@@ -466,7 +491,11 @@ pub fn conviction_multiplier(
 
     // Preferred sport bonus
     if let Some(s) = sport {
-        if config.allowed_sports.iter().any(|allowed| allowed.eq_ignore_ascii_case(s)) {
+        if config
+            .allowed_sports
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(s))
+        {
             mult += config.preferred_sport_bonus;
         }
     }
@@ -523,8 +552,10 @@ mod tests {
         // $5k > $10, so log_boost = log2(500)/14 ≈ 0.64 → partial whale bonus
         let mult = conviction_multiplier(5_000.0, "entertainment", None, 50_000.0, &config);
         assert!(mult >= config.base_multiplier, "should be at or above base");
-        assert!(mult < config.base_multiplier + config.whale_bonus_multiplier + 0.001,
-            "should not have full whale bonus");
+        assert!(
+            mult < config.base_multiplier + config.whale_bonus_multiplier + 0.001,
+            "should not have full whale bonus"
+        );
     }
 
     #[test]
@@ -534,10 +565,14 @@ mod tests {
         // $60k → log_boost = log2(6000)/14 ≈ 0.89 → near-full whale bonus
         let mult = conviction_multiplier(60_000.0, "sports", Some("NFL"), 250_000.0, &config);
         // Should be close to max but not necessarily exact due to log scaling
-        assert!(mult > config.base_multiplier + config.sports_bonus,
-            "should include sports bonus + substantial whale bonus");
-        assert!(mult <= config.max_multiplier + f64::EPSILON,
-            "must not exceed max");
+        assert!(
+            mult > config.base_multiplier + config.sports_bonus,
+            "should include sports bonus + substantial whale bonus"
+        );
+        assert!(
+            mult <= config.max_multiplier + f64::EPSILON,
+            "must not exceed max"
+        );
     }
 
     #[test]
@@ -554,7 +589,10 @@ mod tests {
         let config = ExitConfig::default();
         let decisions = evaluate_exits(&positions, &config, |_| true, |_| None);
         assert_eq!(decisions.len(), 1);
-        assert!(matches!(decisions[0].action, ExitAction::Resolved { winner: true, .. }));
+        assert!(matches!(
+            decisions[0].action,
+            ExitAction::Resolved { winner: true, .. }
+        ));
     }
 
     #[test]
@@ -584,8 +622,11 @@ mod tests {
         config.time_stop_secs = 300;
         let decisions = evaluate_exits(&[pos], &config, |_| true, |_| None);
         assert_eq!(decisions.len(), 1);
-        assert!(matches!(decisions[0].action, ExitAction::TimeStop { .. }),
-            "expected TimeStop, got {:?}", decisions[0].action);
+        assert!(
+            matches!(decisions[0].action, ExitAction::TimeStop { .. }),
+            "expected TimeStop, got {:?}",
+            decisions[0].action
+        );
     }
 
     #[test]
@@ -596,7 +637,10 @@ mod tests {
         let mut config = ExitConfig::default();
         config.time_stop_secs = 300;
         let decisions = evaluate_exits(&[pos], &config, |_| true, |_| None);
-        assert!(decisions.is_empty(), "healthy position should not time-stop");
+        assert!(
+            decisions.is_empty(),
+            "healthy position should not time-stop"
+        );
     }
 
     #[test]
@@ -606,8 +650,14 @@ mod tests {
         let config = ExitConfig::default(); // wide_spread_bps_exit = 500
         let decisions = evaluate_exits(&[pos], &config, |_| true, |_| Some(800));
         assert_eq!(decisions.len(), 1);
-        assert!(matches!(decisions[0].action, ExitAction::WideSpread { spread_bps: 800 }),
-            "expected WideSpread@800bps, got {:?}", decisions[0].action);
+        assert!(
+            matches!(
+                decisions[0].action,
+                ExitAction::WideSpread { spread_bps: 800 }
+            ),
+            "expected WideSpread@800bps, got {:?}",
+            decisions[0].action
+        );
     }
 
     #[test]
@@ -617,7 +667,10 @@ mod tests {
         let pos = make_position(0.50, 0.52, 20.0);
         let config = ExitConfig::default();
         let decisions = evaluate_exits(&[pos], &config, |_| true, |_| Some(5_000));
-        assert!(decisions.is_empty(), "warmup gate should suppress WideSpread");
+        assert!(
+            decisions.is_empty(),
+            "warmup gate should suppress WideSpread"
+        );
     }
 
     #[test]

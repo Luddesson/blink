@@ -121,11 +121,7 @@ impl MevShield {
     ///
     /// Runs staleness check + sandwich detection. Returns `true` if the
     /// transaction is safe to submit.
-    pub fn screen_submission(
-        &mut self,
-        token_id: &str,
-        submitted_at: Instant,
-    ) -> bool {
+    pub fn screen_submission(&mut self, token_id: &str, submitted_at: Instant) -> bool {
         // 1. Staleness check.
         if self.is_bundle_stale(submitted_at) {
             return false;

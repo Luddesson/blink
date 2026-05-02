@@ -1,7 +1,7 @@
 //! Output formatting helpers — tables (default) and JSON.
 
 use colored::Colorize;
-use comfy_table::{Table, Cell, Color, Attribute, ContentArrangement};
+use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use serde_json::Value;
 
 use crate::OutputFormat;
@@ -31,14 +31,18 @@ pub fn print_kv_table(obj: &serde_json::Map<String, Value>) {
     table
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(vec![
-            Cell::new("Key").add_attribute(Attribute::Bold).fg(Color::Cyan),
-            Cell::new("Value").add_attribute(Attribute::Bold).fg(Color::Cyan),
+            Cell::new("Key")
+                .add_attribute(Attribute::Bold)
+                .fg(Color::Cyan),
+            Cell::new("Value")
+                .add_attribute(Attribute::Bold)
+                .fg(Color::Cyan),
         ]);
     for (k, v) in obj {
         let val_str = match v {
             Value::String(s) => s.clone(),
-            Value::Null      => "—".dimmed().to_string(),
-            other            => other.to_string(),
+            Value::Null => "—".dimmed().to_string(),
+            other => other.to_string(),
         };
         table.add_row(vec![k.as_str(), val_str.as_str()]);
     }
@@ -53,7 +57,9 @@ pub fn print_array_table(arr: &[Value]) {
     }
     // Collect column names from the first object.
     let Some(first) = arr.first().and_then(|v| v.as_object()) else {
-        for v in arr { println!("{v}"); }
+        for v in arr {
+            println!("{v}");
+        }
         return;
     };
 
@@ -68,14 +74,17 @@ pub fn print_array_table(arr: &[Value]) {
 
     for item in arr {
         if let Some(obj) = item.as_object() {
-            let cells: Vec<String> = cols.iter().map(|c| {
-                let v = obj.get(c).unwrap_or(&Value::Null);
-                match v {
-                    Value::String(s) => s.clone(),
-                    Value::Null      => "—".to_string(),
-                    other            => other.to_string(),
-                }
-            }).collect();
+            let cells: Vec<String> = cols
+                .iter()
+                .map(|c| {
+                    let v = obj.get(c).unwrap_or(&Value::Null);
+                    match v {
+                        Value::String(s) => s.clone(),
+                        Value::Null => "—".to_string(),
+                        other => other.to_string(),
+                    }
+                })
+                .collect();
             table.add_row(cells);
         }
     }
@@ -85,9 +94,13 @@ pub fn print_array_table(arr: &[Value]) {
 /// Colour a P&L value: green if positive, red if negative.
 pub fn format_pnl(pnl: f64) -> String {
     let s = format!("{:+.4}", pnl);
-    if pnl > 0.0 { s.green().to_string() }
-    else if pnl < 0.0 { s.red().to_string() }
-    else { s }
+    if pnl > 0.0 {
+        s.green().to_string()
+    } else if pnl < 0.0 {
+        s.red().to_string()
+    } else {
+        s
+    }
 }
 
 /// Friendly percentage string.

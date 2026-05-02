@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "2026-04-19-paper-a",
+  "recorded_at_utc": "2026-04-20T00:00:00Z",
+  "environment": "hetzner-prod",
+  "signers": {
+    "primary_operator": {
+      "name": "operator-name",
+      "signed_at_utc": "2026-04-20T00:01:00Z"
+    },
+    "secondary_reviewer": {
+      "name": "risk-reviewer-name",
+      "signed_at_utc": "2026-04-20T00:02:00Z"
+    }
+  },
+  "artifacts": {
+    "thresholds_schema_path": "blink-engine/tools/examples/decision-thresholds.json",
+    "decision_file_path": "blink-engine/logs/eval-cycle/2026-04-19-paper-a/decision.json",
+    "rollback_playbook_path": "deploy/ROLLBACK-PLAYBOOK.md",
+    "rollback_helper_path": "deploy/rollback-hetzner.ps1"
+  },
+  "pre_run": {
+    "rollback_preview_verified": true,
+    "target_mode_verified": true,
+    "prior_decision_reviewed": true,
+    "hard_stop_triggered": false,
+    "hard_stop_reasons": []
+  },
+  "post_run": {
+    "decision": "GO",
+    "decision_dimensions_reviewed": true,
+    "warnings_present": false,
+    "hard_stop_triggered": false,
+    "hard_stop_reasons": [],
+    "rollback_executed": false,
+    "rollback_reference": ""
+  },
+  "promotion_allowed": true,
+  "notes": "Set promotion_allowed=false whenever any hard stop condition is met."
+}

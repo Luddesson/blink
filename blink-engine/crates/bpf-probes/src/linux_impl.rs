@@ -14,7 +14,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
@@ -23,9 +23,7 @@ use aya::programs::TracePoint;
 use aya::Bpf;
 use aya_log::BpfLogger;
 
-use crate::stats::{
-    KernelSnapshot, RttStats, SchedStats, SyscallHistogram, SyscallStats,
-};
+use crate::stats::{KernelSnapshot, RttStats, SchedStats, SyscallHistogram, SyscallStats};
 
 // ─── BPF event structs (must match C struct layout) ───────────────────────────
 
@@ -33,9 +31,9 @@ use crate::stats::{
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct RttEvent {
-    rtt_us:   u64,
-    saddr:    u32,
-    daddr:    u32,
+    rtt_us: u64,
+    saddr: u32,
+    daddr: u32,
 }
 
 /// Event emitted by `sched_latency.bpf.c` for each wakeup-to-run transition.
@@ -43,8 +41,8 @@ struct RttEvent {
 #[derive(Clone, Copy)]
 struct SchedEvent {
     latency_us: u64,
-    pid:        u32,
-    _pad:       u32,
+    pid: u32,
+    _pad: u32,
 }
 
 /// Event emitted by `syscall_profile.bpf.c` for each profiled syscall.
@@ -57,8 +55,8 @@ struct SyscallEvent {
 }
 
 // Syscall numbers for x86_64.
-const SYS_SENDTO:     u64 = 44;
-const SYS_RECVFROM:   u64 = 45;
+const SYS_SENDTO: u64 = 44;
+const SYS_RECVFROM: u64 = 45;
 const SYS_EPOLL_WAIT: u64 = 232;
 
 // ─── BpfTelemetry ─────────────────────────────────────────────────────────────
@@ -70,24 +68,27 @@ const SYS_EPOLL_WAIT: u64 = 232;
 /// `Arc<Mutex<...>>` handles that the TUI can snapshot without blocking.
 pub struct BpfTelemetry {
     #[allow(dead_code)]
-    bpf:           Bpf,
-    rtt_stats:     Arc<Mutex<RttAccumulator>>,
-    sched_stats:   Arc<Mutex<SchedAccumulator>>,
+    bpf: Bpf,
+    rtt_stats: Arc<Mutex<RttAccumulator>>,
+    sched_stats: Arc<Mutex<SchedAccumulator>>,
     syscall_stats: Arc<Mutex<SyscallAccumulator>>,
-    snapshot:      Arc<Mutex<KernelSnapshot>>,
-    poll_handles:  Vec<JoinHandle<()>>,
+    snapshot: Arc<Mutex<KernelSnapshot>>,
+    poll_handles: Vec<JoinHandle<()>>,
 }
 
 // ─── Rolling accumulators ─────────────────────────────────────────────────────
 
 struct RttAccumulator {
     samples: Vec<u64>,
-    window:  usize,
+    window: usize,
 }
 
 impl RttAccumulator {
     fn new(window: usize) -> Self {
-        Self { samples: Vec::with_capacity(window), window }
+        Self {
+            samples: Vec::with_capacity(window),
+            window,
+        }
     }
 
     fn record(&mut self, rtt_us: u64) {
@@ -108,19 +109,29 @@ impl RttAccumulator {
         let mut sorted = self.samples.clone();
         sorted.sort_unstable();
         let p99_idx = ((sorted.len() as f64 * 0.99) as usize).min(sorted.len() - 1);
-        RttStats { min_us: min, max_us: max, avg_us: avg, p99_us: sorted[p99_idx], samples: sorted.len() as u64 }
+        RttStats {
+            min_us: min,
+            max_us: max,
+            avg_us: avg,
+            p99_us: sorted[p99_idx],
+            samples: sorted.len() as u64,
+        }
     }
 }
 
 struct SchedAccumulator {
     samples: Vec<u64>,
-    window:  usize,
+    window: usize,
     threshold_violations: u64,
 }
 
 impl SchedAccumulator {
     fn new(window: usize) -> Self {
-        Self { samples: Vec::with_capacity(window), window, threshold_violations: 0 }
+        Self {
+            samples: Vec::with_capacity(window),
+            window,
+            threshold_violations: 0,
+        }
     }
 
     fn record(&mut self, latency_us: u64) {
@@ -145,7 +156,10 @@ impl SchedAccumulator {
         sorted.sort_unstable();
         let p99_idx = ((sorted.len() as f64 * 0.99) as usize).min(sorted.len() - 1);
         SchedStats {
-            min_us: min, max_us: max, avg_us: avg, p99_us: sorted[p99_idx],
+            min_us: min,
+            max_us: max,
+            avg_us: avg,
+            p99_us: sorted[p99_idx],
             threshold_violations: self.threshold_violations,
             samples: sorted.len() as u64,
         }
@@ -153,20 +167,20 @@ impl SchedAccumulator {
 }
 
 struct SyscallAccumulator {
-    send_samples:  Vec<u64>,
-    recv_samples:  Vec<u64>,
+    send_samples: Vec<u64>,
+    recv_samples: Vec<u64>,
     epoll_samples: Vec<u64>,
-    histogram:     SyscallHistogram,
-    window:        usize,
+    histogram: SyscallHistogram,
+    window: usize,
 }
 
 impl SyscallAccumulator {
     fn new(window: usize) -> Self {
         Self {
-            send_samples:  Vec::with_capacity(window),
-            recv_samples:  Vec::with_capacity(window),
+            send_samples: Vec::with_capacity(window),
+            recv_samples: Vec::with_capacity(window),
             epoll_samples: Vec::with_capacity(window),
-            histogram:     SyscallHistogram::default(),
+            histogram: SyscallHistogram::default(),
             window,
         }
     }
@@ -174,10 +188,10 @@ impl SyscallAccumulator {
     fn record(&mut self, syscall_nr: u64, latency_us: u64) {
         self.histogram.record(latency_us);
         let (samples, _cap) = match syscall_nr {
-            SYS_SENDTO     => (&mut self.send_samples,  self.window),
-            SYS_RECVFROM   => (&mut self.recv_samples,  self.window),
+            SYS_SENDTO => (&mut self.send_samples, self.window),
+            SYS_RECVFROM => (&mut self.recv_samples, self.window),
             SYS_EPOLL_WAIT => (&mut self.epoll_samples, self.window),
-            _              => return,
+            _ => return,
         };
         if samples.len() >= self.window {
             samples.remove(0);
@@ -187,14 +201,18 @@ impl SyscallAccumulator {
 
     fn snapshot(&self) -> SyscallStats {
         let avg = |s: &[u64]| -> u64 {
-            if s.is_empty() { 0 } else { s.iter().sum::<u64>() / s.len() as u64 }
+            if s.is_empty() {
+                0
+            } else {
+                s.iter().sum::<u64>() / s.len() as u64
+            }
         };
         SyscallStats {
-            send_avg_us:  avg(&self.send_samples),
-            recv_avg_us:  avg(&self.recv_samples),
+            send_avg_us: avg(&self.send_samples),
+            recv_avg_us: avg(&self.recv_samples),
             epoll_avg_us: avg(&self.epoll_samples),
-            histogram:    self.histogram.clone(),
-            samples:      self.histogram.total(),
+            histogram: self.histogram.clone(),
+            samples: self.histogram.total(),
         }
     }
 }
@@ -221,10 +239,13 @@ impl BpfTelemetry {
     pub async fn attach(pid: u32) -> Result<Self> {
         info!(pid, "Attaching eBPF kernel telemetry probes");
 
-        let rtt_stats     = Arc::new(Mutex::new(RttAccumulator::new(10_000)));
-        let sched_stats   = Arc::new(Mutex::new(SchedAccumulator::new(10_000)));
+        let rtt_stats = Arc::new(Mutex::new(RttAccumulator::new(10_000)));
+        let sched_stats = Arc::new(Mutex::new(SchedAccumulator::new(10_000)));
         let syscall_stats = Arc::new(Mutex::new(SyscallAccumulator::new(10_000)));
-        let snapshot      = Arc::new(Mutex::new(KernelSnapshot { available: true, ..Default::default() }));
+        let snapshot = Arc::new(Mutex::new(KernelSnapshot {
+            available: true,
+            ..Default::default()
+        }));
 
         // ── Load BPF programs ─────────────────────────────────────────────
         let mut bpf = Self::load_bpf_programs()?;
@@ -286,9 +307,19 @@ impl BpfTelemetry {
             poll_handles.push(handle);
         }
 
-        info!("eBPF kernel telemetry fully attached ({} probes active)", poll_handles.len() - 1);
+        info!(
+            "eBPF kernel telemetry fully attached ({} probes active)",
+            poll_handles.len() - 1
+        );
 
-        Ok(Self { bpf, rtt_stats, sched_stats, syscall_stats, snapshot, poll_handles })
+        Ok(Self {
+            bpf,
+            rtt_stats,
+            sched_stats,
+            syscall_stats,
+            snapshot,
+            poll_handles,
+        })
     }
 
     /// Load the combined BPF object file.
@@ -350,9 +381,13 @@ impl BpfTelemetry {
         Ok(())
     }
 
-    fn spawn_rtt_poller(bpf: &mut Bpf, stats: Arc<Mutex<RttAccumulator>>) -> Result<JoinHandle<()>> {
+    fn spawn_rtt_poller(
+        bpf: &mut Bpf,
+        stats: Arc<Mutex<RttAccumulator>>,
+    ) -> Result<JoinHandle<()>> {
         let ring_buf = RingBuf::try_from(
-            bpf.map_mut("rtt_events").context("Map 'rtt_events' not found")?
+            bpf.map_mut("rtt_events")
+                .context("Map 'rtt_events' not found")?,
         )?;
 
         Ok(tokio::spawn(async move {
@@ -360,9 +395,8 @@ impl BpfTelemetry {
             loop {
                 while let Some(item) = rb.next() {
                     if item.len() >= std::mem::size_of::<RttEvent>() {
-                        let event: RttEvent = unsafe {
-                            std::ptr::read_unaligned(item.as_ptr() as *const RttEvent)
-                        };
+                        let event: RttEvent =
+                            unsafe { std::ptr::read_unaligned(item.as_ptr() as *const RttEvent) };
                         stats.lock().unwrap().record(event.rtt_us);
                     }
                 }
@@ -371,9 +405,13 @@ impl BpfTelemetry {
         }))
     }
 
-    fn spawn_sched_poller(bpf: &mut Bpf, stats: Arc<Mutex<SchedAccumulator>>) -> Result<JoinHandle<()>> {
+    fn spawn_sched_poller(
+        bpf: &mut Bpf,
+        stats: Arc<Mutex<SchedAccumulator>>,
+    ) -> Result<JoinHandle<()>> {
         let ring_buf = RingBuf::try_from(
-            bpf.map_mut("sched_events").context("Map 'sched_events' not found")?
+            bpf.map_mut("sched_events")
+                .context("Map 'sched_events' not found")?,
         )?;
 
         Ok(tokio::spawn(async move {
@@ -381,9 +419,8 @@ impl BpfTelemetry {
             loop {
                 while let Some(item) = rb.next() {
                     if item.len() >= std::mem::size_of::<SchedEvent>() {
-                        let event: SchedEvent = unsafe {
-                            std::ptr::read_unaligned(item.as_ptr() as *const SchedEvent)
-                        };
+                        let event: SchedEvent =
+                            unsafe { std::ptr::read_unaligned(item.as_ptr() as *const SchedEvent) };
                         stats.lock().unwrap().record(event.latency_us);
                     }
                 }
@@ -392,9 +429,13 @@ impl BpfTelemetry {
         }))
     }
 
-    fn spawn_syscall_poller(bpf: &mut Bpf, stats: Arc<Mutex<SyscallAccumulator>>) -> Result<JoinHandle<()>> {
+    fn spawn_syscall_poller(
+        bpf: &mut Bpf,
+        stats: Arc<Mutex<SyscallAccumulator>>,
+    ) -> Result<JoinHandle<()>> {
         let ring_buf = RingBuf::try_from(
-            bpf.map_mut("syscall_events").context("Map 'syscall_events' not found")?
+            bpf.map_mut("syscall_events")
+                .context("Map 'syscall_events' not found")?,
         )?;
 
         Ok(tokio::spawn(async move {
@@ -405,7 +446,10 @@ impl BpfTelemetry {
                         let event: SyscallEvent = unsafe {
                             std::ptr::read_unaligned(item.as_ptr() as *const SyscallEvent)
                         };
-                        stats.lock().unwrap().record(event.syscall_nr, event.latency_us);
+                        stats
+                            .lock()
+                            .unwrap()
+                            .record(event.syscall_nr, event.latency_us);
                     }
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;

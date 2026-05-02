@@ -1,0 +1,65 @@
+{
+  "decision_levels": [
+    "GO",
+    "TUNE",
+    "ROLLBACK"
+  ],
+  "dimensions": {
+    "conformal_miscoverage_pct": {
+      "description": "Optional model reliability gate from conformal artifact.",
+      "go_max": 5.0,
+      "tune_max": 10.0
+    },
+    "drift_severity": {
+      "description": "Weighted normalized severity from drift-matrix deltas.",
+      "go_max": 0.25,
+      "normalizers": {
+        "category_l1": 0.3,
+        "fill_rate_pp": 10.0,
+        "notional_l1": 0.3,
+        "reject_mix_l1": 0.35,
+        "slippage_bps": 75.0
+      },
+      "tune_max": 0.5,
+      "weights": {
+        "category_l1": 0.15,
+        "fill_rate_pp": 0.25,
+        "notional_l1": 0.15,
+        "reject_mix_l1": 0.25,
+        "slippage_bps": 0.2
+      }
+    },
+    "fee_drag_pct": {
+      "description": "Fees as percent of gross edge; lower is better.",
+      "go_max": 20.0,
+      "tune_max": 35.0
+    },
+    "pnl_return_pct": {
+      "description": "Net PnL return percent across the evaluation window.",
+      "go_min": 1.0,
+      "tune_min": 0.0
+    },
+    "risk_events": {
+      "description": "Weighted count of risk-critical rejections/aborts.",
+      "go_max": 2.0,
+      "tune_max": 5.0,
+      "weights": {
+        "circuit_breaker": 5.0,
+        "daily_loss_limit": 4.0,
+        "failsafe_abort": 1.0,
+        "kill_switch": 5.0,
+        "rate_limit": 2.0,
+        "var_limit": 3.0
+      }
+    }
+  },
+  "policy": {
+    "changelog": [
+      "Initial policy metadata + fingerprint migration."
+    ],
+    "fingerprint": "cb75c262bd0d1acb39ce835f08c448997854f876b3f6d16b64f2851be9df5d63",
+    "notes": "Baseline policy for GO/TUNE/ROLLBACK synthesis in eval-cycle decision-eval.",
+    "version": "2026.04.19"
+  },
+  "schema_version": "1.0.0"
+}

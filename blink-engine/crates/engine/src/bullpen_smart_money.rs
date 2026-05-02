@@ -107,15 +107,13 @@ impl TraderProfileCache {
         // Fetch from Bullpen
         let json_result = self.bridge.trader_profile(address).await;
         let profile = match json_result {
-            Ok(generic) => {
-                match serde_json::from_value::<TraderProfile>(generic.0) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        debug!("Failed to parse trader profile for {address}: {e}");
-                        return None;
-                    }
+            Ok(generic) => match serde_json::from_value::<TraderProfile>(generic.0) {
+                Ok(p) => p,
+                Err(e) => {
+                    debug!("Failed to parse trader profile for {address}: {e}");
+                    return None;
                 }
-            }
+            },
             Err(e) => {
                 debug!("Failed to fetch trader profile for {address}: {e}");
                 return None;
@@ -141,10 +139,7 @@ impl TraderProfileCache {
     /// Get trust score for a wallet (returns default 0.3 if not cached).
     pub async fn trust_score(&self, address: &str) -> f64 {
         let profiles = self.profiles.read().await;
-        profiles
-            .get(address)
-            .map(|c| c.trust_score)
-            .unwrap_or(0.3)
+        profiles.get(address).map(|c| c.trust_score).unwrap_or(0.3)
     }
 
     /// Number of cached profiles.
@@ -157,7 +152,10 @@ impl TraderProfileCache {
         let futs: Vec<_> = wallets.iter().map(|addr| self.get_or_fetch(addr)).collect();
         let results = futures_util::future::join_all(futs).await;
         let success = results.iter().filter(|r| r.is_some()).count();
-        info!(total = wallets.len(), success, "Pre-warmed trader profile cache");
+        info!(
+            total = wallets.len(),
+            success, "Pre-warmed trader profile cache"
+        );
     }
 }
 
@@ -245,7 +243,11 @@ impl ConvergenceStore {
             top_signal: self
                 .active_signals
                 .iter()
-                .max_by(|a, b| a.convergence_score.partial_cmp(&b.convergence_score).unwrap())
+                .max_by(|a, b| {
+                    a.convergence_score
+                        .partial_cmp(&b.convergence_score)
+                        .unwrap()
+                })
                 .cloned(),
         }
     }
@@ -269,10 +271,7 @@ pub struct SmartMoneyMonitor {
 }
 
 impl SmartMoneyMonitor {
-    pub fn new(
-        bridge: Arc<BullpenBridge>,
-        config: SmartMoneyConfig,
-    ) -> Self {
+    pub fn new(bridge: Arc<BullpenBridge>, config: SmartMoneyConfig) -> Self {
         let profile_cache = Arc::new(TraderProfileCache::new(
             Arc::clone(&bridge),
             config.profile_cache_ttl_secs,
@@ -368,11 +367,7 @@ impl SmartMoneyMonitor {
                 detected_at: now,
             };
 
-            store
-                .market_activity
-                .entry(market)
-                .or_default()
-                .push(timed);
+            store.market_activity.entry(market).or_default().push(timed);
         }
 
         // Prune old entries outside lookback window
@@ -385,8 +380,7 @@ impl SmartMoneyMonitor {
         // Detect convergence
         let mut signals = Vec::new();
         for (market, entries) in &store.market_activity {
-            let unique_wallets: HashSet<&str> =
-                entries.iter().map(|e| e.wallet.as_str()).collect();
+            let unique_wallets: HashSet<&str> = entries.iter().map(|e| e.wallet.as_str()).collect();
 
             if unique_wallets.len() >= self.config.convergence_threshold {
                 let wallets: Vec<ConvergentWallet> = entries

@@ -75,7 +75,7 @@ pub fn generate_keypair() -> Result<(Zeroizing<String>, String)> {
     let hash = Keccak256::digest(pubkey_uncompressed);
     let address = format!("0x{}", hex_encode(&hash[12..]));
 
-    let private_key_hex = Zeroizing::new(hex_encode(signing_key.to_bytes().as_slice()));
+    let private_key_hex = Zeroizing::new(hex_encode(signing_key.to_bytes().as_ref()));
 
     Ok((private_key_hex, address))
 }
@@ -108,9 +108,9 @@ pub fn encrypt_keystore(
     // Encrypt with AES-256-GCM
     let cipher = Aes256Gcm::new_from_slice(&*derived_key)
         .map_err(|e| anyhow::anyhow!("AES key init: {e}"))?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = Nonce::<aes_gcm::aead::consts::U12>::from(nonce_bytes);
     let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_ref())
+        .encrypt(&nonce, plaintext.as_ref())
         .map_err(|e| anyhow::anyhow!("AES-GCM encrypt: {e}"))?;
 
     // Build keystore file
@@ -139,14 +139,9 @@ pub fn encrypt_keystore(
 }
 
 /// Decrypt a keystore file and return the secrets.
-pub fn decrypt_keystore(
-    path: &std::path::Path,
-    passphrase: &str,
-) -> Result<KeystoreSecrets> {
-    let raw = std::fs::read(path)
-        .with_context(|| format!("read keystore: {}", path.display()))?;
-    let keystore: KeystoreFile =
-        serde_json::from_slice(&raw).context("parse keystore JSON")?;
+pub fn decrypt_keystore(path: &std::path::Path, passphrase: &str) -> Result<KeystoreSecrets> {
+    let raw = std::fs::read(path).with_context(|| format!("read keystore: {}", path.display()))?;
+    let keystore: KeystoreFile = serde_json::from_slice(&raw).context("parse keystore JSON")?;
 
     if keystore.version != 1 {
         bail!("unsupported keystore version: {}", keystore.version);
@@ -160,7 +155,11 @@ pub fn decrypt_keystore(
     let ciphertext = hex_decode(&keystore.crypto.ciphertext).context("decode ciphertext")?;
 
     if nonce_bytes.len() != NONCE_SIZE {
-        bail!("invalid nonce length: {} (expected {})", nonce_bytes.len(), NONCE_SIZE);
+        bail!(
+            "invalid nonce length: {} (expected {})",
+            nonce_bytes.len(),
+            NONCE_SIZE
+        );
     }
 
     // Derive key from passphrase
@@ -175,9 +174,12 @@ pub fn decrypt_keystore(
     // Decrypt
     let cipher = Aes256Gcm::new_from_slice(&*derived_key)
         .map_err(|e| anyhow::anyhow!("AES key init: {e}"))?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce_bytes: [u8; NONCE_SIZE] = nonce_bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid nonce length"))?;
+    let nonce = Nonce::<aes_gcm::aead::consts::U12>::from(nonce_bytes);
     let plaintext = cipher
-        .decrypt(nonce, ciphertext.as_ref())
+        .decrypt(&nonce, ciphertext.as_ref())
         .map_err(|_| anyhow::anyhow!("decryption failed — wrong passphrase or corrupted file"))?;
 
     let secrets: KeystoreSecrets =
@@ -195,7 +197,7 @@ fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: u32, output: &mu
 
     let key_len = output.len();
     let hash_len = 32; // SHA-256 output
-    let blocks = (key_len + hash_len - 1) / hash_len;
+    let blocks = key_len.div_ceil(hash_len);
 
     for block_idx in 1..=blocks {
         let mut u = {
@@ -232,7 +234,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(hex: &str) -> Result<Vec<u8>> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         bail!("odd hex length: {}", hex.len());
     }
     (0..hex.len())
@@ -262,7 +264,8 @@ mod tests {
         let path = dir.join("test_keystore.json");
 
         let secrets = KeystoreSecrets {
-            signer_private_key: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".into(),
+            signer_private_key: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+                .into(),
             funder_address: "0x1234567890abcdef1234567890abcdef12345678".into(),
             api_key: "test-api-key".into(),
             api_secret: "dGVzdC1zZWNyZXQ=".into(),
@@ -272,7 +275,8 @@ mod tests {
         encrypt_keystore(&secrets, "hunter2", &path).unwrap();
 
         // Verify file exists and is valid JSON
-        let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(raw["version"], 1);
         assert_eq!(raw["crypto"]["cipher"], "aes-256-gcm");
 
@@ -303,6 +307,9 @@ mod tests {
 
         let mut out3 = [0u8; 32];
         pbkdf2_hmac_sha256(b"different", b"salt", 1000, &mut out3);
-        assert_ne!(out1, out3, "different passwords should produce different output");
+        assert_ne!(
+            out1, out3,
+            "different passwords should produce different output"
+        );
     }
 }

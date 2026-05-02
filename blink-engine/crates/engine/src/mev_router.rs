@@ -34,11 +34,11 @@ impl PrivateRouter {
     /// Default relay endpoint URL for each router.
     pub fn default_endpoint(&self) -> &'static str {
         match self {
-            Self::Flashbots        => "https://relay.flashbots.net",
-            Self::Polygon0x        => "https://polygon.api.0x.org/tx",
-            Self::Blocknative      => "https://api.blocknative.com/v1/auction",
+            Self::Flashbots => "https://relay.flashbots.net",
+            Self::Polygon0x => "https://polygon.api.0x.org/tx",
+            Self::Blocknative => "https://api.blocknative.com/v1/auction",
             Self::BloxroutePolygon => "wss://api.bloxroute.com:443",
-            Self::PublicFallback   => "https://polygon-rpc.com",
+            Self::PublicFallback => "https://polygon-rpc.com",
         }
     }
 }
@@ -46,11 +46,11 @@ impl PrivateRouter {
 impl std::fmt::Display for PrivateRouter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Flashbots        => write!(f, "flashbots"),
-            Self::Polygon0x        => write!(f, "polygon-0x"),
-            Self::Blocknative      => write!(f, "blocknative"),
+            Self::Flashbots => write!(f, "flashbots"),
+            Self::Polygon0x => write!(f, "polygon-0x"),
+            Self::Blocknative => write!(f, "blocknative"),
             Self::BloxroutePolygon => write!(f, "bloxroute-polygon"),
-            Self::PublicFallback   => write!(f, "public-rpc"),
+            Self::PublicFallback => write!(f, "public-rpc"),
         }
     }
 }
@@ -177,12 +177,12 @@ impl MevRouter {
         let routers: Vec<PrivateRouter> = raw
             .split(',')
             .filter_map(|s| match s.trim().to_lowercase().as_str() {
-                "flashbots"  => Some(PrivateRouter::Flashbots),
-                "0x"         => Some(PrivateRouter::Polygon0x),
-                "blocknative"=> Some(PrivateRouter::Blocknative),
-                "bloxroute"  => Some(PrivateRouter::BloxroutePolygon),
-                "public"     => Some(PrivateRouter::PublicFallback),
-                _            => None,
+                "flashbots" => Some(PrivateRouter::Flashbots),
+                "0x" => Some(PrivateRouter::Polygon0x),
+                "blocknative" => Some(PrivateRouter::Blocknative),
+                "bloxroute" => Some(PrivateRouter::BloxroutePolygon),
+                "public" => Some(PrivateRouter::PublicFallback),
+                _ => None,
             })
             .collect();
 
@@ -447,10 +447,7 @@ impl MevRouter {
             .context("Blocknative submission failed")?;
 
         let json: serde_json::Value = resp.json().await?;
-        let hash = json["auctionId"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string();
+        let hash = json["auctionId"].as_str().unwrap_or("unknown").to_string();
 
         Ok(BundleReceipt {
             bundle_hash: hash,
@@ -547,10 +544,7 @@ mod tests {
     #[test]
     fn bundle_construction_includes_correct_transactions() {
         let bundle = TransactionBundle {
-            txs: vec![
-                "0xdeadbeef".to_string(),
-                "0xcafebabe".to_string(),
-            ],
+            txs: vec!["0xdeadbeef".to_string(), "0xcafebabe".to_string()],
             target_block: 50_000_000,
             max_block: 50_000_005,
             simulate_first: true,
@@ -615,10 +609,7 @@ mod tests {
 
     #[test]
     fn fallback_triggers_after_two_failures() {
-        let routers = vec![
-            PrivateRouter::Flashbots,
-            PrivateRouter::PublicFallback,
-        ];
+        let routers = vec![PrivateRouter::Flashbots, PrivateRouter::PublicFallback];
         let mut router = MevRouter::new(routers);
 
         // Initially, active router should be Flashbots.
@@ -656,7 +647,10 @@ mod tests {
         assert_eq!(format!("{}", PrivateRouter::Flashbots), "flashbots");
         assert_eq!(format!("{}", PrivateRouter::Polygon0x), "polygon-0x");
         assert_eq!(format!("{}", PrivateRouter::Blocknative), "blocknative");
-        assert_eq!(format!("{}", PrivateRouter::BloxroutePolygon), "bloxroute-polygon");
+        assert_eq!(
+            format!("{}", PrivateRouter::BloxroutePolygon),
+            "bloxroute-polygon"
+        );
         assert_eq!(format!("{}", PrivateRouter::PublicFallback), "public-rpc");
     }
 

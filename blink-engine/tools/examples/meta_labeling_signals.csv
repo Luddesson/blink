@@ -1,0 +1,4 @@
+signal_id,timestamp_ms,token_id,side,entry_price_scaled
+sig-1,1710000000000,token-a,YES,600
+sig-2,1710000060000,token-a,NO,620
+sig-3,1710000120000,token-b,YES,450

@@ -5,8 +5,8 @@
 //!
 //! Performance: Reduces allocation latency from ~100ns to ~5ns per message.
 
-use std::sync::Arc;
 use crossbeam::queue::ArrayQueue;
+use std::sync::Arc;
 
 /// Recommended pool size: 2x max concurrent WebSocket messages in flight.
 const DEFAULT_POOL_SIZE: usize = 64;

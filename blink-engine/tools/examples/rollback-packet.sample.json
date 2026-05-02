@@ -1,0 +1,144 @@
+{
+  "artifacts": {
+    "confidence_file_path": "logs/eval-cycle/sample-run/recommendation-confidence-v2.json",
+    "decision_file_path": "logs/eval-cycle/sample-run/decision.json",
+    "integrity_file_path": "logs/eval-cycle/sample-run/artifact-integrity.json",
+    "report_file_path": "logs/eval-cycle/sample-run/report.json",
+    "rollback_helper_path": "deploy/rollback-hetzner.ps1",
+    "rollback_playbook_path": "deploy/ROLLBACK-PLAYBOOK.md",
+    "signoff_file_path": "deploy/signoffs/sample-run-auto-signoff.json",
+    "toxic_flow_file_path": "logs/eval-cycle/sample-run/toxic-flow-advisor.json"
+  },
+  "automation_safety": {
+    "deterministic_output": true,
+    "safe_for_automation": true,
+    "safe_for_operator_review": true,
+    "sorted_trigger_ids": [
+      "decision-rollback",
+      "dimension-rollback:risk_events",
+      "toxic-flow-high"
+    ]
+  },
+  "deterministic_fingerprint": "3a9aa27f7a7197ec784bea9cb4f0ffc8cb92f741e4f71afca8b24d36676542da",
+  "deterministic_inputs": {
+    "confidence_gate_min": 0.55,
+    "output_dir": "C:\\repo\\blink\\blink-engine\\logs\\eval-cycle\\sample-run",
+    "repo_root": "C:\\repo\\blink"
+  },
+  "generated_at_utc": "2026-04-19T23:59:59Z",
+  "missing_artifact_diagnostics": [],
+  "readiness": {
+    "checks": {
+      "artifacts_complete": true,
+      "failed_gate_detected": true,
+      "packet_ready_for_review": true,
+      "rollback_paths_present": true,
+      "rollback_recommended": true,
+      "trigger_detected": true
+    },
+    "pass": true,
+    "reasons": [
+      "rollback packet is ready for operator execution review"
+    ],
+    "status": "PASS"
+  },
+  "report_snapshot": {
+    "confidence_score_normalized": 0.42,
+    "pnl_return_pct": -1.73,
+    "toxic_flow_severity_tier": "HIGH"
+  },
+  "rollback_context": {
+    "decision": "ROLLBACK",
+    "evidence_artifacts": [
+      {
+        "artifact": "decision",
+        "path": "C:\\repo\\blink\\blink-engine\\logs\\eval-cycle\\sample-run\\decision.json",
+        "path_relative_to_repo": "blink-engine\\logs\\eval-cycle\\sample-run\\decision.json",
+        "present": true,
+        "required": true,
+        "sha256": "8f4b012087d85989aa8477e78c44d0679ec197f903f4de4d0fd7fb6db63934bc",
+        "valid": true
+      }
+    ],
+    "failed_gates": [
+      {
+        "gate": "decision_gate",
+        "reason": "ROLLBACK dimensions: risk_events",
+        "source_artifact": "decision",
+        "status": "FAIL"
+      },
+      {
+        "gate": "toxic_flow_gate",
+        "reason": "toxic flow severity tier HIGH",
+        "source_artifact": "toxic_flow",
+        "status": "FAIL"
+      }
+    ],
+    "impacted_configs": {
+      "likely_impacted_env_keys": [
+        "ALPHA_TRADING_ENABLED",
+        "LIVE_TRADING",
+        "MAX_ORDERS_PER_SECOND",
+        "MAX_SINGLE_ORDER_USDC",
+        "PAPER_TRADING",
+        "TRADING_ENABLED"
+      ],
+      "rollback_targets": {
+        "ALPHA_TRADING_ENABLED": "false",
+        "LIVE_TRADING": "false",
+        "PAPER_TRADING": "true",
+        "TRADING_ENABLED": "false"
+      },
+      "services": [
+        "blink-engine",
+        "blink-sidecar (optional)"
+      ]
+    },
+    "playbook_alignment": {
+      "helper_path": "deploy\\rollback-hetzner.ps1",
+      "playbook_path": "deploy\\ROLLBACK-PLAYBOOK.md",
+      "playbook_scope": "Immediate rollback to locked-down paper mode"
+    },
+    "rollback_dimensions": [
+      "risk_events"
+    ],
+    "rollback_steps": [
+      {
+        "commands": [
+          "sudo cp /opt/blink/.env /opt/blink/.env.rollback.$(date +%Y%m%d-%H%M%S).bak"
+        ],
+        "description": "Backup /opt/blink/.env before making rollback edits.",
+        "step_id": "backup-current-env"
+      }
+    ],
+    "triggers": [
+      {
+        "reason": "decision.json computed final decision ROLLBACK",
+        "severity": "CRITICAL",
+        "source_artifact": "decision",
+        "trigger_id": "decision-rollback"
+      },
+      {
+        "reason": "decision dimension 'risk_events' evaluated to ROLLBACK",
+        "severity": "HIGH",
+        "source_artifact": "decision",
+        "trigger_id": "dimension-rollback:risk_events"
+      },
+      {
+        "reason": "toxic flow severity tier HIGH",
+        "severity": "HIGH",
+        "source_artifact": "toxic_flow",
+        "trigger_id": "toxic-flow-high"
+      }
+    ],
+    "verification_checklist": [
+      "blink-engine service is active",
+      "blink-sidecar is active if installed",
+      "TRADING_ENABLED=false and LIVE_TRADING=false",
+      "PAPER_TRADING=true and ALPHA_TRADING_ENABLED=false",
+      "http://127.0.0.1:3030/api/status returns HTTP 200"
+    ]
+  },
+  "run_id": "sample-run",
+  "schema_version": "1.0.0"
+}

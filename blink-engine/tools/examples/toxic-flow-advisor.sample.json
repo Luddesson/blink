@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at_utc": "2026-04-20T00:00:00+00:00",
+  "run_id": "sample-run",
+  "toxic_flow_score_normalized": 0.6315,
+  "toxic_flow_score_percent": 63.15,
+  "severity_tier": "ELEVATED",
+  "operator_signoff_status": "CONDITIONAL",
+  "guardrail_recommendations": {
+    "tier": "ELEVATED",
+    "automation_ready": true,
+    "env_overrides": {
+      "MAX_SINGLE_ORDER_USDC": "6",
+      "MAX_ORDERS_PER_SECOND": "2",
+      "MIN_SIGNAL_NOTIONAL_USD": "5"
+    },
+    "actions": [
+      {
+        "priority": 1,
+        "action_id": "soft-deleverage",
+        "category": "risk",
+        "description": "Apply temporary size haircut and lower order burst rate.",
+        "automation_ready": true
+      }
+    ]
+  }
+}

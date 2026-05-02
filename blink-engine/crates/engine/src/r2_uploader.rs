@@ -34,19 +34,19 @@ type HmacSha256 = Hmac<Sha256>;
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 struct R2Config {
-    access_key_id:     String,
+    access_key_id: String,
     secret_access_key: String,
-    account_id:        String,
-    bucket:            String,
+    account_id: String,
+    bucket: String,
 }
 
 impl R2Config {
     fn from_env() -> Option<Self> {
         Some(Self {
-            access_key_id:     std::env::var("R2_ACCESS_KEY_ID").ok()?,
+            access_key_id: std::env::var("R2_ACCESS_KEY_ID").ok()?,
             secret_access_key: std::env::var("R2_SECRET_ACCESS_KEY").ok()?,
-            account_id:        std::env::var("R2_ACCOUNT_ID").ok()?,
-            bucket:            std::env::var("R2_BUCKET").unwrap_or_else(|_| "blink-logs".to_string()),
+            account_id: std::env::var("R2_ACCOUNT_ID").ok()?,
+            bucket: std::env::var("R2_BUCKET").unwrap_or_else(|_| "blink-logs".to_string()),
         })
     }
 
@@ -78,25 +78,28 @@ fn to_hex(bytes: &[u8]) -> String {
 /// Returns the signed headers required for a PUT request to R2.
 ///
 /// Headers returned: `x-amz-date`, `x-amz-content-sha256`, `authorization`.
-fn sign_put(cfg: &R2Config, key: &str, body: &[u8], now: &chrono::DateTime<chrono::Utc>) -> Vec<(String, String)> {
-    let date_str     = now.format("%Y%m%d").to_string();
+fn sign_put(
+    cfg: &R2Config,
+    key: &str,
+    body: &[u8],
+    now: &chrono::DateTime<chrono::Utc>,
+) -> Vec<(String, String)> {
+    let date_str = now.format("%Y%m%d").to_string();
     let datetime_str = now.format("%Y%m%dT%H%M%SZ").to_string();
-    let host         = format!("{}.r2.cloudflarestorage.com", cfg.account_id);
-    let region       = "auto";
-    let service      = "s3";
+    let host = format!("{}.r2.cloudflarestorage.com", cfg.account_id);
+    let region = "auto";
+    let service = "s3";
 
-    let payload_hash  = sha256_hex(body);
+    let payload_hash = sha256_hex(body);
     let canonical_uri = format!("/{}/{}", cfg.bucket, key);
 
     // Canonical headers (must be sorted alphabetically by name)
-    let canonical_headers = format!(
-        "host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{datetime_str}\n"
-    );
+    let canonical_headers =
+        format!("host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{datetime_str}\n");
     let signed_headers = "host;x-amz-content-sha256;x-amz-date";
 
-    let canonical_request = format!(
-        "PUT\n{canonical_uri}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
-    );
+    let canonical_request =
+        format!("PUT\n{canonical_uri}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
 
     let credential_scope = format!("{date_str}/{region}/{service}/aws4_request");
     let string_to_sign = format!(
@@ -105,8 +108,11 @@ fn sign_put(cfg: &R2Config, key: &str, body: &[u8], now: &chrono::DateTime<chron
     );
 
     // Derive signing key: 4-step HMAC chain
-    let k_date    = hmac_sha256(format!("AWS4{}", cfg.secret_access_key).as_bytes(), date_str.as_bytes());
-    let k_region  = hmac_sha256(&k_date, region.as_bytes());
+    let k_date = hmac_sha256(
+        format!("AWS4{}", cfg.secret_access_key).as_bytes(),
+        date_str.as_bytes(),
+    );
+    let k_region = hmac_sha256(&k_date, region.as_bytes());
     let k_service = hmac_sha256(&k_region, service.as_bytes());
     let k_signing = hmac_sha256(&k_service, b"aws4_request");
 
@@ -118,9 +124,9 @@ fn sign_put(cfg: &R2Config, key: &str, body: &[u8], now: &chrono::DateTime<chron
     );
 
     vec![
-        ("x-amz-date".to_string(),              datetime_str),
-        ("x-amz-content-sha256".to_string(),     payload_hash),
-        ("authorization".to_string(),             auth),
+        ("x-amz-date".to_string(), datetime_str),
+        ("x-amz-content-sha256".to_string(), payload_hash),
+        ("authorization".to_string(), auth),
     ]
 }
 
@@ -220,9 +226,9 @@ pub fn start_r2_uploader() {
         upload_portfolio(&client, &cfg).await;
 
         let mut portfolio_interval = tokio::time::interval(Duration::from_secs(15 * 60));
-        let mut log_interval       = tokio::time::interval(Duration::from_secs(60 * 60));
+        let mut log_interval = tokio::time::interval(Duration::from_secs(60 * 60));
         portfolio_interval.tick().await; // consume first tick (already ran above)
-        log_interval.tick().await;       // consume first tick
+        log_interval.tick().await; // consume first tick
 
         loop {
             tokio::select! {

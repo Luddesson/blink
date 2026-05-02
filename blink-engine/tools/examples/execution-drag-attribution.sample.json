@@ -1,0 +1,80 @@
+{
+  "aggregate": {
+    "drag_per_fill_usdc": 0.124311,
+    "drag_per_signal_usdc": 0.071148,
+    "run_nav_change_pct": 1.424,
+    "run_nav_change_usdc": 1.424,
+    "total_drag_bps_of_executed_notional": 121.664584,
+    "total_drag_pct_of_start_nav": 8.180476,
+    "total_drag_usdc": 8.180476
+  },
+  "artifacts_dir": "logs/eval-cycle/sample-run",
+  "assumptions": {
+    "delay_bps_per_second": 2.0,
+    "entry_delay_secs": 1.0,
+    "env_path_used": ".env",
+    "rejection_edge_bps": 50.0,
+    "rejection_notional_source": "snapshot:/api/rejections.events.signal_size",
+    "report_present": true,
+    "spread_bps_proxy": 10.0
+  },
+  "components": {
+    "delay": {
+      "drag_bps_of_executed_notional": 2.0,
+      "drag_usdc": 0.134478,
+      "method": "ENTRY_DELAY_SECS * delay_bps_per_second on executed notional",
+      "share_of_total_drag_pct": 1.643884
+    },
+    "fees": {
+      "drag_bps_of_executed_notional": 14.871088,
+      "drag_usdc": 1.0,
+      "method": "delta of /api/portfolio.fees_paid_usdc over run window",
+      "share_of_total_drag_pct": 12.224658
+    },
+    "rejections": {
+      "drag_bps_of_executed_notional": 26.101573,
+      "drag_usdc": 1.755,
+      "method": "rejected notional estimate * rejection_edge_bps opportunity cost",
+      "share_of_total_drag_pct": 21.453274
+    },
+    "slippage": {
+      "drag_bps_of_executed_notional": 67.992923,
+      "drag_usdc": 4.573034,
+      "method": "residual avg_slippage_bps after removing spread proxy, applied to executed notional",
+      "share_of_total_drag_pct": 55.901253
+    },
+    "spread": {
+      "drag_bps_of_executed_notional": 10.699,
+      "drag_usdc": 0.717964,
+      "method": "min(avg_slippage_bps, PAPER_ADVERSE_FILL_BPS) applied to executed notional",
+      "share_of_total_drag_pct": 8.776931
+    }
+  },
+  "funnel": {
+    "aborts": 2,
+    "accepted": 88,
+    "fills": 71,
+    "rejections": 36,
+    "signals": 124
+  },
+  "generated_at_utc": "2026-04-20T00:00:00+00:00",
+  "notional": {
+    "executed_notional_usdc_est": 672.39,
+    "fallback_notional_source": "snapshot:/api/history.trades",
+    "history_diagnostics": {
+      "observed_trades": 71,
+      "scaled": false,
+      "total_trades": 71
+    },
+    "history_source": "snapshot:/api/history",
+    "median_notional_usdc_fallback": 8.12,
+    "rejected_notional_usdc_est": 351.0
+  },
+  "run_id": "sample-run",
+  "schema_version": 1,
+  "window": {
+    "snapshot_count": 96,
+    "window_end_utc": "2026-04-20T00:00:00+00:00",
+    "window_start_utc": "2026-04-19T00:00:00+00:00"
+  }
+}

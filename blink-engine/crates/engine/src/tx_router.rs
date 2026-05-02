@@ -158,7 +158,10 @@ impl TxRouter {
                 }
             }
         } else {
-            debug!("Flashbots circuit-broken ({} failures) — skipping", self.failures[0]);
+            debug!(
+                "Flashbots circuit-broken ({} failures) — skipping",
+                self.failures[0]
+            );
         }
 
         // 2. Try bloXroute.
@@ -178,7 +181,10 @@ impl TxRouter {
                 }
             }
         } else {
-            debug!("bloXroute circuit-broken ({} failures) — skipping", self.failures[1]);
+            debug!(
+                "bloXroute circuit-broken ({} failures) — skipping",
+                self.failures[1]
+            );
         }
 
         // 3. Public RPC fallback (always attempted).
@@ -215,11 +221,7 @@ impl TxRouter {
 
     // ── Private relay implementations ────────────────────────────────────
 
-    async fn send_flashbots(
-        &self,
-        txs: &[String],
-        target_block: u64,
-    ) -> Result<BundleResponse> {
+    async fn send_flashbots(&self, txs: &[String], target_block: u64) -> Result<BundleResponse> {
         let start = Instant::now();
 
         let body = serde_json::json!({
@@ -275,11 +277,7 @@ impl TxRouter {
         })
     }
 
-    async fn send_bloxroute(
-        &self,
-        txs: &[String],
-        target_block: u64,
-    ) -> Result<BundleResponse> {
+    async fn send_bloxroute(&self, txs: &[String], target_block: u64) -> Result<BundleResponse> {
         let start = Instant::now();
 
         let body = serde_json::json!({
@@ -290,10 +288,7 @@ impl TxRouter {
             }
         });
 
-        let mut request = self
-            .client
-            .post(&self.config.bloxroute_url)
-            .json(&body);
+        let mut request = self.client.post(&self.config.bloxroute_url).json(&body);
 
         if let Some(ref auth) = self.config.bloxroute_auth {
             request = request.header("Authorization", auth);
@@ -452,11 +447,18 @@ mod tests {
 
     #[tokio::test]
     async fn send_bundle_falls_through_to_public_rpc() {
-        // With no real relay running, all private relays will fail and we
-        // fall through to public RPC (which will also fail — that's expected
-        // in test without a real RPC node).
-        let mut router = TxRouter::new(test_config(), None);
-        let result = router.send_bundle(vec!["0xdead".to_string()], 99_999_999).await;
+        // Use closed localhost ports so behavior is deterministic and does not
+        // depend on external network access in CI.
+        let cfg = TxRouterConfig {
+            flashbots_url: "http://127.0.0.1:9".to_string(),
+            bloxroute_url: "http://127.0.0.1:9".to_string(),
+            public_rpc_url: "http://127.0.0.1:9".to_string(),
+            bloxroute_auth: None,
+        };
+        let mut router = TxRouter::new(cfg, None);
+        let result = router
+            .send_bundle(vec!["0xdead".to_string()], 99_999_999)
+            .await;
 
         // All relays unreachable in test — expect error.
         assert!(result.is_err());

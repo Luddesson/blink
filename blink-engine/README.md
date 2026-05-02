@@ -20,6 +20,7 @@
 - [Running](#running)
 - [Development](#development)
 - [Security](#security)
+- [Orchestrator POC](#orchestrator-poc)
 
 ---
 
@@ -410,6 +411,29 @@ Auth headers (`POLY-TIMESTAMP`) are rebuilt on each attempt to avoid stale times
 - The `TRADING_ENABLED` flag is `false` by default — you must explicitly opt in to live trading.
 - The circuit breaker automatically trips when daily loss limits are exceeded, blocking further orders until the engine is restarted.
 - All post-only orders use `maker: true` (enforced in `order_executor`) to prevent paying taker fees.
+
+---
+
+## Orchestrator POC
+
+A safe OpenClaw-style evaluation orchestrator is available in `blink-cli`:
+
+```bash
+cargo run -p blink-cli -- orchestrator smoke
+```
+
+Guardrails enforce:
+
+- explicit method/path allow+deny policy
+- environment safety constraints (localhost + live-env denial in online mode)
+- command allow/deny constraints
+- ledger artifact boundary checks
+- auditable `guardrail_decisions` + `denied_actions` in every run ledger
+
+Architecture, guardrails, and usage:
+
+- `docs/OPUS_OPENCLAW_ORCHESTRATOR_POC.md`
+- `docs/PRODUCTION_READINESS_GATE.md`
 
 ---
 

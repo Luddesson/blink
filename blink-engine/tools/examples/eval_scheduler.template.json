@@ -1,0 +1,31 @@
+{
+  "description": "MVP scheduler templates for recurring eval sessions.",
+  "run_id_rule": "<run-id-prefix>-<cadence>-<window-start-utc:YYYYMMDDTHHMMSSZ>",
+  "checkpoint_rule": "logs/eval-cycle/checkpoints/checkpoint-<cadence>-<window-start-utc>.json",
+  "templates": {
+    "15m": {
+      "session_window_seconds": 900,
+      "snapshot_every_seconds": 60
+    },
+    "1h": {
+      "session_window_seconds": 3600,
+      "snapshot_every_seconds": 300
+    },
+    "24h": {
+      "session_window_seconds": 86400,
+      "snapshot_every_seconds": 900
+    }
+  },
+  "example_commands": [
+    "python tools/eval_scheduler.py --cadence 15m --run-id-prefix eval --once",
+    "python tools/eval_scheduler.py --cadence 1h --run-id-prefix eval",
+    "python tools/eval_scheduler.py --cadence 24h --run-id-prefix eval --dry-run --once",
+    "python tools/eval_scheduler.py --cadence 24h --run-id-prefix eval --monthly-review-on-report"
+  ],
+  "monthly_review_hook": {
+    "enabled_flag": "--monthly-review-on-report",
+    "eval_root_default": "uses --output-dir",
+    "out_dir_default": "logs/eval-cycle/monthly-review",
+    "trigger_rule": "window_end_utc lands on first-of-month 00:00:00Z"
+  }
+}

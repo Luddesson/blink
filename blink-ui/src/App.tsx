@@ -35,6 +35,7 @@ const MarketsPage = lazy(() => import('./pages/MarketsPage'))
 const HistoryPage = lazy(() => import('./pages/HistoryPage'))
 const BullpenPage = lazy(() => import('./pages/BullpenPage'))
 const PerformancePage = lazy(() => import('./pages/PerformancePage'))
+const ProjectInventoryPage = lazy(() => import('./pages/ProjectInventoryPage'))
 const ConfigPage = lazy(() => import('./pages/ConfigPage'))
 const AlphaPage = lazy(() => import('./pages/AlphaPage'))
 
@@ -223,6 +224,11 @@ export default function App() {
             {activeTab === 'performance' && (
               <Suspense fallback={<PageFallback />}>
                 <PerformancePage portfolio={portfolio} positions={positions} />
+              </Suspense>
+            )}
+            {activeTab === 'inventory' && (
+              <Suspense fallback={<PageFallback />}>
+                <ProjectInventoryPage />
               </Suspense>
             )}
             {activeTab === 'config' && (

@@ -1,0 +1,2145 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-04-19T20:52:33.5741103+02:00",
+  "available": true,
+  "summary": {
+    "totalItems": 120,
+    "byStatus": {
+      "active-runtime": 46,
+      "compiled-not-wired": 6,
+      "active-ops": 14,
+      "unknown-needs-review": 6,
+      "archived-or-legacy": 48
+    },
+    "byArea": {
+      "engine-module": 37,
+      "workspace-crate": 7,
+      "ui-tab": 8,
+      "skill": 5,
+      "script": 8,
+      "doc": 55
+    }
+  },
+  "items": [
+    {
+      "id": "engine-module:activity_log",
+      "area": "engine-module",
+      "name": "activity_log",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 43
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 24
+        }
+      ]
+    },
+    {
+      "id": "engine-module:agent_rpc",
+      "area": "engine-module",
+      "name": "agent_rpc",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 44
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 25
+        }
+      ]
+    },
+    {
+      "id": "engine-module:alpha_signal",
+      "area": "engine-module",
+      "name": "alpha_signal",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 45
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 26
+        }
+      ]
+    },
+    {
+      "id": "engine-module:backtest_engine",
+      "area": "engine-module",
+      "name": "backtest_engine",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 46
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 27
+        }
+      ]
+    },
+    {
+      "id": "engine-module:blink_twin",
+      "area": "engine-module",
+      "name": "blink_twin",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 47
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 28
+        }
+      ]
+    },
+    {
+      "id": "engine-module:buffer_pool",
+      "area": "engine-module",
+      "name": "buffer_pool",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 48
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 29
+        }
+      ]
+    },
+    {
+      "id": "engine-module:bullpen_bridge",
+      "area": "engine-module",
+      "name": "bullpen_bridge",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 49
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 30
+        }
+      ]
+    },
+    {
+      "id": "engine-module:bullpen_discovery",
+      "area": "engine-module",
+      "name": "bullpen_discovery",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 50
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 31
+        }
+      ]
+    },
+    {
+      "id": "engine-module:bullpen_signal_generator",
+      "area": "engine-module",
+      "name": "bullpen_signal_generator",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 51
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 32
+        }
+      ]
+    },
+    {
+      "id": "engine-module:bullpen_smart_money",
+      "area": "engine-module",
+      "name": "bullpen_smart_money",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 52
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 33
+        }
+      ]
+    },
+    {
+      "id": "engine-module:clickhouse_logger",
+      "area": "engine-module",
+      "name": "clickhouse_logger",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 53
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 34
+        }
+      ]
+    },
+    {
+      "id": "engine-module:clob_client",
+      "area": "engine-module",
+      "name": "clob_client",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 54
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 35
+        }
+      ]
+    },
+    {
+      "id": "engine-module:config",
+      "area": "engine-module",
+      "name": "config",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 55
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 36
+        }
+      ]
+    },
+    {
+      "id": "engine-module:execution_provider",
+      "area": "engine-module",
+      "name": "execution_provider",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 56
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 37
+        }
+      ]
+    },
+    {
+      "id": "engine-module:exit_strategy",
+      "area": "engine-module",
+      "name": "exit_strategy",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 57
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 38
+        }
+      ]
+    },
+    {
+      "id": "engine-module:gas_oracle",
+      "area": "engine-module",
+      "name": "gas_oracle",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 58
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 39
+        }
+      ]
+    },
+    {
+      "id": "engine-module:heartbeat",
+      "area": "engine-module",
+      "name": "heartbeat",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 59
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 40
+        }
+      ]
+    },
+    {
+      "id": "engine-module:latency_tracker",
+      "area": "engine-module",
+      "name": "latency_tracker",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 60
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 41
+        }
+      ]
+    },
+    {
+      "id": "engine-module:live_engine",
+      "area": "engine-module",
+      "name": "live_engine",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 61
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 42
+        }
+      ]
+    },
+    {
+      "id": "engine-module:mev_router",
+      "area": "engine-module",
+      "name": "mev_router",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 62
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 43
+        }
+      ]
+    },
+    {
+      "id": "engine-module:order_book",
+      "area": "engine-module",
+      "name": "order_book",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 63
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 44
+        }
+      ]
+    },
+    {
+      "id": "engine-module:order_executor",
+      "area": "engine-module",
+      "name": "order_executor",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 64
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 45
+        }
+      ]
+    },
+    {
+      "id": "engine-module:order_signer",
+      "area": "engine-module",
+      "name": "order_signer",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 65
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 46
+        }
+      ]
+    },
+    {
+      "id": "engine-module:paper_engine",
+      "area": "engine-module",
+      "name": "paper_engine",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 66
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 47
+        }
+      ]
+    },
+    {
+      "id": "engine-module:paper_portfolio",
+      "area": "engine-module",
+      "name": "paper_portfolio",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 67
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 48
+        }
+      ]
+    },
+    {
+      "id": "engine-module:r2_uploader",
+      "area": "engine-module",
+      "name": "r2_uploader",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 68
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 49
+        }
+      ]
+    },
+    {
+      "id": "engine-module:risk_manager",
+      "area": "engine-module",
+      "name": "risk_manager",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 69
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 50
+        }
+      ]
+    },
+    {
+      "id": "engine-module:rn1_poller",
+      "area": "engine-module",
+      "name": "rn1_poller",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 70
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 51
+        }
+      ]
+    },
+    {
+      "id": "engine-module:sniffer",
+      "area": "engine-module",
+      "name": "sniffer",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 71
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 52
+        }
+      ]
+    },
+    {
+      "id": "engine-module:strategy",
+      "area": "engine-module",
+      "name": "strategy",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 72
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 53
+        }
+      ]
+    },
+    {
+      "id": "engine-module:tick_recorder",
+      "area": "engine-module",
+      "name": "tick_recorder",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 73
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 54
+        }
+      ]
+    },
+    {
+      "id": "engine-module:timed_mutex",
+      "area": "engine-module",
+      "name": "timed_mutex",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 74
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 55
+        }
+      ]
+    },
+    {
+      "id": "engine-module:truth_reconciler",
+      "area": "engine-module",
+      "name": "truth_reconciler",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 75
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 56
+        }
+      ]
+    },
+    {
+      "id": "engine-module:tui_app",
+      "area": "engine-module",
+      "name": "tui_app",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 76
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 57
+        }
+      ]
+    },
+    {
+      "id": "engine-module:types",
+      "area": "engine-module",
+      "name": "types",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 77
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 58
+        }
+      ]
+    },
+    {
+      "id": "engine-module:web_server",
+      "area": "engine-module",
+      "name": "web_server",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 78
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 59
+        }
+      ]
+    },
+    {
+      "id": "engine-module:ws_client",
+      "area": "engine-module",
+      "name": "ws_client",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Keep; this module is currently wired in the engine runtime.",
+      "evidence": [
+        {
+          "path": "blink-engine/crates/engine/src/lib.rs",
+          "note": "Module exported by engine crate",
+          "line": 79
+        },
+        {
+          "path": "blink-engine/crates/engine/src/main.rs",
+          "note": "Imported by engine runtime entrypoint",
+          "line": 61
+        }
+      ]
+    },
+    {
+      "id": "workspace-crate:engine",
+      "area": "workspace-crate",
+      "name": "engine",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Primary runtime crate.",
+      "evidence": [
+        {
+          "path": "blink-engine/Cargo.toml",
+          "note": "Workspace member",
+          "line": 3
+        },
+        {
+          "path": "README.md",
+          "note": "Documented as core backend",
+          "line": 5
+        }
+      ]
+    },
+    {
+      "id": "workspace-crate:market-scanner",
+      "area": "workspace-crate",
+      "name": "market-scanner",
+      "status": "compiled-not-wired",
+      "confidence": "medium",
+      "recommendation": "Confirm operational usage and add to runbook if this crate should stay active.",
+      "evidence": [
+        {
+          "path": "blink-engine/Cargo.toml",
+          "note": "Workspace member",
+          "line": 4
+        }
+      ]
+    },
+    {
+      "id": "workspace-crate:tee-vault",
+      "area": "workspace-crate",
+      "name": "tee-vault",
+      "status": "compiled-not-wired",
+      "confidence": "medium",
+      "recommendation": "Confirm operational usage and add to runbook if this crate should stay active.",
+      "evidence": [
+        {
+          "path": "blink-engine/Cargo.toml",
+          "note": "Workspace member",
+          "line": 5
+        }
+      ]
+    },
+    {
+      "id": "workspace-crate:bpf-probes",
+      "area": "workspace-crate",
+      "name": "bpf-probes",
+      "status": "compiled-not-wired",
+      "confidence": "medium",
+      "recommendation": "Confirm operational usage and add to runbook if this crate should stay active.",
+      "evidence": [
+        {
+          "path": "blink-engine/Cargo.toml",
+          "note": "Workspace member",
+          "line": 6
+        }
+      ]
+    },
+    {
+      "id": "workspace-crate:blink-cli",
+      "area": "workspace-crate",
+      "name": "blink-cli",
+      "status": "compiled-not-wired",
+      "confidence": "medium",
+      "recommendation": "Confirm operational usage and add to runbook if this crate should stay active.",
+      "evidence": [
+        {
+          "path": "blink-engine/Cargo.toml",
+          "note": "Workspace member",
+          "line": 7
+        }
+      ]
+    },
+    {
+      "id": "workspace-crate:tee-vault",
+      "area": "workspace-crate",
+      "name": "tee-vault",
+      "status": "compiled-not-wired",
+      "confidence": "medium",
+      "recommendation": "Confirm operational usage and add to runbook if this crate should stay active.",
+      "evidence": [
+        {
+          "path": "blink-engine/Cargo.toml",
+          "note": "Workspace member",
+          "line": 41
+        }
+      ]
+    },
+    {
+      "id": "workspace-crate:bpf-probes",
+      "area": "workspace-crate",
+      "name": "bpf-probes",
+      "status": "compiled-not-wired",
+      "confidence": "medium",
+      "recommendation": "Confirm operational usage and add to runbook if this crate should stay active.",
+      "evidence": [
+        {
+          "path": "blink-engine/Cargo.toml",
+          "note": "Workspace member",
+          "line": 42
+        }
+      ]
+    },
+    {
+      "id": "ui-tab:dashboard",
+      "area": "ui-tab",
+      "name": "dashboard",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Tab is wired and rendered.",
+      "evidence": [
+        {
+          "path": "blink-ui/src/hooks/useTab.ts",
+          "note": "Tab declared in tab registry",
+          "line": 3
+        },
+        {
+          "path": "blink-ui/src/components/TabBar.tsx",
+          "note": "Tab shown in UI navigation",
+          "line": 9
+        },
+        {
+          "path": "blink-ui/src/App.tsx",
+          "note": "Tab route rendered in app",
+          "line": 155
+        }
+      ]
+    },
+    {
+      "id": "ui-tab:markets",
+      "area": "ui-tab",
+      "name": "markets",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Tab is wired and rendered.",
+      "evidence": [
+        {
+          "path": "blink-ui/src/hooks/useTab.ts",
+          "note": "Tab declared in tab registry",
+          "line": 3
+        },
+        {
+          "path": "blink-ui/src/components/TabBar.tsx",
+          "note": "Tab shown in UI navigation",
+          "line": 10
+        },
+        {
+          "path": "blink-ui/src/App.tsx",
+          "note": "Tab route rendered in app",
+          "line": 209
+        }
+      ]
+    },
+    {
+      "id": "ui-tab:history",
+      "area": "ui-tab",
+      "name": "history",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Tab is wired and rendered.",
+      "evidence": [
+        {
+          "path": "blink-ui/src/hooks/useTab.ts",
+          "note": "Tab declared in tab registry",
+          "line": 3
+        },
+        {
+          "path": "blink-ui/src/components/TabBar.tsx",
+          "note": "Tab shown in UI navigation",
+          "line": 11
+        },
+        {
+          "path": "blink-ui/src/App.tsx",
+          "note": "Tab route rendered in app",
+          "line": 214
+        }
+      ]
+    },
+    {
+      "id": "ui-tab:intelligence",
+      "area": "ui-tab",
+      "name": "intelligence",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Tab is wired and rendered.",
+      "evidence": [
+        {
+          "path": "blink-ui/src/hooks/useTab.ts",
+          "note": "Tab declared in tab registry",
+          "line": 3
+        },
+        {
+          "path": "blink-ui/src/components/TabBar.tsx",
+          "note": "Tab shown in UI navigation",
+          "line": 12
+        },
+        {
+          "path": "blink-ui/src/App.tsx",
+          "note": "Tab route rendered in app",
+          "line": 219
+        }
+      ]
+    },
+    {
+      "id": "ui-tab:performance",
+      "area": "ui-tab",
+      "name": "performance",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Tab is wired and rendered.",
+      "evidence": [
+        {
+          "path": "blink-ui/src/hooks/useTab.ts",
+          "note": "Tab declared in tab registry",
+          "line": 3
+        },
+        {
+          "path": "blink-ui/src/components/TabBar.tsx",
+          "note": "Tab shown in UI navigation",
+          "line": 13
+        },
+        {
+          "path": "blink-ui/src/App.tsx",
+          "note": "Tab route rendered in app",
+          "line": 224
+        }
+      ]
+    },
+    {
+      "id": "ui-tab:inventory",
+      "area": "ui-tab",
+      "name": "inventory",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Tab is wired and rendered.",
+      "evidence": [
+        {
+          "path": "blink-ui/src/hooks/useTab.ts",
+          "note": "Tab declared in tab registry",
+          "line": 3
+        },
+        {
+          "path": "blink-ui/src/components/TabBar.tsx",
+          "note": "Tab shown in UI navigation",
+          "line": 14
+        },
+        {
+          "path": "blink-ui/src/App.tsx",
+          "note": "Tab route rendered in app",
+          "line": 229
+        }
+      ]
+    },
+    {
+      "id": "ui-tab:config",
+      "area": "ui-tab",
+      "name": "config",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Tab is wired and rendered.",
+      "evidence": [
+        {
+          "path": "blink-ui/src/hooks/useTab.ts",
+          "note": "Tab declared in tab registry",
+          "line": 3
+        },
+        {
+          "path": "blink-ui/src/components/TabBar.tsx",
+          "note": "Tab shown in UI navigation",
+          "line": 15
+        },
+        {
+          "path": "blink-ui/src/App.tsx",
+          "note": "Tab route rendered in app",
+          "line": 234
+        }
+      ]
+    },
+    {
+      "id": "ui-tab:alpha",
+      "area": "ui-tab",
+      "name": "alpha",
+      "status": "active-runtime",
+      "confidence": "high",
+      "recommendation": "Tab is wired and rendered.",
+      "evidence": [
+        {
+          "path": "blink-ui/src/hooks/useTab.ts",
+          "note": "Tab declared in tab registry",
+          "line": 3
+        },
+        {
+          "path": "blink-ui/src/components/TabBar.tsx",
+          "note": "Tab shown in UI navigation",
+          "line": 16
+        },
+        {
+          "path": "blink-ui/src/App.tsx",
+          "note": "Tab route rendered in app",
+          "line": 239
+        }
+      ]
+    },
+    {
+      "id": "skill:blink-trader",
+      "area": "skill",
+      "name": "blink-trader",
+      "status": "active-ops",
+      "confidence": "high",
+      "recommendation": "Local skill mirrored into agent catalogs.",
+      "evidence": [
+        {
+          "path": "skills-lock.json",
+          "note": "Skill sourceType=local",
+          "line": 4
+        },
+        {
+          "path": "scripts/start-blink.ps1",
+          "note": "Startup syncs skills + manifest",
+          "line": 45
+        }
+      ]
+    },
+    {
+      "id": "skill:bullpen-polymarket",
+      "area": "skill",
+      "name": "bullpen-polymarket",
+      "status": "active-ops",
+      "confidence": "high",
+      "recommendation": "Local skill mirrored into agent catalogs.",
+      "evidence": [
+        {
+          "path": "skills-lock.json",
+          "note": "Skill sourceType=local",
+          "line": 9
+        },
+        {
+          "path": "scripts/start-blink.ps1",
+          "note": "Startup syncs skills + manifest",
+          "line": 45
+        }
+      ]
+    },
+    {
+      "id": "skill:evm-swiss-knife",
+      "area": "skill",
+      "name": "evm-swiss-knife",
+      "status": "active-ops",
+      "confidence": "medium",
+      "recommendation": "External skill dependency; keep hash and source reviewed.",
+      "evidence": [
+        {
+          "path": "skills-lock.json",
+          "note": "Skill sourceType=github",
+          "line": 14
+        },
+        {
+          "path": "scripts/start-blink.ps1",
+          "note": "Startup syncs skills + manifest",
+          "line": 45
+        }
+      ]
+    },
+    {
+      "id": "skill:market-sentiment",
+      "area": "skill",
+      "name": "market-sentiment",
+      "status": "active-ops",
+      "confidence": "medium",
+      "recommendation": "External skill dependency; keep hash and source reviewed.",
+      "evidence": [
+        {
+          "path": "skills-lock.json",
+          "note": "Skill sourceType=github",
+          "line": 19
+        },
+        {
+          "path": "scripts/start-blink.ps1",
+          "note": "Startup syncs skills + manifest",
+          "line": 45
+        }
+      ]
+    },
+    {
+      "id": "skill:trading-strategist",
+      "area": "skill",
+      "name": "trading-strategist",
+      "status": "active-ops",
+      "confidence": "medium",
+      "recommendation": "External skill dependency; keep hash and source reviewed.",
+      "evidence": [
+        {
+          "path": "skills-lock.json",
+          "note": "Skill sourceType=github",
+          "line": 24
+        },
+        {
+          "path": "scripts/start-blink.ps1",
+          "note": "Startup syncs skills + manifest",
+          "line": 45
+        }
+      ]
+    },
+    {
+      "id": "script:cloudflare-tunnel.ps1",
+      "area": "script",
+      "name": "cloudflare-tunnel.ps1",
+      "status": "unknown-needs-review",
+      "confidence": "medium",
+      "recommendation": "Keep if needed in operator workflow; otherwise archive.",
+      "evidence": [
+        {
+          "path": "scripts/cloudflare-tunnel.ps1",
+          "note": "Script exists in project scripts folder",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "script:emergency-stop.ps1",
+      "area": "script",
+      "name": "emergency-stop.ps1",
+      "status": "unknown-needs-review",
+      "confidence": "medium",
+      "recommendation": "Keep if needed in operator workflow; otherwise archive.",
+      "evidence": [
+        {
+          "path": "scripts/emergency-stop.ps1",
+          "note": "Script exists in project scripts folder",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "script:eval.ps1",
+      "area": "script",
+      "name": "eval.ps1",
+      "status": "unknown-needs-review",
+      "confidence": "medium",
+      "recommendation": "Keep if needed in operator workflow; otherwise archive.",
+      "evidence": [
+        {
+          "path": "scripts/eval.ps1",
+          "note": "Script exists in project scripts folder",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "script:generate-config-registry.ps1",
+      "area": "script",
+      "name": "generate-config-registry.ps1",
+      "status": "active-ops",
+      "confidence": "high",
+      "recommendation": "Runbook-documented script.",
+      "evidence": [
+        {
+          "path": "scripts/generate-config-registry.ps1",
+          "note": "Script exists in project scripts folder",
+          "line": 1
+        },
+        {
+          "path": "docs/RUNBOOK.md",
+          "note": "Referenced in runbook",
+          "line": 37
+        }
+      ]
+    },
+    {
+      "id": "script:generate-project-inventory.ps1",
+      "area": "script",
+      "name": "generate-project-inventory.ps1",
+      "status": "active-ops",
+      "confidence": "high",
+      "recommendation": "Runbook-documented script.",
+      "evidence": [
+        {
+          "path": "scripts/generate-project-inventory.ps1",
+          "note": "Script exists in project scripts folder",
+          "line": 1
+        },
+        {
+          "path": "docs/RUNBOOK.md",
+          "note": "Referenced in runbook",
+          "line": 43
+        }
+      ]
+    },
+    {
+      "id": "script:start-blink.ps1",
+      "area": "script",
+      "name": "start-blink.ps1",
+      "status": "active-ops",
+      "confidence": "high",
+      "recommendation": "Operator-documented script.",
+      "evidence": [
+        {
+          "path": "scripts/start-blink.ps1",
+          "note": "Script exists in project scripts folder",
+          "line": 1
+        },
+        {
+          "path": "README.md",
+          "note": "Referenced in workspace README",
+          "line": 14
+        }
+      ]
+    },
+    {
+      "id": "script:stop-blink.ps1",
+      "area": "script",
+      "name": "stop-blink.ps1",
+      "status": "active-ops",
+      "confidence": "high",
+      "recommendation": "Operator-documented script.",
+      "evidence": [
+        {
+          "path": "scripts/stop-blink.ps1",
+          "note": "Script exists in project scripts folder",
+          "line": 1
+        },
+        {
+          "path": "README.md",
+          "note": "Referenced in workspace README",
+          "line": 34
+        }
+      ]
+    },
+    {
+      "id": "script:sync-skills-and-bind-agents.ps1",
+      "area": "script",
+      "name": "sync-skills-and-bind-agents.ps1",
+      "status": "active-ops",
+      "confidence": "medium",
+      "recommendation": "Used by startup orchestration.",
+      "evidence": [
+        {
+          "path": "scripts/sync-skills-and-bind-agents.ps1",
+          "note": "Script exists in project scripts folder",
+          "line": 1
+        },
+        {
+          "path": "scripts/start-blink.ps1",
+          "note": "Invoked by start script",
+          "line": 45
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/Agent_01_AURA_ARCHITECT",
+      "area": "doc",
+      "name": "docs/archive/Agent_01_AURA_ARCHITECT",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/Agent_01_AURA_ARCHITECT",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/Agent_02_QSIGMA_QUANT",
+      "area": "doc",
+      "name": "docs/archive/Agent_02_QSIGMA_QUANT",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/Agent_02_QSIGMA_QUANT",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/Agent_03_WRAITH_STEALTH",
+      "area": "doc",
+      "name": "docs/archive/Agent_03_WRAITH_STEALTH",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/Agent_03_WRAITH_STEALTH",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/Agent_04_NEXUS_AUTOMATOR",
+      "area": "doc",
+      "name": "docs/archive/Agent_04_NEXUS_AUTOMATOR",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/Agent_04_NEXUS_AUTOMATOR",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/Agent_04_SENTINEL_RISK",
+      "area": "doc",
+      "name": "docs/archive/Agent_04_SENTINEL_RISK",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/Agent_04_SENTINEL_RISK",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/ARCHIVED_MODULES.md",
+      "area": "doc",
+      "name": "docs/archive/ARCHIVED_MODULES.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/ARCHIVED_MODULES.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/COMPREHENSIVE_ANALYSIS.md",
+      "area": "doc",
+      "name": "docs/archive/COMPREHENSIVE_ANALYSIS.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/COMPREHENSIVE_ANALYSIS.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/config_history.md",
+      "area": "doc",
+      "name": "docs/archive/config_history.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/config_history.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/engine_docs/architecture.md",
+      "area": "doc",
+      "name": "docs/archive/engine_docs/architecture.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/engine_docs/architecture.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/engine_docs/configuration.md",
+      "area": "doc",
+      "name": "docs/archive/engine_docs/configuration.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/engine_docs/configuration.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/engine_docs/trading-modes.md",
+      "area": "doc",
+      "name": "docs/archive/engine_docs/trading-modes.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/engine_docs/trading-modes.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/fetch_onchain.js",
+      "area": "doc",
+      "name": "docs/archive/fetch_onchain.js",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/fetch_onchain.js",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/HFT_ULTRA_LATENCY_PROJECT_V1_MASTER_BLUEPRINT",
+      "area": "doc",
+      "name": "docs/archive/HFT_ULTRA_LATENCY_PROJECT_V1_MASTER_BLUEPRINT",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/HFT_ULTRA_LATENCY_PROJECT_V1_MASTER_BLUEPRINT",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/INFRASTRUCTURE_SETUP_GUIDE",
+      "area": "doc",
+      "name": "docs/archive/INFRASTRUCTURE_SETUP_GUIDE",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/INFRASTRUCTURE_SETUP_GUIDE",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/MASTER_ROADMAP",
+      "area": "doc",
+      "name": "docs/archive/MASTER_ROADMAP",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/MASTER_ROADMAP",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/OWNER_TODO.txt",
+      "area": "doc",
+      "name": "docs/archive/OWNER_TODO.txt",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/OWNER_TODO.txt",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/POLYMARKET_API_REFERENCE",
+      "area": "doc",
+      "name": "docs/archive/POLYMARKET_API_REFERENCE",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/POLYMARKET_API_REFERENCE",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/rn1_profile.json",
+      "area": "doc",
+      "name": "docs/archive/rn1_profile.json",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/rn1_profile.json",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/rn1_trades.json",
+      "area": "doc",
+      "name": "docs/archive/rn1_trades.json",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/rn1_trades.json",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/analysis/analyze_rn1.py",
+      "area": "doc",
+      "name": "docs/archive/root_docs/analysis/analyze_rn1.py",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/analysis/analyze_rn1.py",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/analysis/EXECUTIVE_SUMMARY_RN1.md",
+      "area": "doc",
+      "name": "docs/archive/root_docs/analysis/EXECUTIVE_SUMMARY_RN1.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/analysis/EXECUTIVE_SUMMARY_RN1.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/analysis/FINAL_RECOMMENDATIONS.md",
+      "area": "doc",
+      "name": "docs/archive/root_docs/analysis/FINAL_RECOMMENDATIONS.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/analysis/FINAL_RECOMMENDATIONS.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/analysis/RN1_ANALYSIS_PRELIMINARY.md",
+      "area": "doc",
+      "name": "docs/archive/root_docs/analysis/RN1_ANALYSIS_PRELIMINARY.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/analysis/RN1_ANALYSIS_PRELIMINARY.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/analysis/rn1_analysis_report.json",
+      "area": "doc",
+      "name": "docs/archive/root_docs/analysis/rn1_analysis_report.json",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/analysis/rn1_analysis_report.json",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/analysis/RN1_ANALYSIS.md",
+      "area": "doc",
+      "name": "docs/archive/root_docs/analysis/RN1_ANALYSIS.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/analysis/RN1_ANALYSIS.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/analysis/RN1_DEEP_DIVE_ANALYSIS.md",
+      "area": "doc",
+      "name": "docs/archive/root_docs/analysis/RN1_DEEP_DIVE_ANALYSIS.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/analysis/RN1_DEEP_DIVE_ANALYSIS.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/order-size-analysis.md",
+      "area": "doc",
+      "name": "docs/archive/root_docs/order-size-analysis.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/order-size-analysis.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/plan.md",
+      "area": "doc",
+      "name": "docs/archive/root_docs/plan.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/plan.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/README.md",
+      "area": "doc",
+      "name": "docs/archive/root_docs/README.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/README.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/status.md",
+      "area": "doc",
+      "name": "docs/archive/root_docs/status.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/status.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/visuals/rn1_bet_size_dist.png",
+      "area": "doc",
+      "name": "docs/archive/root_docs/visuals/rn1_bet_size_dist.png",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/visuals/rn1_bet_size_dist.png",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/visuals/rn1_market_types.png",
+      "area": "doc",
+      "name": "docs/archive/root_docs/visuals/rn1_market_types.png",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/visuals/rn1_market_types.png",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/visuals/rn1_pnl_curve.png",
+      "area": "doc",
+      "name": "docs/archive/root_docs/visuals/rn1_pnl_curve.png",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/visuals/rn1_pnl_curve.png",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/root_docs/visuals/rn1_time_heatmap.png",
+      "area": "doc",
+      "name": "docs/archive/root_docs/visuals/rn1_time_heatmap.png",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/root_docs/visuals/rn1_time_heatmap.png",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/RUST_HFT_TIPS_AND_TRICKS",
+      "area": "doc",
+      "name": "docs/archive/RUST_HFT_TIPS_AND_TRICKS",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/RUST_HFT_TIPS_AND_TRICKS",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/RUST_PROJECT_STRUCTURE",
+      "area": "doc",
+      "name": "docs/archive/RUST_PROJECT_STRUCTURE",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/RUST_PROJECT_STRUCTURE",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/SECURITY_AND_RISK_GUIDE",
+      "area": "doc",
+      "name": "docs/archive/SECURITY_AND_RISK_GUIDE",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/SECURITY_AND_RISK_GUIDE",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/TECH_STACK_BIBLE",
+      "area": "doc",
+      "name": "docs/archive/TECH_STACK_BIBLE",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/TECH_STACK_BIBLE",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/The HFT AI tool stack & superpowers",
+      "area": "doc",
+      "name": "docs/archive/The HFT AI tool stack & superpowers",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/The HFT AI tool stack & superpowers",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/The Quant",
+      "area": "doc",
+      "name": "docs/archive/The Quant",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/The Quant",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/The_polymarket_sports_intel_report",
+      "area": "doc",
+      "name": "docs/archive/The_polymarket_sports_intel_report",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/The_polymarket_sports_intel_report",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/TODO_AURA_ARCHITECT.md",
+      "area": "doc",
+      "name": "docs/archive/TODO_AURA_ARCHITECT.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/TODO_AURA_ARCHITECT.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/TODO_NEXUS_AUTOMATOR.md",
+      "area": "doc",
+      "name": "docs/archive/TODO_NEXUS_AUTOMATOR.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/TODO_NEXUS_AUTOMATOR.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/TODO_QSIGMA_QUANT.md",
+      "area": "doc",
+      "name": "docs/archive/TODO_QSIGMA_QUANT.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/TODO_QSIGMA_QUANT.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/TODO_SENTINEL_RISK.md",
+      "area": "doc",
+      "name": "docs/archive/TODO_SENTINEL_RISK.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/TODO_SENTINEL_RISK.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/TODO_WRAITH_STEALTH.md",
+      "area": "doc",
+      "name": "docs/archive/TODO_WRAITH_STEALTH.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/TODO_WRAITH_STEALTH.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/TUI_todo.md",
+      "area": "doc",
+      "name": "docs/archive/TUI_todo.md",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/TUI_todo.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/archive/VS Code vs Cursor",
+      "area": "doc",
+      "name": "docs/archive/VS Code vs Cursor",
+      "status": "archived-or-legacy",
+      "confidence": "high",
+      "recommendation": "Archive-only material; keep out of active operator path.",
+      "evidence": [
+        {
+          "path": "docs/archive/VS Code vs Cursor",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/Bullpen.fi Frontend-arkitektur.md",
+      "area": "doc",
+      "name": "docs/Bullpen.fi Frontend-arkitektur.md",
+      "status": "unknown-needs-review",
+      "confidence": "low",
+      "recommendation": "Review and tag this document as active reference or archive candidate.",
+      "evidence": [
+        {
+          "path": "docs/Bullpen.fi Frontend-arkitektur.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/CLAUDE.md",
+      "area": "doc",
+      "name": "docs/CLAUDE.md",
+      "status": "unknown-needs-review",
+      "confidence": "low",
+      "recommendation": "Review and tag this document as active reference or archive candidate.",
+      "evidence": [
+        {
+          "path": "docs/CLAUDE.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/GEMINI.md",
+      "area": "doc",
+      "name": "docs/GEMINI.md",
+      "status": "unknown-needs-review",
+      "confidence": "low",
+      "recommendation": "Review and tag this document as active reference or archive candidate.",
+      "evidence": [
+        {
+          "path": "docs/GEMINI.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/generated/config-registry.json",
+      "area": "doc",
+      "name": "docs/generated/config-registry.json",
+      "status": "active-ops",
+      "confidence": "high",
+      "recommendation": "Generated artifact used for auditability.",
+      "evidence": [
+        {
+          "path": "docs/generated/config-registry.json",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/generated/project-inventory.json",
+      "area": "doc",
+      "name": "docs/generated/project-inventory.json",
+      "status": "active-ops",
+      "confidence": "high",
+      "recommendation": "Generated artifact used for auditability.",
+      "evidence": [
+        {
+          "path": "docs/generated/project-inventory.json",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/RUNBOOK.md",
+      "area": "doc",
+      "name": "docs/RUNBOOK.md",
+      "status": "active-ops",
+      "confidence": "high",
+      "recommendation": "Active operational documentation.",
+      "evidence": [
+        {
+          "path": "docs/RUNBOOK.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "doc:docs/TODO.md",
+      "area": "doc",
+      "name": "docs/TODO.md",
+      "status": "active-ops",
+      "confidence": "high",
+      "recommendation": "Active operational documentation.",
+      "evidence": [
+        {
+          "path": "docs/TODO.md",
+          "note": "Documentation file present",
+          "line": 1
+        }
+      ]
+    }
+  ]
+}

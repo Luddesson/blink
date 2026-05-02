@@ -20,10 +20,7 @@ pub enum SignalSource {
     /// Shadow-copy of a tracked wallet's order (existing RN1 pipeline).
     Rn1Copytrade,
     /// AI/LLM-generated autonomous signal from the Python sidecar.
-    AiAutonomous {
-        model: String,
-        prompt_id: String,
-    },
+    AiAutonomous { model: String, prompt_id: String },
     /// Smart-money wallet convergence detection (Bullpen).
     SmartMoneyConvergence,
 }
@@ -331,7 +328,10 @@ impl AlphaAnalytics {
 
     /// Mark a signal as having opened a position (called from alpha consumer).
     pub fn mark_signal_opened(&mut self, analysis_id: &str, position_id: usize, entry_price: f64) {
-        if let Some(rec) = self.signal_history.iter_mut().rev()
+        if let Some(rec) = self
+            .signal_history
+            .iter_mut()
+            .rev()
             .find(|r| r.analysis_id == analysis_id)
         {
             rec.status = "opened".to_string();
@@ -343,7 +343,10 @@ impl AlphaAnalytics {
 
     /// Mark a signal as rejected by the engine pipeline (called from alpha consumer).
     pub fn mark_signal_engine_rejected(&mut self, analysis_id: &str) {
-        if let Some(rec) = self.signal_history.iter_mut().rev()
+        if let Some(rec) = self
+            .signal_history
+            .iter_mut()
+            .rev()
             .find(|r| r.analysis_id == analysis_id)
         {
             if rec.status == "accepted" {
@@ -362,11 +365,18 @@ impl AlphaAnalytics {
         } else if pnl < 0.0 {
             self.loss_count += 1;
         }
-        if pnl > self.best_trade_pnl { self.best_trade_pnl = pnl; }
-        if pnl < self.worst_trade_pnl { self.worst_trade_pnl = pnl; }
+        if pnl > self.best_trade_pnl {
+            self.best_trade_pnl = pnl;
+        }
+        if pnl < self.worst_trade_pnl {
+            self.worst_trade_pnl = pnl;
+        }
 
         // Update signal record
-        if let Some(rec) = self.signal_history.iter_mut().rev()
+        if let Some(rec) = self
+            .signal_history
+            .iter_mut()
+            .rev()
             .find(|r| r.analysis_id == analysis_id)
         {
             rec.realized_pnl = Some(rec.realized_pnl.unwrap_or(0.0) + pnl);
@@ -376,7 +386,10 @@ impl AlphaAnalytics {
 
     /// Update unrealized P&L for open AI positions (called periodically).
     pub fn update_unrealized(&mut self, analysis_id: &str, unrealized: f64, current_price: f64) {
-        if let Some(rec) = self.signal_history.iter_mut().rev()
+        if let Some(rec) = self
+            .signal_history
+            .iter_mut()
+            .rev()
             .find(|r| r.analysis_id == analysis_id)
         {
             rec.unrealized_pnl = Some(unrealized);
@@ -412,14 +425,18 @@ impl AlphaAnalytics {
     /// Win rate as a percentage (0-100).
     pub fn win_rate_pct(&self) -> f64 {
         let total = self.win_count + self.loss_count;
-        if total == 0 { return 0.0; }
+        if total == 0 {
+            return 0.0;
+        }
         (self.win_count as f64 / total as f64) * 100.0
     }
 
     /// Average P&L per closed trade.
     pub fn avg_pnl_per_trade(&self) -> f64 {
         let total = self.win_count + self.loss_count;
-        if total == 0 { return 0.0; }
+        if total == 0 {
+            return 0.0;
+        }
         self.realized_pnl_usdc / total as f64
     }
 }
@@ -536,8 +553,17 @@ mod tests {
     fn alpha_risk_config_defaults_are_conservative() {
         let cfg = AlphaRiskConfig::default();
         assert!(!cfg.enabled, "Alpha must default to disabled");
-        assert!(cfg.confidence_floor >= 0.60, "Confidence floor must be ≥ 60%");
-        assert!(cfg.max_single_order_usdc <= 10.0, "Max order must be ≤ $10 for safety");
-        assert!(cfg.max_concurrent_positions <= 5, "Max positions must be ≤ 5");
+        assert!(
+            cfg.confidence_floor >= 0.60,
+            "Confidence floor must be ≥ 60%"
+        );
+        assert!(
+            cfg.max_single_order_usdc <= 10.0,
+            "Max order must be ≤ $10 for safety"
+        );
+        assert!(
+            cfg.max_concurrent_positions <= 5,
+            "Max positions must be ≤ 5"
+        );
     }
 }

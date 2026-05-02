@@ -5,8 +5,8 @@
 //!   - Polymarket CLOB REST API (https://clob.polymarket.com)
 //!   - Polymarket Gamma API (https://gamma-api.polymarket.com)
 
-mod commands;
 mod client;
+mod commands;
 mod output;
 
 use anyhow::Result;
@@ -22,7 +22,12 @@ use dotenvy::dotenv;
 )]
 struct Cli {
     /// Blink engine base URL (overrides BLINK_HOST env var).
-    #[arg(long, env = "BLINK_HOST", default_value = "http://localhost:3030", global = true)]
+    #[arg(
+        long,
+        env = "BLINK_HOST",
+        default_value = "http://localhost:3030",
+        global = true
+    )]
     host: String,
 
     /// Output format.
@@ -52,6 +57,9 @@ enum Commands {
 
     /// Engine control — status, pause, resume.
     Engine(commands::engine::EngineArgs),
+
+    /// Safe control-plane orchestrator for Blink eval sequences.
+    Orchestrator(commands::orchestrator::OrchestratorArgs),
 }
 
 #[tokio::main]
@@ -62,8 +70,9 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Portfolio(args) => commands::portfolio::run(ctx, args).await,
-        Commands::Market(args)    => commands::market::run(ctx, args).await,
-        Commands::Order(args)     => commands::order::run(ctx, args).await,
-        Commands::Engine(args)    => commands::engine::run(ctx, args).await,
+        Commands::Market(args) => commands::market::run(ctx, args).await,
+        Commands::Order(args) => commands::order::run(ctx, args).await,
+        Commands::Engine(args) => commands::engine::run(ctx, args).await,
+        Commands::Orchestrator(args) => commands::orchestrator::run(ctx, args).await,
     }
 }

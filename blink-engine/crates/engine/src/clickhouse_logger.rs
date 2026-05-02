@@ -32,116 +32,116 @@ use tracing::{debug, info, warn};
 #[derive(Row, Serialize, Debug, Clone)]
 pub struct OrderBookSnapshot {
     pub timestamp_ms: u64,
-    pub token_id:     String,
-    pub best_bid:     u64,
-    pub best_ask:     u64,
-    pub bid_depth:    u64,
-    pub ask_depth:    u64,
-    pub spread:       u64,
+    pub token_id: String,
+    pub best_bid: u64,
+    pub best_ask: u64,
+    pub bid_depth: u64,
+    pub ask_depth: u64,
+    pub spread: u64,
 }
 
 /// A detected RN1 whale signal.
 #[derive(Row, Serialize, Debug, Clone)]
 pub struct Rn1SignalRecord {
     pub timestamp_ms: u64,
-    pub token_id:     String,
-    pub side:         String,
-    pub price:        u64,
-    pub size:         u64,
-    pub wallet:       String,
+    pub token_id: String,
+    pub side: String,
+    pub price: u64,
+    pub size: u64,
+    pub wallet: String,
 }
 
 /// An order placed by the engine (paper or live).
 #[derive(Row, Serialize, Debug, Clone)]
 pub struct TradeExecution {
     pub timestamp_ms: u64,
-    pub token_id:     String,
-    pub side:         String,
-    pub price:        u64,
-    pub size:         u64,
-    pub order_id:     String,
-    pub mode:         String,
-    pub status:       String,
+    pub token_id: String,
+    pub side: String,
+    pub price: u64,
+    pub size: u64,
+    pub order_id: String,
+    pub mode: String,
+    pub status: String,
 }
 
 /// Periodic engine health snapshot.
 #[derive(Row, Serialize, Debug, Clone)]
 pub struct SystemMetric {
-    pub timestamp_ms:     u64,
-    pub ws_connected:     u8,
-    pub msg_per_sec:      u64,
-    pub latency_min_us:   u64,
-    pub latency_max_us:   u64,
-    pub latency_avg_us:   u64,
-    pub latency_p99_us:   u64,
-    pub open_positions:   u32,
-    pub unrealised_pnl:   i64,
+    pub timestamp_ms: u64,
+    pub ws_connected: u8,
+    pub msg_per_sec: u64,
+    pub latency_min_us: u64,
+    pub latency_max_us: u64,
+    pub latency_avg_us: u64,
+    pub latency_p99_us: u64,
+    pub open_positions: u32,
+    pub unrealised_pnl: i64,
 }
 
 /// A risk event (circuit breaker trip, VaR breach, daily loss limit hit, etc).
 #[derive(Row, Serialize, Debug, Clone)]
 pub struct RiskEvent {
-    pub timestamp_ms:     u64,
+    pub timestamp_ms: u64,
     /// One of: "circuit_breaker", "var_breach", "daily_loss", "kill_switch",
     ///         "rate_limit", "order_too_large", "too_many_positions"
-    pub event_type:       String,
-    pub severity:         String,
-    pub details:          String,
+    pub event_type: String,
+    pub severity: String,
+    pub details: String,
     /// NAV at the time of the event.
-    pub nav_usdc:         i64,
+    pub nav_usdc: i64,
     /// Daily P&L at the time of the event (cents).
-    pub daily_pnl_cents:  i64,
+    pub daily_pnl_cents: i64,
     /// Rolling exposure (cents).
-    pub exposure_cents:   i64,
+    pub exposure_cents: i64,
 }
 
 /// Individual latency sample (one per order lifecycle event).
 #[derive(Row, Serialize, Debug, Clone)]
 pub struct LatencySample {
-    pub timestamp_ms:     u64,
+    pub timestamp_ms: u64,
     /// One of: "signal_detect", "order_sign", "order_submit", "order_ack",
     ///         "ws_roundtrip", "book_update"
-    pub operation:        String,
+    pub operation: String,
     /// Latency in microseconds.
-    pub latency_us:       u64,
-    pub token_id:         String,
+    pub latency_us: u64,
+    pub token_id: String,
 }
 
 /// A periodic NAV snapshot for the PnL curve — persists across restarts.
 #[derive(Row, Serialize, Debug, Clone)]
 pub struct EquitySnapshot {
-    pub timestamp_ms:    u64,
-    pub nav_usdc:        f64,
-    pub cash_usdc:       f64,
-    pub unrealised_pnl:  f64,
-    pub open_positions:  u32,
+    pub timestamp_ms: u64,
+    pub nav_usdc: f64,
+    pub cash_usdc: f64,
+    pub unrealised_pnl: f64,
+    pub open_positions: u32,
 }
 
 /// Full P&L record for a closed position.
 #[derive(Row, Serialize, Debug, Clone)]
 pub struct ClosedTradeFull {
-    pub timestamp_ms:   u64,
-    pub token_id:       String,
-    pub market_title:   String,
-    pub side:           String,
-    pub entry_price:    f64,
-    pub exit_price:     f64,
-    pub shares:         f64,
-    pub realized_pnl:   f64,
+    pub timestamp_ms: u64,
+    pub token_id: String,
+    pub market_title: String,
+    pub side: String,
+    pub entry_price: f64,
+    pub exit_price: f64,
+    pub shares: f64,
+    pub realized_pnl: f64,
     pub fees_paid_usdc: f64,
-    pub duration_secs:  u64,
-    pub reason:         String,
+    pub duration_secs: u64,
+    pub reason: String,
 }
 
 /// Detailed rejection event emitted by paper-engine analytics.
 #[derive(Row, Serialize, Debug, Clone)]
 pub struct RejectionEventRecord {
-    pub timestamp_ms:  u64,
-    pub reason:        String,
-    pub token_id:      String,
-    pub side:          String,
-    pub signal_price:  u64,
-    pub signal_size:   u64,
+    pub timestamp_ms: u64,
+    pub reason: String,
+    pub token_id: String,
+    pub side: String,
+    pub signal_price: u64,
+    pub signal_size: u64,
     pub signal_source: String,
 }
 
@@ -401,55 +401,81 @@ impl ClickHouseLogger {
         const BATCH_SIZE: usize = 500;
         const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
-        let mut ob_batch:  Vec<OrderBookSnapshot> = Vec::with_capacity(BATCH_SIZE);
-        let mut rn1_batch: Vec<Rn1SignalRecord>   = Vec::with_capacity(BATCH_SIZE);
-        let mut tx_batch:  Vec<TradeExecution>     = Vec::with_capacity(BATCH_SIZE);
-        let mut met_batch: Vec<SystemMetric>       = Vec::with_capacity(BATCH_SIZE);
-        let mut risk_batch: Vec<RiskEvent>         = Vec::with_capacity(BATCH_SIZE);
-        let mut rej_batch:  Vec<RejectionEventRecord> = Vec::with_capacity(BATCH_SIZE);
-        let mut lat_batch:  Vec<LatencySample>     = Vec::with_capacity(BATCH_SIZE);
-        let mut eq_batch:   Vec<EquitySnapshot>    = Vec::with_capacity(BATCH_SIZE);
-        let mut ct_batch:   Vec<ClosedTradeFull>   = Vec::with_capacity(BATCH_SIZE);
+        let mut ob_batch: Vec<OrderBookSnapshot> = Vec::with_capacity(BATCH_SIZE);
+        let mut rn1_batch: Vec<Rn1SignalRecord> = Vec::with_capacity(BATCH_SIZE);
+        let mut tx_batch: Vec<TradeExecution> = Vec::with_capacity(BATCH_SIZE);
+        let mut met_batch: Vec<SystemMetric> = Vec::with_capacity(BATCH_SIZE);
+        let mut risk_batch: Vec<RiskEvent> = Vec::with_capacity(BATCH_SIZE);
+        let mut rej_batch: Vec<RejectionEventRecord> = Vec::with_capacity(BATCH_SIZE);
+        let mut lat_batch: Vec<LatencySample> = Vec::with_capacity(BATCH_SIZE);
+        let mut eq_batch: Vec<EquitySnapshot> = Vec::with_capacity(BATCH_SIZE);
+        let mut ct_batch: Vec<ClosedTradeFull> = Vec::with_capacity(BATCH_SIZE);
 
         let mut last_flush = Instant::now();
 
         loop {
             while let Ok(event) = rx.try_recv() {
                 match event {
-                    WarehouseEvent::OrderBook(e)       => ob_batch.push(e),
-                    WarehouseEvent::Rn1Signal(e)       => rn1_batch.push(e),
-                    WarehouseEvent::Trade(e)           => tx_batch.push(e),
-                    WarehouseEvent::Metric(e)          => met_batch.push(e),
-                    WarehouseEvent::Risk(e)            => risk_batch.push(e),
-                    WarehouseEvent::Rejection(e)       => rej_batch.push(e),
-                    WarehouseEvent::Latency(e)         => lat_batch.push(e),
-                    WarehouseEvent::EquitySnapshot(e)  => eq_batch.push(e),
-                    WarehouseEvent::ClosedTrade(e)     => ct_batch.push(e),
+                    WarehouseEvent::OrderBook(e) => ob_batch.push(e),
+                    WarehouseEvent::Rn1Signal(e) => rn1_batch.push(e),
+                    WarehouseEvent::Trade(e) => tx_batch.push(e),
+                    WarehouseEvent::Metric(e) => met_batch.push(e),
+                    WarehouseEvent::Risk(e) => risk_batch.push(e),
+                    WarehouseEvent::Rejection(e) => rej_batch.push(e),
+                    WarehouseEvent::Latency(e) => lat_batch.push(e),
+                    WarehouseEvent::EquitySnapshot(e) => eq_batch.push(e),
+                    WarehouseEvent::ClosedTrade(e) => ct_batch.push(e),
                 }
 
-                let total = ob_batch.len() + rn1_batch.len()
-                           + tx_batch.len() + met_batch.len()
-                           + risk_batch.len() + rej_batch.len() + lat_batch.len()
-                           + eq_batch.len() + ct_batch.len();
+                let total = ob_batch.len()
+                    + rn1_batch.len()
+                    + tx_batch.len()
+                    + met_batch.len()
+                    + risk_batch.len()
+                    + rej_batch.len()
+                    + lat_batch.len()
+                    + eq_batch.len()
+                    + ct_batch.len();
                 if total >= BATCH_SIZE {
-                    self.flush_all(&mut ob_batch, &mut rn1_batch,
-                                    &mut tx_batch, &mut met_batch,
-                                   &mut risk_batch, &mut rej_batch, &mut lat_batch,
-                                   &mut eq_batch, &mut ct_batch).await;
+                    self.flush_all(
+                        &mut ob_batch,
+                        &mut rn1_batch,
+                        &mut tx_batch,
+                        &mut met_batch,
+                        &mut risk_batch,
+                        &mut rej_batch,
+                        &mut lat_batch,
+                        &mut eq_batch,
+                        &mut ct_batch,
+                    )
+                    .await;
                     last_flush = Instant::now();
                 }
             }
 
             if last_flush.elapsed() >= FLUSH_INTERVAL {
-                let total = ob_batch.len() + rn1_batch.len()
-                           + tx_batch.len() + met_batch.len()
-                           + risk_batch.len() + rej_batch.len() + lat_batch.len()
-                           + eq_batch.len() + ct_batch.len();
+                let total = ob_batch.len()
+                    + rn1_batch.len()
+                    + tx_batch.len()
+                    + met_batch.len()
+                    + risk_batch.len()
+                    + rej_batch.len()
+                    + lat_batch.len()
+                    + eq_batch.len()
+                    + ct_batch.len();
                 if total > 0 {
-                    self.flush_all(&mut ob_batch, &mut rn1_batch,
-                                    &mut tx_batch, &mut met_batch,
-                                   &mut risk_batch, &mut rej_batch, &mut lat_batch,
-                                   &mut eq_batch, &mut ct_batch).await;
+                    self.flush_all(
+                        &mut ob_batch,
+                        &mut rn1_batch,
+                        &mut tx_batch,
+                        &mut met_batch,
+                        &mut risk_batch,
+                        &mut rej_batch,
+                        &mut lat_batch,
+                        &mut eq_batch,
+                        &mut ct_batch,
+                    )
+                    .await;
                 }
                 last_flush = Instant::now();
             }
@@ -460,15 +486,15 @@ impl ClickHouseLogger {
 
     async fn flush_all(
         &self,
-        ob:   &mut Vec<OrderBookSnapshot>,
-        rn1:  &mut Vec<Rn1SignalRecord>,
-        tx:   &mut Vec<TradeExecution>,
-        met:  &mut Vec<SystemMetric>,
+        ob: &mut Vec<OrderBookSnapshot>,
+        rn1: &mut Vec<Rn1SignalRecord>,
+        tx: &mut Vec<TradeExecution>,
+        met: &mut Vec<SystemMetric>,
         risk: &mut Vec<RiskEvent>,
-        rej:  &mut Vec<RejectionEventRecord>,
-        lat:  &mut Vec<LatencySample>,
-        eq:   &mut Vec<EquitySnapshot>,
-        ct:   &mut Vec<ClosedTradeFull>,
+        rej: &mut Vec<RejectionEventRecord>,
+        lat: &mut Vec<LatencySample>,
+        eq: &mut Vec<EquitySnapshot>,
+        ct: &mut Vec<ClosedTradeFull>,
     ) {
         self.flush_table("blink.order_book_snapshots", ob).await;
         self.flush_table("blink.rn1_signals", rn1).await;
@@ -481,11 +507,7 @@ impl ClickHouseLogger {
         self.flush_table("blink.closed_trades_full", ct).await;
     }
 
-    async fn flush_table<T: Row + Serialize>(
-        &self,
-        table: &str,
-        batch: &mut Vec<T>,
-    ) {
+    async fn flush_table<T: Row + Serialize>(&self, table: &str, batch: &mut Vec<T>) {
         if batch.is_empty() {
             return;
         }

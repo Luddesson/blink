@@ -91,11 +91,7 @@ impl GasStrategy {
 
         debug!(
             expected_profit_usdc,
-            gas_limit,
-            profit_fee_gwei,
-            oracle_fee,
-            clamped,
-            "GasStrategy fee calculated"
+            gas_limit, profit_fee_gwei, oracle_fee, clamped, "GasStrategy fee calculated"
         );
 
         clamped

@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "next_created_seq": 3,
+  "updated_at_utc": "2026-04-20T12:00:00Z",
+  "jobs": [
+    {
+      "attempts": 1,
+      "claim_owner": "eval-daemon-1",
+      "created_at_utc": "2026-04-20T11:45:00Z",
+      "created_seq": 1,
+      "description": "Hourly full-cycle with baseline drift checks",
+      "eval_args": [
+        "--baseline-json",
+        "artifacts/backtest-baseline.json",
+        "--registry-upsert"
+      ],
+      "eval_command": "full-cycle",
+      "history": [
+        {
+          "at_utc": "2026-04-20T11:45:00Z",
+          "event": "enqueue",
+          "note": "",
+          "status": "pending",
+          "worker": "operator"
+        },
+        {
+          "at_utc": "2026-04-20T11:46:00Z",
+          "event": "claim",
+          "note": "",
+          "status": "running",
+          "worker": "eval-daemon-1"
+        }
+      ],
+      "id": "eval-6fc0f2d53c6a",
+      "last_error": null,
+      "max_retries": 3,
+      "priority": 1,
+      "run_id": "2026-04-20-hourly-a",
+      "status": "running",
+      "tags": [
+        "strategy:aggressive"
+      ],
+      "updated_at_utc": "2026-04-20T11:46:00Z"
+    },
+    {
+      "attempts": 0,
+      "claim_owner": null,
+      "created_at_utc": "2026-04-20T11:55:00Z",
+      "created_seq": 2,
+      "description": "Decision-only quick check",
+      "eval_args": [
+        "--thresholds-json",
+        "tools/examples/decision-thresholds.json"
+      ],
+      "eval_command": "decision-eval",
+      "history": [
+        {
+          "at_utc": "2026-04-20T11:55:00Z",
+          "event": "enqueue",
+          "note": "",
+          "status": "pending",
+          "worker": "operator"
+        }
+      ],
+      "id": "eval-cf98b3482e01",
+      "last_error": null,
+      "max_retries": 2,
+      "priority": 0,
+      "run_id": "2026-04-20-hourly-a",
+      "status": "pending",
+      "tags": [
+        "decision"
+      ],
+      "updated_at_utc": "2026-04-20T11:55:00Z"
+    }
+  ]
+}

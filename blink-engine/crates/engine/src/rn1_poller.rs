@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tracing::{debug, error, info, warn};
 
-use crate::activity_log::{ActivityLog, EntryKind, push as log_push};
+use crate::activity_log::{push as log_push, ActivityLog, EntryKind};
 use crate::config::Config;
 use crate::types::{OrderSide, RN1Signal};
 
@@ -144,18 +144,18 @@ struct ActivityEntry {
 /// wallets can be tracked concurrently by spawning one poller per wallet.
 #[allow(unused_assignments)]
 pub async fn run_rn1_poller(
-    _config:       Arc<Config>,
-    wallet:        String,
+    _config: Arc<Config>,
+    wallet: String,
     wallet_weight: f64,
-    signal_tx:     tokio::sync::mpsc::Sender<RN1Signal>,
-    activity:      Option<ActivityLog>,
-    diagnostics:   Rn1PollDiagnosticsHandle,
+    signal_tx: tokio::sync::mpsc::Sender<RN1Signal>,
+    activity: Option<ActivityLog>,
+    diagnostics: Rn1PollDiagnosticsHandle,
 ) {
     let client = Client::builder()
         .timeout(Duration::from_secs(8))
         .connect_timeout(Duration::from_secs(5))
         .http1_only()
-        .pool_max_idle_per_host(0)          // fresh TCP conn each poll — avoids Cloudflare RST on stale sockets
+        .pool_max_idle_per_host(0) // fresh TCP conn each poll — avoids Cloudflare RST on stale sockets
         .tcp_keepalive(Duration::from_secs(30))
         .user_agent("blink-engine-rn1-poller/1.0")
         .build()
@@ -179,8 +179,14 @@ pub async fn run_rn1_poller(
 
     info!(rn1_wallet = %wallet, wallet_weight, "RN1 poller started (data-api, no auth) — every {}ms", POLL_INTERVAL.as_millis());
     if let Some(ref log) = activity {
-        log_push(log, EntryKind::Engine,
-            format!("RN1 poller started — tracking {rn1_short}… (weight={wallet_weight:.2}) every {}ms", POLL_INTERVAL.as_millis()));
+        log_push(
+            log,
+            EntryKind::Engine,
+            format!(
+                "RN1 poller started — tracking {rn1_short}… (weight={wallet_weight:.2}) every {}ms",
+                POLL_INTERVAL.as_millis()
+            ),
+        );
     }
 
     loop {
@@ -214,7 +220,9 @@ pub async fn run_rn1_poller(
 
                     // Track timestamp high-water mark.
                     if let Some(ts) = entry.timestamp {
-                        if ts > last_ts { last_ts = ts; }
+                        if ts > last_ts {
+                            last_ts = ts;
+                        }
                     }
 
                     if seen_hashes.contains(&hash) {
@@ -239,7 +247,7 @@ pub async fn run_rn1_poller(
 
                     let token_id = entry.asset.as_deref().unwrap_or("unknown").to_string();
                     let price = entry.price.unwrap_or(0.0);
-                    let size  = entry.size.unwrap_or(0.0);
+                    let size = entry.size.unwrap_or(0.0);
                     let title = entry.title.as_deref().unwrap_or("?");
                     let outcome = entry.outcome.as_deref().unwrap_or("?");
 
@@ -282,10 +290,19 @@ pub async fn run_rn1_poller(
                 }
 
                 if is_first && !entries.is_empty() {
-                    info!(seeded = seen_hashes.len(), "RN1 poller seeded — watching for new trades");
+                    info!(
+                        seeded = seen_hashes.len(),
+                        "RN1 poller seeded — watching for new trades"
+                    );
                     if let Some(ref log) = activity {
-                        log_push(log, EntryKind::Engine,
-                            format!("RN1 poller seeded ({} existing trades) — watching for new", seen_hashes.len()));
+                        log_push(
+                            log,
+                            EntryKind::Engine,
+                            format!(
+                                "RN1 poller seeded ({} existing trades) — watching for new",
+                                seen_hashes.len()
+                            ),
+                        );
                     }
                 }
 
@@ -333,8 +350,11 @@ pub async fn run_rn1_poller(
                 if consecutive_errors <= 3 || consecutive_errors % 60 == 0 {
                     error!(error = %err.message, n = consecutive_errors, "RN1 poll failed");
                     if let Some(ref log) = activity {
-                        log_push(log, EntryKind::Warn,
-                            format!("RN1 poll error (#{consecutive_errors}): {}", err.message));
+                        log_push(
+                            log,
+                            EntryKind::Warn,
+                            format!("RN1 poll error (#{consecutive_errors}): {}", err.message),
+                        );
                     }
                 }
 
@@ -359,7 +379,7 @@ pub async fn run_rn1_poller(
                     consecutive_errors = 0;
                     // Reset to normal interval after cooldown; `continue` skips
                     // the bottom-of-loop sleep so next iteration uses this value.
-                    next_interval = POLL_INTERVAL;  // read after `continue` at loop bottom
+                    next_interval = POLL_INTERVAL; // read after `continue` at loop bottom
                     continue;
                 }
 
@@ -394,7 +414,10 @@ pub async fn run_rn1_poller(
 const POLL_RETRIES: u32 = 2;
 const RETRY_DELAY: Duration = Duration::from_millis(500);
 
-async fn poll_activity_with_retry(client: &Client, wallet: &str) -> std::result::Result<Vec<ActivityEntry>, PollFailure> {
+async fn poll_activity_with_retry(
+    client: &Client,
+    wallet: &str,
+) -> std::result::Result<Vec<ActivityEntry>, PollFailure> {
     let mut last_err = None;
     for attempt in 0..=POLL_RETRIES {
         match poll_activity(client, wallet).await {
@@ -412,7 +435,10 @@ async fn poll_activity_with_retry(client: &Client, wallet: &str) -> std::result:
 
 // ─── Single poll ─────────────────────────────────────────────────────────────
 
-async fn poll_activity(client: &Client, wallet: &str) -> std::result::Result<Vec<ActivityEntry>, PollFailure> {
+async fn poll_activity(
+    client: &Client,
+    wallet: &str,
+) -> std::result::Result<Vec<ActivityEntry>, PollFailure> {
     fn preview_body(body: &str) -> String {
         body.chars()
             .take(180)
@@ -423,7 +449,8 @@ async fn poll_activity(client: &Client, wallet: &str) -> std::result::Result<Vec
 
     let url = format!("{DATA_API}/activity?user={wallet}&limit={POLL_LIMIT}");
 
-    let resp = client.get(&url)
+    let resp = client
+        .get(&url)
         .header("accept", "application/json")
         .send()
         .await
@@ -472,29 +499,30 @@ async fn poll_activity(client: &Client, wallet: &str) -> std::result::Result<Vec
     })?;
 
     let entries = if value.is_array() {
-        serde_json::from_value::<Vec<ActivityEntry>>(value)
-            .map_err(|e| PollFailure {
-                message: format!("failed to decode /activity array payload: {e}"),
-                http_status: Some(status.as_u16()),
-                content_type: content_type.clone(),
-                body_preview: Some(preview_body(&body)),
-            })?
+        serde_json::from_value::<Vec<ActivityEntry>>(value).map_err(|e| PollFailure {
+            message: format!("failed to decode /activity array payload: {e}"),
+            http_status: Some(status.as_u16()),
+            content_type: content_type.clone(),
+            body_preview: Some(preview_body(&body)),
+        })?
     } else if let Some(arr) = value.get("data").and_then(|v| v.as_array()) {
-        serde_json::from_value::<Vec<ActivityEntry>>(Value::Array(arr.clone()))
-            .map_err(|e| PollFailure {
+        serde_json::from_value::<Vec<ActivityEntry>>(Value::Array(arr.clone())).map_err(|e| {
+            PollFailure {
                 message: format!("failed to decode /activity data[] payload: {e}"),
                 http_status: Some(status.as_u16()),
                 content_type: content_type.clone(),
                 body_preview: Some(preview_body(&body)),
-            })?
+            }
+        })?
     } else if let Some(arr) = value.get("activity").and_then(|v| v.as_array()) {
-        serde_json::from_value::<Vec<ActivityEntry>>(Value::Array(arr.clone()))
-            .map_err(|e| PollFailure {
+        serde_json::from_value::<Vec<ActivityEntry>>(Value::Array(arr.clone())).map_err(|e| {
+            PollFailure {
                 message: format!("failed to decode /activity activity[] payload: {e}"),
                 http_status: Some(status.as_u16()),
                 content_type: content_type.clone(),
                 body_preview: Some(preview_body(&body)),
-            })?
+            }
+        })?
     } else {
         return Err(PollFailure {
             message: "unexpected /activity JSON shape".to_string(),

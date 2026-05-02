@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use tracing::instrument;
 
-use crate::types::{MarketEvent, OrderEvent, RN1Signal, parse_price};
+use crate::types::{parse_price, MarketEvent, OrderEvent, RN1Signal};
 
 /// Watches the order event stream for activity from a specific wallet.
 pub struct Sniffer {
@@ -62,13 +62,16 @@ impl Sniffer {
         );
 
         RN1Signal {
-            token_id:    order.asset_id.clone().unwrap_or_else(|| order.market.clone()),
+            token_id: order
+                .asset_id
+                .clone()
+                .unwrap_or_else(|| order.market.clone()),
             market_title: None,
             market_outcome: None,
-            side:        order.side,
+            side: order.side,
             price,
             size,
-            order_id:    order.order_id.clone(),
+            order_id: order.order_id.clone(),
             detected_at: Instant::now(),
             event_start_time: None,
             event_end_time: None,
@@ -96,16 +99,16 @@ mod tests {
 
     fn make_order_event(owner: &str) -> MarketEvent {
         MarketEvent::Order(OrderEvent {
-            market:        "token-abc".to_string(),
-            asset_id:      None,
-            order_id:      "uuid-1".to_string(),
-            owner:         owner.to_string(),
-            side:          OrderSide::Buy,
-            price:         "0.65".to_string(),
-            size_matched:  Some("0".to_string()),
+            market: "token-abc".to_string(),
+            asset_id: None,
+            order_id: "uuid-1".to_string(),
+            owner: owner.to_string(),
+            side: OrderSide::Buy,
+            price: "0.65".to_string(),
+            size_matched: Some("0".to_string()),
             original_size: "50000".to_string(),
-            order_type:    "LIMIT".to_string(),
-            created_at:    None,
+            order_type: "LIMIT".to_string(),
+            created_at: None,
         })
     }
 
@@ -128,12 +131,12 @@ mod tests {
         use crate::types::{BookEvent, MarketEvent};
         let sniffer = Sniffer::new("0xABCDEF");
         let book = MarketEvent::Book(BookEvent {
-            market:    "token-abc".to_string(),
-            asset_id:  None,
-            bids:      vec![],
-            asks:      vec![],
+            market: "token-abc".to_string(),
+            asset_id: None,
+            bids: vec![],
+            asks: vec![],
             timestamp: None,
-            hash:      None,
+            hash: None,
         });
         assert!(sniffer.check_order_event(&book).is_none());
     }
@@ -143,7 +146,7 @@ mod tests {
         let sniffer = Sniffer::new("0xabc");
         let event = make_order_event("0xabc");
         let signal = sniffer.check_order_event(&event).unwrap();
-        assert_eq!(signal.price, 650);               // "0.65" × 1000
-        assert_eq!(signal.size,  50_000 * 1_000);    // "50000" × 1000
+        assert_eq!(signal.price, 650); // "0.65" × 1000
+        assert_eq!(signal.size, 50_000 * 1_000); // "50000" × 1000
     }
 }

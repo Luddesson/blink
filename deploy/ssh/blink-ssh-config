@@ -4,7 +4,7 @@
 # Edit here (in the repo), not in ~/.ssh/config.
 
 Host blink
-  HostName 5.161.100.38
+  HostName 37.27.249.217
   User root
   IdentityFile ~/.ssh/blink_hetzner
   IdentitiesOnly yes

@@ -1,0 +1,24 @@
+{
+  "generated_at_utc": "2026-04-20T00:00:40Z",
+  "readiness": {
+    "checks": {
+      "artifacts_complete": true,
+      "failed_gate_detected": false,
+      "packet_ready_for_review": true,
+      "rollback_paths_present": true,
+      "rollback_recommended": false,
+      "trigger_detected": false
+    },
+    "pass": false,
+    "reasons": [
+      "no rollback triggers or failed gates detected"
+    ],
+    "status": "FAIL"
+  },
+  "rollback_context": {
+    "failed_gates": [],
+    "triggers": []
+  },
+  "run_id": "sample-run",
+  "schema_version": "1.0.0"
+}

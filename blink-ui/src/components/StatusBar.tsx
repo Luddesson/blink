@@ -20,6 +20,7 @@ export default function StatusBar() {
       <span className="hidden text-[color:var(--color-text-dim)] sm:inline">│</span>
       <span>msgs <span className="text-[color:var(--color-text-secondary)] font-mono">{status?.messages_total?.toLocaleString() ?? '—'}</span></span>
       <span>uptime <span className="text-[color:var(--color-text-secondary)] font-mono">{uptime}</span></span>
+      <span>strategy <span className="text-[color:var(--color-text-secondary)] font-mono">{status?.strategy?.current_mode ?? 'n/a'}</span></span>
       <span className="flex w-full items-center gap-3 text-[color:var(--color-text-dim)] sm:ml-auto sm:w-auto">
         <span className="hidden items-center gap-1.5 sm:flex">
           <KeycapHint keys="P" /> pause

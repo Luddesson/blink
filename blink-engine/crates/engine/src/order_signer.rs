@@ -54,19 +54,10 @@ pub struct OrderParams {
     pub metadata: String,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct OrderSigningPolicy {
     pub expiration: u64,
     pub signature_type: u8,
-}
-
-impl Default for OrderSigningPolicy {
-    fn default() -> Self {
-        Self {
-            expiration: 0,
-            signature_type: 0,
-        }
-    }
 }
 
 /// A fully signed order ready for submission to the Polymarket CLOB REST API.
@@ -519,7 +510,7 @@ fn compute_amounts(params: &OrderParams) -> Result<(u64, u64, u8)> {
             let min_maker_amount = 1_000_000u128;
             let lot_multiple = 10_000u128 / gcd_u128(price, 10_000u128);
             let maker_step = price * lot_multiple;
-            let min_step_count = (min_maker_amount + maker_step - 1) / maker_step;
+            let min_step_count = min_maker_amount.div_ceil(maker_step);
             let max_step_count = max_maker_amount / maker_step;
             anyhow::ensure!(
                 max_step_count >= min_step_count,
@@ -627,7 +618,7 @@ fn decimal_to_b32(s: &str) -> Result<[u8; 32]> {
             .to_digit(10)
             .with_context(|| format!("non-decimal char '{ch}' in '{s}'"))?;
         // result = result * 10 + digit (big-endian u256 arithmetic)
-        let mut carry = digit as u32;
+        let mut carry = digit;
         for byte in result.iter_mut().rev() {
             let prod = (*byte as u32) * 10 + carry;
             *byte = (prod & 0xff) as u8;
@@ -666,7 +657,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>> {
-    anyhow::ensure!(s.len() % 2 == 0, "odd hex length");
+    anyhow::ensure!(s.len().is_multiple_of(2), "odd hex length");
     (0..s.len())
         .step_by(2)
         .map(|i| {

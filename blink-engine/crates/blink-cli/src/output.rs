@@ -7,6 +7,10 @@ use serde_json::Value;
 use crate::OutputFormat;
 
 /// Print a JSON value as either a pretty table (best-effort) or raw JSON.
+#[expect(
+    dead_code,
+    reason = "generic formatter is retained for subcommands that return raw JSON payloads"
+)]
 pub fn print_value(val: &Value, fmt: &OutputFormat) {
     match fmt {
         OutputFormat::Json => {

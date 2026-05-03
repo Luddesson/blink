@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.1.0",
+  "run_id": "2026-05-02-hyper-status-d",
+  "recorded_at_utc": "2026-05-02T19:38:29Z",
+  "environment": "live-canary-hyper-observer",
+  "decision": "GO_OBSERVER_HOLD",
+  "decision_scope": "Observer-only control-plane readiness. Not approval for circuit breaker reset, canary order, capital increase, negative-risk trading, or production live.",
+  "signers": {
+    "primary_operator": {
+      "name": "",
+      "signed_at_utc": ""
+    },
+    "secondary_reviewer": {
+      "name": "",
+      "signed_at_utc": ""
+    }
+  },
+  "artifacts": {
+    "hyper_mode_path": "blink-engine/HYPER_MODE.md",
+    "todo_path": "blink-engine/to-do.md",
+    "go_live_evidence_dir": "blink-engine/logs/go-live/2026-05-02-hyper-status-d",
+    "go_live_evidence_index": "blink-engine/logs/go-live/2026-05-02-hyper-status-d/evidence-index.json",
+    "go_live_artifact_integrity": "blink-engine/logs/go-live/2026-05-02-hyper-status-d/artifact-integrity.json",
+    "eval_cycle_dir": "blink-engine/logs/eval-cycle/2026-05-02-hyper-status-c",
+    "production_readiness_gate": "blink-engine/logs/eval-cycle/2026-05-02-hyper-status-c/production-readiness-gate.json",
+    "rollback_packet": "blink-engine/logs/eval-cycle/2026-05-02-hyper-status-c/rollback-packet.json",
+    "signoff_packet": "blink-engine/logs/eval-cycle/2026-05-02-hyper-status-c/signoff-packet.json",
+    "rollback_playbook_path": "deploy/ROLLBACK-PLAYBOOK.md",
+    "rollback_helper_path": "deploy/rollback-hetzner.ps1"
+  },
+  "current_state_summary": {
+    "systemd_active": true,
+    "mode": "live",
+    "trading_enabled": true,
+    "risk_status": "CIRCUIT_BREAKER",
+    "circuit_breaker_tripped": true,
+    "circuit_breaker_reason": "heartbeat_dead_5consecutive_failures",
+    "heartbeat_recovered": true,
+    "pending_orders": 0,
+    "stale_orders": 0,
+    "wallet_truth_verified": true,
+    "reality_status": "matched",
+    "geoblock_launch_status": "ELIGIBLE",
+    "geoblock_blocked": false,
+    "cash_usdc": 1.672959,
+    "nav_usdc": 1.672959,
+    "max_single_order_usdc": 2.0,
+    "open_positions_count": 3
+  },
+  "observer_constraints": {
+    "circuit_breaker_reset_allowed": false,
+    "live_canary_order_allowed": false,
+    "capital_increase_allowed": false,
+    "negative_risk_trading_allowed": false,
+    "release_promotion_allowed": false,
+    "allowed_actions": [
+      "read-only snapshots",
+      "artifact generation",
+      "release hygiene",
+      "rollback preview",
+      "legacy inventory classification"
+    ]
+  },
+  "hard_stop_reasons": [
+    "circuit_breaker_tripped",
+    "unsigned_primary_operator",
+    "unsigned_secondary_reviewer",
+    "max_single_order_usdc_exceeds_current_cash",
+    "legacy_positions_unclassified",
+    "worktree_dirty",
+    "production_readiness_verdict_rollback"
+  ],
+  "required_before_canary": [
+    "primary operator signs",
+    "secondary risk reviewer signs",
+    "rollback preview verified for actual /etc/blink-engine.env layout",
+    "target mode verified",
+    "MAX_SINGLE_ORDER_USDC reduced to 1.00 or capital topped up",
+    "legacy positions classified or excluded from canary metrics",
+    "circuit breaker reset rationale approved",
+    "fresh preflight passes after any env or binary change"
+  ],
+  "promotion_allowed": false,
+  "notes": "Draft only. This records GO_OBSERVER_HOLD as a control-plane decision, not live trading approval."
+}

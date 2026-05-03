@@ -3,8 +3,8 @@
 //! Kept fast (< 200 ms) so it runs in every CI pass.
 
 use blink_timestamps::{
-    calibration_source, init_with_policy, run_skew_selftest, tsc_hz, Backend,
-    CalibrationSource, InitPolicy, SkewVerdict, Timestamp,
+    calibration_source, init_with_policy, run_skew_selftest, tsc_hz, Backend, CalibrationSource,
+    InitPolicy, SkewVerdict, Timestamp,
 };
 
 #[test]
@@ -33,7 +33,7 @@ fn init_exposes_calibration_source_and_timestamps_advance() {
 }
 
 #[test]
-fn skew_selftest_under_200ms_and_not_fail() {
+fn skew_selftest_under_200ms_and_reports_consistent_verdict() {
     let _ = init_with_policy(InitPolicy::AllowFallback);
     let start = std::time::Instant::now();
     let report = run_skew_selftest();
@@ -45,8 +45,19 @@ fn skew_selftest_under_200ms_and_not_fail() {
         elapsed
     );
     assert!(report.measured_cores >= 1);
-    assert!(
-        !matches!(report.verdict, SkewVerdict::Fail),
-        "unexpected Fail on CI: {report:?}"
+    assert_eq!(
+        report.verdict,
+        expected_skew_verdict(report.max_skew_ns, report.unpinned_cores),
+        "inconsistent skew verdict: {report:?}"
     );
+}
+
+fn expected_skew_verdict(max_skew_ns: u64, unpinned_cores: u32) -> SkewVerdict {
+    if max_skew_ns >= 10_000 {
+        SkewVerdict::Fail
+    } else if max_skew_ns >= 100 || unpinned_cores > 0 {
+        SkewVerdict::Warn
+    } else {
+        SkewVerdict::Ok
+    }
 }

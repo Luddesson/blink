@@ -4,7 +4,9 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use blink_types::AbortReason;
 
-use crate::breaker::{Admission, Breaker, BreakerConfig, BreakerStatsSnapshot, BreakerTrip, Outcome};
+use crate::breaker::{
+    Admission, Breaker, BreakerConfig, BreakerStatsSnapshot, BreakerTrip, Outcome,
+};
 use crate::kill::KillSwitch;
 use crate::loss_cap::{LossCapBreaker, LossCapConfig};
 
@@ -82,7 +84,9 @@ impl BreakerSet {
     #[inline]
     pub fn admit_submit(&self, now_ns: u64) -> Admission {
         if self.kill.is_engaged() {
-            return Admission::Reject(BreakerTrip::KillSwitch { operator: "kill-switch" });
+            return Admission::Reject(BreakerTrip::KillSwitch {
+                operator: "kill-switch",
+            });
         }
         match self.loss_cap.admit(now_ns) {
             Admission::Ok => {}
@@ -195,8 +199,10 @@ mod tests {
 
     #[test]
     fn stale_book_streak_trips_at_threshold() {
-        let mut cfg = BreakerSetConfig::default();
-        cfg.stale_book_streak_threshold = 5;
+        let cfg = BreakerSetConfig {
+            stale_book_streak_threshold: 5,
+            ..Default::default()
+        };
         let s = BreakerSet::new(cfg);
         let now = 1_000;
         for _ in 0..4 {
@@ -219,8 +225,10 @@ mod tests {
 
     #[test]
     fn non_stale_book_abort_resets_streak() {
-        let mut cfg = BreakerSetConfig::default();
-        cfg.stale_book_streak_threshold = 3;
+        let cfg = BreakerSetConfig {
+            stale_book_streak_threshold: 3,
+            ..Default::default()
+        };
         let s = BreakerSet::new(cfg);
         s.on_kernel_abort(AbortReason::StaleBook, 0);
         s.on_kernel_abort(AbortReason::StaleBook, 0);
@@ -232,8 +240,10 @@ mod tests {
 
     #[test]
     fn rate_limit_429_streak_trips() {
-        let mut cfg = BreakerSetConfig::default();
-        cfg.rate_limit_429_streak_threshold = 3;
+        let cfg = BreakerSetConfig {
+            rate_limit_429_streak_threshold: 3,
+            ..Default::default()
+        };
         let s = BreakerSet::new(cfg);
         s.on_rate_limit_429(0);
         s.on_rate_limit_429(0);

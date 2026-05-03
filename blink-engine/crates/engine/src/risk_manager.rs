@@ -56,10 +56,10 @@ pub struct RiskConfig {
 impl Default for RiskConfig {
     fn default() -> Self {
         Self {
-            max_daily_loss_pct: 1.0,
-            max_concurrent_positions: 20,
-            max_single_order_usdc: 25.0,
-            max_orders_per_second: 10,
+            max_daily_loss_pct: 0.10,
+            max_concurrent_positions: 5,
+            max_single_order_usdc: 20.0,
+            max_orders_per_second: 3,
             trading_enabled: false,
             var_window: Duration::from_secs(60),
             var_threshold_pct: 0.05,
@@ -79,26 +79,26 @@ impl RiskConfig {
     ///
     /// | Variable                  | Default |
     /// |---------------------------|---------|
-    /// | `MAX_DAILY_LOSS_PCT`      | 1.0 (100% — no limit in paper mode) |
-    /// | `MAX_CONCURRENT_POSITIONS`| 20      |
-    /// | `MAX_SINGLE_ORDER_USDC`   | 25.0    |
-    /// | `BLINK_RISK_ORDERS_PER_SEC` | 10    |
+    /// | `MAX_DAILY_LOSS_PCT`      | 0.10    |
+    /// | `MAX_CONCURRENT_POSITIONS`| 5       |
+    /// | `MAX_SINGLE_ORDER_USDC`   | 20.0    |
+    /// | `BLINK_RISK_ORDERS_PER_SEC` | 3     |
     /// | `TRADING_ENABLED`         | false   |
     pub fn from_env() -> Self {
         let max_daily_loss_pct = std::env::var("MAX_DAILY_LOSS_PCT")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(1.0);
+            .unwrap_or(0.10);
 
         let max_concurrent_positions = std::env::var("MAX_CONCURRENT_POSITIONS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(20);
+            .unwrap_or(5);
 
         let max_single_order_usdc = std::env::var("MAX_SINGLE_ORDER_USDC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(25.0);
+            .unwrap_or(20.0);
 
         let legacy_max_orders_per_second = std::env::var("MAX_ORDERS_PER_SECOND")
             .ok()
@@ -106,7 +106,7 @@ impl RiskConfig {
         let orders_per_second = std::env::var("BLINK_RISK_ORDERS_PER_SEC")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or_else(|| legacy_max_orders_per_second.unwrap_or(10) as f64);
+            .unwrap_or_else(|| legacy_max_orders_per_second.unwrap_or(3) as f64);
         let max_orders_per_second = orders_per_second.ceil().max(1.0) as u32;
 
         if legacy_max_orders_per_second.is_some()
@@ -365,7 +365,7 @@ impl StreamRiskGate {
             if current < 1_000 {
                 let refill = self.refill_per_10ms.max(1);
                 let deficit = 1_000u64.saturating_sub(current);
-                let ticks = (deficit + refill - 1) / refill;
+                let ticks = deficit.div_ceil(refill);
                 return AdmitDecision::Throttle {
                     retry_in: Duration::from_millis(ticks.saturating_mul(10).saturating_add(1)),
                 };
@@ -440,7 +440,7 @@ impl StreamRiskGate {
             if current < 1_000 {
                 let refill = self.cancel_refill_per_10ms.max(1);
                 let deficit = 1_000u64.saturating_sub(current);
-                let ticks = (deficit + refill - 1) / refill;
+                let ticks = deficit.div_ceil(refill);
                 return AdmitDecision::Throttle {
                     retry_in: Duration::from_millis(ticks.saturating_mul(10).saturating_add(1)),
                 };
@@ -472,8 +472,9 @@ impl StreamRiskGate {
             .fetch_add(size_u64, Ordering::Relaxed);
     }
 
-    /// Called by the router when an order reaches a terminal state
-    /// (`Acked`, `Rejected`, `SubmitUnknown`, filled/cancelled, etc.).
+    /// Called by the router when an order reaches a real terminal state
+    /// (`Filled`, `Cancelled`, `Rejected`, or `Stale`). Venue ACK and
+    /// submit-unknown states are still live risk and must not call this.
     pub fn on_order_terminal(&self, market_id: &str, size_u64: u64) {
         if market_id.is_empty() {
             return;
@@ -857,6 +858,9 @@ impl RiskManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::order_router::intent::OrderIntent;
+    use crate::strategy::StrategyMode;
+    use crate::types::{OrderSide, TimeInForce};
 
     fn default_rm() -> RiskManager {
         RiskManager::new(RiskConfig {
@@ -867,10 +871,53 @@ mod tests {
         })
     }
 
+    fn make_gate_intent(intent_id: u64, market_id: &str, size_u64: u64) -> OrderIntent {
+        OrderIntent {
+            intent_id,
+            market_id: market_id.to_string(),
+            token_id: format!("token-{intent_id}"),
+            side: OrderSide::Buy,
+            price_u64: 500,
+            size_u64,
+            tif: TimeInForce::Gtc,
+            strategy_mode: StrategyMode::Mirror,
+            requested_at: Instant::now(),
+            signed_payload: None,
+        }
+    }
+
     #[test]
     fn ok_when_all_checks_pass() {
         let mut rm = default_rm();
         assert!(rm.check_pre_order(10.0, 2, 100.0, 100.0).is_ok());
+    }
+
+    #[test]
+    fn stream_gate_keeps_acked_orders_pending_until_terminal_release() {
+        let gate = StreamRiskGate::new(&RiskConfig {
+            max_single_order_usdc: 10.0,
+            max_orders_per_second: 1_000,
+            orders_burst: 10,
+            per_market_max_pending: 1,
+            per_market_max_notional_usdc: 1_500,
+            account_max_pending_notional_usdc: 1_500,
+            ..RiskConfig::default()
+        });
+        let first = make_gate_intent(1, "market-a", 1_000);
+        let second = make_gate_intent(2, "market-a", 1_000);
+
+        assert!(matches!(gate.try_admit(&first), AdmitDecision::Admit));
+        gate.on_order_created(&first.market_id, first.size_u64);
+
+        assert!(matches!(
+            gate.try_admit(&second),
+            AdmitDecision::Reject {
+                reason: "pending_count" | "market_notional" | "account_notional"
+            }
+        ));
+
+        gate.on_order_terminal(&first.market_id, first.size_u64);
+        assert!(matches!(gate.try_admit(&second), AdmitDecision::Admit));
     }
 
     #[test]

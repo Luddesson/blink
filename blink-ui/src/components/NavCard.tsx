@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { TrendingUp, TrendingDown } from 'lucide-react'
 import { motion } from 'motion/react'
 import {
   Area,
-  AreaChart,
+  ComposedChart,
+  Line,
   ResponsiveContainer,
   Tooltip,
   YAxis,
@@ -12,6 +13,12 @@ import {
 } from 'recharts'
 import { fmt, fmtPct, fmtChartTime } from '../lib/format'
 import { useMode } from '../hooks/useMode'
+import {
+  computeYDomain,
+  pickValuePrecision,
+  useEquitySeries,
+  type EquityRange,
+} from '../hooks/useEquitySeries'
 import { Badge } from './ui'
 import NumberFlip from './motion/NumberFlip'
 import { cn } from '../lib/cn'
@@ -28,10 +35,9 @@ interface Props {
   portfolio?: PortfolioSummary
 }
 
-type TimeRange = '30m' | '1h' | '6h' | '24h' | '7d' | '30d'
-const RANGES: TimeRange[] = ['30m', '1h', '6h', '24h', '7d', '30d']
+const RANGES: EquityRange[] = ['30m', '1h', '6h', '24h', '7d', '30d']
 
-const WINDOW_MS: Record<TimeRange, number> = {
+const WINDOW_MS: Record<EquityRange, number> = {
   '30m': 30 * 60 * 1000,
   '1h':  60 * 60 * 1000,
   '6h':  6 * 60 * 60 * 1000,
@@ -40,8 +46,6 @@ const WINDOW_MS: Record<TimeRange, number> = {
   '30d': 30 * 24 * 60 * 60 * 1000,
 }
 
-interface FetchedPoint { timestamp_ms: number; nav_usdc: number }
-interface LiveTruthPoint { t: number; v: number }
 interface QuantMetrics {
   win_rate_pct: number
   profit_factor: number
@@ -78,8 +82,13 @@ export default function NavCard({
 }: Props) {
   const { viewMode } = useMode()
   const isLive = viewMode === 'live'
-  const isVerifiedLive = isLive && portfolio?.exchange_positions_verified === true
-  const positive = netPnl >= 0
+  const liveNavVerified = !isLive || portfolio?.wallet_truth_verified === true
+  const livePnlVerified = !isLive || (
+    portfolio?.wallet_truth_verified === true
+    && portfolio?.exchange_positions_verified === true
+  )
+  const isVerifiedLive = isLive && livePnlVerified
+  const positive = livePnlVerified && netPnl >= 0
 
   const [localUptime, setLocalUptime] = useState(portfolio?.uptime_secs ?? 0)
   const [lastUptimeSync, setLastUptimeSync] = useState(Date.now())
@@ -106,28 +115,17 @@ export default function NavCard({
     return () => clearInterval(id)
   }, [])
 
-  const [range, setRange] = useState<TimeRange>('30m')
-  const [fetchedPoints, setFetchedPoints] = useState<FetchedPoint[]>([])
-  const [liveTruthPoints, setLiveTruthPoints] = useState<LiveTruthPoint[]>([])
-  const lastLiveTruthKey = useRef('')
+  const equity = useEquitySeries('30m')
+  const { range, setRange } = equity
   const [quant, setQuant] = useState<QuantMetrics | null>(null)
 
   useEffect(() => {
     if (isLive) {
-      setFetchedPoints([])
       setQuant(null)
       return
     }
 
     let cancelled = false
-    const load = async () => {
-      try {
-        const r = await fetch(`/api/analytics/equity?range=${range}`)
-        if (!r.ok) return
-        const data = await r.json() as { points: FetchedPoint[] }
-        if (!cancelled && Array.isArray(data.points)) setFetchedPoints(data.points)
-      } catch { /* engine may not be running */ }
-    }
     const loadQuant = async () => {
       try {
         const r = await fetch(`/api/analytics/quant`)
@@ -138,35 +136,10 @@ export default function NavCard({
         if (!cancelled) setQuant(null)
       }
     }
-    void load()
     void loadQuant()
-    const id = setInterval(() => { void load(); void loadQuant(); }, 30_000)
+    const id = setInterval(() => { void loadQuant(); }, 30_000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [range, isLive])
-
-  useEffect(() => {
-    if (!isVerifiedLive) {
-      setLiveTruthPoints([])
-      lastLiveTruthKey.current = ''
-      return
-    }
-
-    const checkedAt = typeof portfolio?.truth_checked_at_ms === 'number'
-      ? portfolio.truth_checked_at_ms
-      : Date.now()
-    const livePnl = Number.isFinite(netPnl) ? netPnl : 0
-    const key = `${checkedAt}:${livePnl.toFixed(8)}`
-    if (lastLiveTruthKey.current === key) return
-    lastLiveTruthKey.current = key
-
-    const cutoff = Date.now() - WINDOW_MS['30d']
-    setLiveTruthPoints((prev) => {
-      const withoutDuplicate = prev.filter((point) => point.t !== checkedAt)
-      return [...withoutDuplicate, { t: checkedAt, v: livePnl }]
-        .filter((point) => point.t >= cutoff)
-        .slice(-2000)
-    })
-  }, [isVerifiedLive, netPnl, portfolio?.truth_checked_at_ms])
+  }, [isLive])
 
   // Stroke color: bull-emerald when profitable, bear-ruby when down.
   // In live mode, tint toward amber for positive moves.
@@ -175,10 +148,18 @@ export default function NavCard({
     : 'oklch(0.72 0.22 25)'
 
   const START_BALANCE = 100
-  const rawChartData: { t: number; v: number }[] = isLive
-    ? (isVerifiedLive ? liveTruthPoints : [])
-    : fetchedPoints.length > 0
-      ? fetchedPoints.map(p => ({ t: p.timestamp_ms, v: p.nav_usdc - START_BALANCE }))
+  type ChartDatum = { t: number; v: number; navDelta?: number }
+  const liveChartVerified = isLive && isVerifiedLive && equity.source === 'live_wallet_truth'
+  const rawChartData: ChartDatum[] = isLive
+    ? (liveChartVerified
+      ? equity.points.map(p => ({
+        t: p.timestamp_ms,
+        v: p.wallet_open_pnl_usdc ?? 0,
+        navDelta: p.wallet_nav_delta_usdc ?? undefined,
+      }))
+      : [])
+    : equity.points.length > 0
+      ? equity.points.map(p => ({ t: p.timestamp_ms, v: p.nav_usdc - START_BALANCE }))
       : equityCurve.map((v, i) => ({ t: equityTimestamps[i] ?? i, v: v - START_BALANCE }))
 
   const chartWindowMs = WINDOW_MS[range]
@@ -186,14 +167,24 @@ export default function NavCard({
 
   const filteredData = rawChartData.filter(d => d.t >= windowStart && d.t <= nowMs)
   const currentPnl = isVerifiedLive ? netPnl : nav - START_BALANCE
-  const chartTruthBlocked = isLive && !isVerifiedLive
+  const liveFirstNav = liveChartVerified ? equity.points[0]?.nav_usdc : undefined
+  const currentNavDelta = isLive && typeof liveFirstNav === 'number' ? nav - liveFirstNav : undefined
+  const chartTruthBlocked = isLive && !liveChartVerified
   if (!chartTruthBlocked) {
     if (filteredData.length > 0) {
       const last = filteredData[filteredData.length - 1]
-      if (nowMs - last.t > 2000) filteredData.push({ t: nowMs, v: currentPnl })
+      if (nowMs - last.t > 2000) filteredData.push({ t: nowMs, v: currentPnl, navDelta: currentNavDelta })
+      if (filteredData.length === 1) {
+        const anchorT = Math.max(windowStart, filteredData[0].t - Math.max(equity.bucketMs || 60_000, 1_000))
+        if (anchorT < filteredData[0].t) {
+          filteredData.unshift({ ...filteredData[0], t: anchorT })
+        } else {
+          filteredData.push({ ...filteredData[0], t: Math.min(nowMs, filteredData[0].t + 1_000) })
+        }
+      }
     } else {
-      filteredData.push({ t: windowStart, v: currentPnl })
-      filteredData.push({ t: nowMs, v: currentPnl })
+      filteredData.push({ t: windowStart, v: currentPnl, navDelta: currentNavDelta })
+      filteredData.push({ t: nowMs, v: currentPnl, navDelta: currentNavDelta })
     }
   }
   const chartData = chartTruthBlocked ? [] : filteredData
@@ -205,13 +196,20 @@ export default function NavCard({
 
   // If the user selects a large range but data only exists for a small part, 
   // we zoom in on the data to "fill the graph" as requested.
-  const xDomain = [dataMinT, dataMaxT]
+  const xDomain = dataMaxT > dataMinT
+    ? [dataMinT, dataMaxT]
+    : [dataMinT - 1_000, dataMaxT + 1_000]
 
   const TICK_COUNT = 5
-  const tickInterval = (dataMaxT - dataMinT) / TICK_COUNT
+  const tickInterval = (xDomain[1] - xDomain[0]) / TICK_COUNT
   const xTicks: number[] = Array.from({ length: TICK_COUNT + 1 }, (_, i) =>
-    dataMinT + i * tickInterval
+    xDomain[0] + i * tickInterval
   )
+  const yValues = chartData.flatMap(d => (
+    isLive && typeof d.navDelta === 'number' ? [d.v, d.navDelta] : [d.v]
+  ))
+  const yDomain = computeYDomain(yValues, { floor: isLive ? 0.01 : 0.02 })
+  const yPrecision = pickValuePrecision(yDomain[1] - yDomain[0])
 
   const fmtTickTime = (ms: number) => {
     const date = new Date(ms)
@@ -275,27 +273,41 @@ export default function NavCard({
 
         {/* Big PnL number — animated flip */}
         <div className="flex items-baseline gap-3 flex-wrap">
-          <NumberFlip
-            value={netPnl}
-            format={(v) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`}
-            className={cn(
-              'text-[44px] font-bold leading-none',
-              positive
-                ? 'text-[color:var(--color-bull-400)] drop-shadow-[0_0_28px_oklch(0.72_0.19_155/0.45)]'
-                : 'text-[color:var(--color-bear-400)] drop-shadow-[0_0_28px_oklch(0.65_0.24_25/0.45)]',
-            )}
-          />
-          <span
-            className={cn(
-              'text-base font-mono tabular flex items-center gap-1 font-semibold',
-              navDelta >= 0 ? 'text-[color:var(--color-bull-400)]' : 'text-[color:var(--color-bear-400)]',
-            )}
-          >
-            {positive ? <TrendingUp size={15} /> : <TrendingDown size={15} />}
-            {fmtPct(navDeltaPct)}
-          </span>
+          {livePnlVerified ? (
+            <NumberFlip
+              value={netPnl}
+              format={(v) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`}
+              className={cn(
+                'text-[44px] font-bold leading-none',
+                positive
+                  ? 'text-[color:var(--color-bull-400)] drop-shadow-[0_0_28px_oklch(0.72_0.19_155/0.45)]'
+                  : 'text-[color:var(--color-bear-400)] drop-shadow-[0_0_28px_oklch(0.65_0.24_25/0.45)]',
+              )}
+            />
+          ) : (
+            <span className="text-[34px] font-bold leading-none text-amber-300">
+              unverified
+            </span>
+          )}
+          {livePnlVerified && (
+            <span
+              className={cn(
+                'text-base font-mono tabular flex items-center gap-1 font-semibold',
+                navDelta >= 0 ? 'text-[color:var(--color-bull-400)]' : 'text-[color:var(--color-bear-400)]',
+              )}
+            >
+              {positive ? <TrendingUp size={15} /> : <TrendingDown size={15} />}
+              {fmtPct(navDeltaPct)}
+            </span>
+          )}
           <span className="text-sm text-[color:var(--color-text-muted)] font-mono tabular">
-            {isLive ? 'Wallet NAV' : 'NAV'} <span className="text-[color:var(--color-text-primary)] font-semibold">${fmt(nav)}</span>
+            {isLive ? 'Wallet NAV' : 'NAV'}{' '}
+            <span className={cn(
+              'font-semibold',
+              liveNavVerified ? 'text-[color:var(--color-text-primary)]' : 'text-amber-300',
+            )}>
+              {liveNavVerified ? `$${fmt(nav)}` : 'unverified'}
+            </span>
           </span>
           {isLive && exchangePositionCount > 0 && (
             <span className="text-xs text-[color:var(--color-text-muted)] font-mono tabular">
@@ -330,10 +342,10 @@ export default function NavCard({
               {r}
             </button>
           ))}
-          {isVerifiedLive && liveTruthPoints.length > 0 && (
+          {liveChartVerified && equity.points.length > 0 && (
             <span className="text-[9px] text-[color:var(--color-text-dim)] ml-1 uppercase tracking-wider">wallet truth</span>
           )}
-          {!isLive && fetchedPoints.length > 0 && (
+          {!isLive && equity.points.length > 0 && (
             <span className="text-[9px] text-[color:var(--color-text-dim)] ml-1 uppercase tracking-wider">historical</span>
           )}
         </div>
@@ -342,7 +354,7 @@ export default function NavCard({
         {chartData.length >= 1 ? (
           <div className="h-52 -mx-1 mt-3">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData} margin={{ top: 4, right: 8, bottom: 18, left: 44 }}>
+              <ComposedChart data={chartData} margin={{ top: 4, right: 8, bottom: 18, left: 44 }}>
                 <defs>
                   <linearGradient id="navGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor={strokeColor} stopOpacity={0.45} />
@@ -351,8 +363,8 @@ export default function NavCard({
                   </linearGradient>
                 </defs>
                 <YAxis
-                  domain={['dataMin - 0.1', 'dataMax + 0.1']}
-                  tickFormatter={(v: number) => (v >= 0 ? `+$${v.toFixed(2)}` : `-$${Math.abs(v).toFixed(2)}`)}
+                  domain={yDomain}
+                  tickFormatter={(v: number) => (v >= 0 ? `+$${v.toFixed(yPrecision)}` : `-$${Math.abs(v).toFixed(yPrecision)}`)}
                   tick={{ fill: 'oklch(0.55 0.015 260)', fontSize: 9 }}
                   axisLine={false}
                   tickLine={false}
@@ -383,9 +395,12 @@ export default function NavCard({
                   }}
                   cursor={{ stroke: 'oklch(0.75 0.18 170 / 0.35)', strokeWidth: 1.5 }}
                   labelFormatter={(label) => fmtChartTime(Number(label))}
-                  formatter={(value) => {
+                  formatter={(value, name) => {
                     const v = Number(value ?? 0)
-                    return [`${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`, 'PnL']
+                    return [
+                      `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`,
+                      name === 'navDelta' ? 'NAV Δ' : 'Open PnL',
+                    ]
                   }}
                 />
                 <Area
@@ -398,7 +413,20 @@ export default function NavCard({
                   isAnimationActive={false}
                   activeDot={{ r: 4, strokeWidth: 0, fill: strokeColor }}
                 />
-              </AreaChart>
+                {isLive && (
+                  <Line
+                    type="monotone"
+                    dataKey="navDelta"
+                    stroke="oklch(0.70 0.17 285)"
+                    strokeWidth={2}
+                    strokeDasharray="5 5"
+                    dot={false}
+                    connectNulls
+                    isAnimationActive={false}
+                    activeDot={{ r: 3, strokeWidth: 0, fill: 'oklch(0.70 0.17 285)' }}
+                  />
+                )}
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
         ) : (

@@ -209,6 +209,9 @@ export interface RiskSummary {
   max_single_order_usdc?: number
   max_orders_per_second?: number
   var_threshold_pct?: number
+  heartbeat_consecutive_fail_count?: number | null
+  heartbeat_last_ok_ms?: number | null
+  heartbeat_recovered?: boolean | null
 }
 
 // ─── Live portfolio ──────────────────────────────────────────────────────────
@@ -263,8 +266,18 @@ export interface LivePortfolio {
   trading_enabled: boolean
   heartbeat_ok: number
   heartbeat_fail: number
+  heartbeat_consecutive_fail?: number
+  heartbeat_last_ok_ms?: number
   trigger_count: number
   uptime_secs: number
+  live_canary_stage?: number
+  live_canary_session_spend_usdc?: number
+  live_canary_max_session_spend_usdc?: number
+  live_canary_session_spend_remaining_usdc?: number
+  live_canary_accepted_orders?: number
+  live_canary_max_orders_per_session?: number
+  live_canary_halted?: boolean
+  live_canary_last_accept_ms?: number | null
 }
 
 // ─── Failsafe ────────────────────────────────────────────────────────────────
@@ -279,6 +292,8 @@ export interface FailsafeSnapshot {
   confirmation_rate_pct?: number
   heartbeat_ok_count: number
   heartbeat_fail_count: number
+  heartbeat_consecutive_fail_count?: number
+  heartbeat_last_ok_ms?: number
 }
 
 // ─── Activity ────────────────────────────────────────────────────────────────
@@ -312,7 +327,43 @@ export interface StatusResponse {
   messages_total: number
   subscriptions: string[]
   risk_status: 'OK' | 'CIRCUIT_BREAKER' | 'KILL_SWITCH_OFF' | 'N/A'
+  mode?: EngineMode
+  live_trading?: boolean
+  paper_trading?: boolean
+  allow_neg_risk?: boolean
+  heartbeat?: {
+    available: boolean
+    heartbeat_ok_count?: number
+    heartbeat_fail_count?: number
+    heartbeat_consecutive_fail_count?: number
+    heartbeat_last_ok_ms?: number
+    heartbeat_age_ms?: number | null
+  }
+  canary?: {
+    stage: number
+    max_order_usdc: number
+    max_session_spend_usdc: number
+    max_orders_per_session: number
+    accepted_orders: number
+    accepted_spend_usdc: number
+    session_spend_remaining_usdc: number
+    reject_streak: number
+    loss_streak: number
+    halted: boolean
+    last_accept_ms?: number | null
+  } | null
+  emergency_stop_endpoint?: string
   uptime_secs?: number
+  build?: {
+    git_commit: string
+    build_timestamp_utc: string
+    binary_path?: string | null
+    release_dirty: boolean
+  }
+  git_commit?: string
+  build_timestamp_utc?: string
+  binary_path?: string | null
+  release_dirty?: boolean
   strategy?: StrategyStatus
 }
 
@@ -327,6 +378,22 @@ export interface FillWindowResponse {
   drift_pct?: number
   elapsed_secs?: number
   countdown_secs?: number
+}
+
+export interface WhyNoTradeResponse {
+  available: boolean
+  negative_risk_blocked_total?: number
+  negative_risk_last_timestamp_ms?: number | null
+  negative_risk_policy?: 'blocked' | 'allowed' | string
+  canary_cap_blocked_total?: number
+  canary_cap_last_timestamp_ms?: number | null
+  current_capacity?: {
+    status?: string
+    available_cash_usdc?: number
+    live_canary_max_order_usdc?: number
+    max_single_order_usdc?: number
+    effective_max_order_usdc?: number
+  } | null
 }
 
 // ─── Bullpen ─────────────────────────────────────────────────────────────────

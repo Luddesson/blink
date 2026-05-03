@@ -170,9 +170,7 @@ impl OrderBookStore {
     ) -> dashmap::mapref::one::RefMut<'_, String, OrderBook> {
         self.last_updated
             .insert(token_id.to_string(), Instant::now());
-        self.books
-            .entry(token_id.to_string())
-            .or_insert_with(OrderBook::new)
+        self.books.entry(token_id.to_string()).or_default()
     }
 
     /// Applies a [`MarketEvent`] to the relevant order book.

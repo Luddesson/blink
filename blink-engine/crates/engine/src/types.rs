@@ -41,10 +41,11 @@ impl std::fmt::Display for OrderSide {
 // ─── Time-in-Force ──────────────────────────────────────────────────────────
 
 /// Time-in-force for CLOB orders.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TimeInForce {
     /// Good Till Cancelled — standard maker order.
+    #[default]
     Gtc,
     /// Fill Or Kill — fill fully at exact price or cancel immediately.
     Fok,
@@ -59,12 +60,6 @@ impl std::fmt::Display for TimeInForce {
             TimeInForce::Fok => write!(f, "FOK"),
             TimeInForce::Fak => write!(f, "FAK"),
         }
-    }
-}
-
-impl Default for TimeInForce {
-    fn default() -> Self {
-        TimeInForce::Gtc
     }
 }
 

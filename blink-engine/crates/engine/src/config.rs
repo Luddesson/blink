@@ -154,7 +154,7 @@ impl Config {
             std::env::var("LIVE_CANARY_MAX_ORDERS_PER_SESSION")
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(0);
+                .unwrap_or(1);
         let live_canary_daytime_only = std::env::var("LIVE_CANARY_DAYTIME_ONLY")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
@@ -173,7 +173,7 @@ impl Config {
         let live_canary_max_loss_streak = std::env::var("LIVE_CANARY_MAX_LOSS_STREAK")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(0);
+            .unwrap_or(3);
         let live_canary_allowed_markets = std::env::var("LIVE_CANARY_ALLOWED_MARKETS")
             .ok()
             .map(|v| {

@@ -21,7 +21,9 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::activity_log::{push as log_push, ActivityLog, EntryKind};
-use crate::exit_strategy::{evaluate_exits, ExitAction, ExitConfig};
+use crate::exit_strategy::{
+    evaluate_exits, patched_exit_config_for_category, ExitAction, ExitConfig,
+};
 use crate::latency_tracker::LatencyStats;
 use crate::order_book::{OrderBook, OrderBookStore};
 use crate::paper_portfolio::{
@@ -37,54 +39,6 @@ use crate::timed_mutex::TimedMutex;
 use crate::types::{format_price, OrderSide, RN1Signal};
 
 // ─── PaperEngine ─────────────────────────────────────────────────────────────
-
-/// 4C: Build a category-specific ExitConfig patch.
-///
-/// Checks env vars like `EXIT_SPORTS_STOP_LOSS_PCT`, `EXIT_CRYPTO_MAX_HOLD_SECS`,
-/// etc.  Falls back to the base config for any field without an override.
-/// Valid category prefixes: SPORTS, POLITICS, CRYPTO, GEO, OTHER.
-fn patched_exit_config_for_category(base: &ExitConfig, market_title: Option<&str>) -> ExitConfig {
-    let (category, _) = crate::paper_portfolio::detect_fee_category(market_title.unwrap_or(""));
-    let prefix = match category {
-        "sports" => "SPORTS",
-        "politics" => "POLITICS",
-        "crypto" => "CRYPTO",
-        "geopolitics" => "GEO",
-        _ => "OTHER",
-    };
-    let mut cfg = base.clone();
-    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_STOP_LOSS_PCT")) {
-        if let Ok(pct) = v.parse::<f64>() {
-            cfg.stop_loss_pct = pct.clamp(1.0, 99.0);
-        }
-    }
-    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_TRAILING_ACTIVATE_PCT")) {
-        if let Ok(pct) = v.parse::<f64>() {
-            cfg.trailing_stop_activate_pct = pct.clamp(1.0, 99.0);
-        }
-    }
-    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_TRAILING_DROP_PCT")) {
-        if let Ok(pct) = v.parse::<f64>() {
-            cfg.trailing_stop_drop_pct = pct.clamp(1.0, 99.0);
-        }
-    }
-    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_MAX_HOLD_SECS")) {
-        if let Ok(s) = v.parse::<u64>() {
-            cfg.max_hold_secs = s;
-        }
-    }
-    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_EVENT_AWARE_SECS")) {
-        if let Ok(s) = v.parse::<u64>() {
-            cfg.event_aware_exit_secs = s;
-        }
-    }
-    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_TIME_STOP_SECS")) {
-        if let Ok(s) = v.parse::<u64>() {
-            cfg.time_stop_secs = s;
-        }
-    }
-    cfg
-}
 
 /// Paper trading engine — simulates order placement without touching real funds.
 pub struct PaperEngine {
@@ -120,6 +74,8 @@ pub struct PaperEngine {
     drift_abort_cooldown: Arc<std::sync::Mutex<HashMap<String, Instant>>>,
     /// Per-"token_id:side" fill timestamps for soft deduplication window (2C).
     recent_fills: Arc<std::sync::Mutex<HashMap<String, Instant>>>,
+    /// Global paper-order pacing before the risk manager's sliding-window limit.
+    submission_throttle: Arc<std::sync::Mutex<SubmissionThrottle>>,
     /// Session-start NAV for intraday drawdown gating (3B): (nav, ordinal_day).
     session_start_nav: Arc<std::sync::Mutex<Option<(f64, u32)>>>,
     /// Optional warehouse sender — emits equity snapshots and closed trades to ClickHouse.
@@ -182,6 +138,17 @@ struct SeenOrderIds {
     max_entries: usize,
     ids: HashSet<String>,
     insertion_order: VecDeque<(String, Instant)>,
+}
+
+#[derive(Debug)]
+struct SubmissionThrottle {
+    next_allowed_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubmissionThrottleDecision {
+    Proceed { wait: Duration },
+    Drop { wait: Duration, max_wait: Duration },
 }
 
 #[derive(Debug, Clone)]
@@ -302,6 +269,40 @@ impl SeenOrderIds {
                 self.ids.remove(&expired_id);
             }
         }
+    }
+}
+
+impl SubmissionThrottle {
+    fn new(now: Instant) -> Self {
+        Self {
+            next_allowed_at: now,
+        }
+    }
+
+    fn reserve(
+        &mut self,
+        now: Instant,
+        interval: Duration,
+        max_wait: Duration,
+    ) -> SubmissionThrottleDecision {
+        if interval.is_zero() {
+            return SubmissionThrottleDecision::Proceed {
+                wait: Duration::ZERO,
+            };
+        }
+
+        let slot_at = if self.next_allowed_at > now {
+            self.next_allowed_at
+        } else {
+            now
+        };
+        let wait = slot_at.saturating_duration_since(now);
+        if wait > max_wait {
+            return SubmissionThrottleDecision::Drop { wait, max_wait };
+        }
+
+        self.next_allowed_at = slot_at + interval;
+        SubmissionThrottleDecision::Proceed { wait }
     }
 }
 
@@ -491,6 +492,9 @@ impl PaperEngine {
             ws_force_reconnect,
             drift_abort_cooldown: Arc::new(std::sync::Mutex::new(HashMap::new())),
             recent_fills: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            submission_throttle: Arc::new(std::sync::Mutex::new(SubmissionThrottle::new(
+                Instant::now(),
+            ))),
             session_start_nav: Arc::new(std::sync::Mutex::new(None)),
             warehouse_tx,
             engine_started_at: Instant::now(),
@@ -539,8 +543,8 @@ impl PaperEngine {
             return Ok(false);
         }
         let data = std::fs::read_to_string(path)?;
-        let mut parsed: RejectionAnalytics = serde_json::from_str(&data)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let mut parsed: RejectionAnalytics =
+            serde_json::from_str(&data).map_err(|e| std::io::Error::other(e.to_string()))?;
         if parsed.schema_version == 0 {
             parsed.schema_version = 1;
         }
@@ -572,7 +576,7 @@ impl PaperEngine {
             atomic_write_with_backup(
                 path,
                 &serde_json::from_str::<serde_json::Value>(&data)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?,
+                    .map_err(|e| std::io::Error::other(e.to_string()))?,
             )?;
             tmp = Ok(());
         }
@@ -1093,7 +1097,11 @@ impl PaperEngine {
                     .await;
                 return;
             }
-            drawdown_sizing_mult = if drawdown_pct <= 0.0 {
+            let drawdown_sizing_enabled = std::env::var("PAPER_DRAWDOWN_SIZING")
+                .ok()
+                .map(|v| v != "false" && v != "0")
+                .unwrap_or(true);
+            drawdown_sizing_mult = if !drawdown_sizing_enabled || drawdown_pct <= 0.0 {
                 1.0 // no drawdown — full size
             } else if drawdown_pct < max_intraday_dd {
                 // Graduated: linearly reduce from 100% to 50% as DD approaches threshold
@@ -1102,7 +1110,7 @@ impl PaperEngine {
                 // Beyond threshold but not paused: 25% size
                 0.25
             };
-            if drawdown_sizing_mult < 1.0 {
+            if drawdown_sizing_enabled && drawdown_sizing_mult < 1.0 {
                 info!(
                     drawdown_pct = %format!("{:.1}%", drawdown_pct),
                     sizing_mult = %format!("{:.0}%", drawdown_sizing_mult * 100.0),
@@ -1345,8 +1353,8 @@ impl PaperEngine {
         if size_usdc < min_trade_usdc {
             warn!(
                 token_id      = %signal.token_id,
-                size_usdc     = %format!("${:.2}", size_usdc),
-                min_trade_usd = %format!("${:.2}", min_trade_usdc),
+                size_usdc     = %format!("${:.6}", size_usdc),
+                min_trade_usd = %format!("${:.6}", min_trade_usdc),
                 source        = %signal.signal_source,
                 "⏭️  Signal skipped — size after throttle below minimum"
             );
@@ -1529,14 +1537,17 @@ impl PaperEngine {
         }
 
         // ── Risk check ────────────────────────────────────────────────────
-        let position_count = {
+        if !self.reserve_submission_slot_before_risk(&signal).await {
+            return;
+        }
+        let (position_count, risk_nav) = {
             let p = self.portfolio.lock().await;
-            p.positions.len()
+            (p.positions.len(), p.nav())
         };
         if let Err(violation) = self.risk.lock_or_recover().check_pre_order(
             size_usdc,
             position_count,
-            current_nav,
+            risk_nav,
             STARTING_BALANCE_USDC,
         ) {
             warn!("🛑 Risk check blocked paper order: {violation}");
@@ -1640,20 +1651,21 @@ impl PaperEngine {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(30);
-        {
+        let in_drift_cooldown = {
             let mut cooldowns = self
                 .drift_abort_cooldown
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             // Evict expired entries
             cooldowns.retain(|_, t| t.elapsed().as_secs() < cooldown_secs);
-            if cooldowns.contains_key(&signal.token_id) {
-                let mut p = self.portfolio.lock().await;
-                p.skipped_orders += 1;
-                drop(p);
-                self.record_rejection("drift_cooldown", &signal).await;
-                return;
-            }
+            cooldowns.contains_key(&signal.token_id)
+        };
+        if in_drift_cooldown {
+            let mut p = self.portfolio.lock().await;
+            p.skipped_orders += 1;
+            drop(p);
+            self.record_rejection("drift_cooldown", &signal).await;
+            return;
         }
 
         // ── FreshnessGate (replaces fixed fill window) ─────────────────
@@ -2444,6 +2456,88 @@ impl PaperEngine {
         ((fill_price - ref_price).abs() / ref_price) * 10_000.0
     }
 
+    async fn reserve_submission_slot_before_risk(&self, signal: &RN1Signal) -> bool {
+        if !paper_submission_throttle_enabled() {
+            return true;
+        }
+
+        let interval = paper_submission_interval();
+        let max_signal_age = max_rn1_signal_age();
+        let signal_age = signal.detected_at.elapsed();
+        if signal_age >= max_signal_age {
+            warn!(
+                token_id = %signal.token_id,
+                age_ms = signal_age.as_millis(),
+                max_age_ms = max_signal_age.as_millis(),
+                "⏭️  Paper submission throttle — signal stale before risk check"
+            );
+            if let Some(ref log) = self.activity {
+                log_push(
+                    log,
+                    EntryKind::Skip,
+                    format!(
+                        "Skipped — stale before paper risk check: age {}ms > max {}ms",
+                        signal_age.as_millis(),
+                        max_signal_age.as_millis()
+                    ),
+                );
+            }
+            let mut p = self.portfolio.lock().await;
+            p.skipped_orders += 1;
+            drop(p);
+            self.record_rejection("paper_order_throttle_stale", signal)
+                .await;
+            return false;
+        }
+        let max_wait = paper_submission_max_wait().min(max_signal_age - signal_age);
+        let decision = {
+            let mut throttle = self
+                .submission_throttle
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            throttle.reserve(Instant::now(), interval, max_wait)
+        };
+
+        match decision {
+            SubmissionThrottleDecision::Proceed { wait } => {
+                if !wait.is_zero() {
+                    tracing::debug!(
+                        token_id = %signal.token_id,
+                        wait_ms = wait.as_millis(),
+                        interval_ms = interval.as_millis(),
+                        "paper submission throttle: pacing order before risk check"
+                    );
+                    tokio::time::sleep(wait).await;
+                }
+                true
+            }
+            SubmissionThrottleDecision::Drop { wait, max_wait } => {
+                warn!(
+                    token_id = %signal.token_id,
+                    wait_ms = wait.as_millis(),
+                    max_wait_ms = max_wait.as_millis(),
+                    "⏭️  Paper submission throttle backlog — skipping before risk check"
+                );
+                if let Some(ref log) = self.activity {
+                    log_push(
+                        log,
+                        EntryKind::Skip,
+                        format!(
+                            "Skipped — paper throttle backlog: wait {}ms > max {}ms",
+                            wait.as_millis(),
+                            max_wait.as_millis()
+                        ),
+                    );
+                }
+                let mut p = self.portfolio.lock().await;
+                p.skipped_orders += 1;
+                drop(p);
+                self.record_rejection("paper_order_throttle", signal).await;
+                false
+            }
+        }
+    }
+
     async fn record_rejection(&self, reason: &str, signal: &RN1Signal) {
         let timestamp_ms = Utc::now().timestamp_millis();
         let event = RejectionEvent {
@@ -2623,8 +2717,8 @@ impl PaperEngine {
         let Some(raw) = read_json_with_fallback(path)? else {
             return Ok(false);
         };
-        let mut state: WarmState = serde_json::from_value(raw)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let mut state: WarmState =
+            serde_json::from_value(raw).map_err(|e| std::io::Error::other(e.to_string()))?;
         let expected = state.checksum;
         state.checksum = 0;
         if warm_state_checksum(&state) != expected {
@@ -2670,8 +2764,8 @@ impl PaperEngine {
         let tick = self
             .equity_tick
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let should_push = tick % 1 == 0; // push every tick (called every 1s)
-                                         // Use try_lock first to detect contention
+        // Push every tick; this is called by the 1s mark-price timer.
+        // Use try_lock first to detect contention.
         let mut p = match tokio::time::timeout(
             std::time::Duration::from_millis(500),
             self.portfolio.lock(),
@@ -2688,10 +2782,8 @@ impl PaperEngine {
             }
         };
         if p.positions.is_empty() {
-            if should_push {
-                p.push_equity_snapshot();
-                self.emit_equity_snapshot(&p);
-            }
+            p.push_equity_snapshot();
+            self.emit_equity_snapshot(&p);
             return;
         }
         let updates: Vec<(String, f64)> = p
@@ -2710,10 +2802,8 @@ impl PaperEngine {
                 vs.push(price);
             }
         }
-        if should_push {
-            p.push_equity_snapshot();
-            self.emit_equity_snapshot(&p);
-        }
+        p.push_equity_snapshot();
+        self.emit_equity_snapshot(&p);
     }
 
     fn emit_equity_snapshot(&self, p: &PaperPortfolio) {
@@ -2816,9 +2906,7 @@ impl PaperEngine {
             }
         }
 
-        let Some((title, outcome)) = self.fetch_signal_metadata(token_id, order_id).await else {
-            return None;
-        };
+        let (title, outcome) = self.fetch_signal_metadata(token_id, order_id).await?;
 
         let mut cache = self.signal_meta_cache.lock().await;
         cache.insert(
@@ -3111,7 +3199,7 @@ impl PaperEngine {
 
         // Process decisions in reverse index order to preserve indices during removal.
         let mut sorted_decisions = decisions;
-        sorted_decisions.sort_by(|a, b| b.position_idx.cmp(&a.position_idx));
+        sorted_decisions.sort_by_key(|decision| std::cmp::Reverse(decision.position_idx));
 
         let mut total_realized = 0.0f64;
         let mut action_counts: std::collections::HashMap<&str, usize> =
@@ -3245,6 +3333,60 @@ fn env_flag(key: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn env_enabled(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .map(|v| {
+            let v = v.trim();
+            !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off"))
+        })
+        .unwrap_or(default)
+}
+
+fn paper_submission_throttle_enabled() -> bool {
+    env_enabled("PAPER_SUBMISSION_THROTTLE", true)
+}
+
+fn paper_submission_rate_per_sec() -> f64 {
+    std::env::var("PAPER_SUBMISSION_THROTTLE_PER_SEC")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .or_else(|| {
+            std::env::var("BLINK_RISK_ORDERS_PER_SEC")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+        })
+        .or_else(|| {
+            std::env::var("MAX_ORDERS_PER_SECOND")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+        })
+        .unwrap_or(3.0)
+        .max(1.0)
+}
+
+fn paper_submission_interval() -> Duration {
+    let rate = paper_submission_rate_per_sec();
+    let interval_ms = (1_000.0 / rate).ceil() as u64;
+    Duration::from_millis(interval_ms.saturating_add(5).max(1))
+}
+
+fn max_rn1_signal_age() -> Duration {
+    let max_age_ms = std::env::var("MAX_RN1_SIGNAL_AGE_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(2_000);
+    Duration::from_millis(max_age_ms)
+}
+
+fn paper_submission_max_wait() -> Duration {
+    let fallback_ms = max_rn1_signal_age().as_millis().saturating_sub(100) as u64;
+    let max_wait_ms = std::env::var("PAPER_SUBMISSION_MAX_WAIT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(fallback_ms);
+    Duration::from_millis(max_wait_ms)
+}
+
 pub(crate) fn parse_autoclaim_tiers() -> Vec<(f64, f64)> {
     let raw = std::env::var("AUTOCLAIM_TIERS")
         .unwrap_or_else(|_| "100:0.25,200:0.50,300:1.0".to_string());
@@ -3274,8 +3416,8 @@ fn atomic_write_with_backup<T: Serialize>(path: &str, value: &T) -> std::io::Res
     if let Some(parent) = std::path::Path::new(path).parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_vec_pretty(value)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    let json =
+        serde_json::to_vec_pretty(value).map_err(|e| std::io::Error::other(e.to_string()))?;
     let tmp_path = format!("{path}.tmp");
     std::fs::write(&tmp_path, &json)?;
     let backup1 = format!("{path}.bak1");
@@ -3385,7 +3527,7 @@ async fn fetch_and_inject_midpoint(
 
 #[cfg(test)]
 mod tests {
-    use super::{SeenOrderIds, WarmState};
+    use super::{SeenOrderIds, SubmissionThrottle, SubmissionThrottleDecision, WarmState};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -3445,5 +3587,47 @@ mod tests {
         });
         let parsed: WarmState = serde_json::from_value(raw).expect("warm state should deserialize");
         assert!(parsed.strategy_snapshot.is_none());
+    }
+
+    #[test]
+    fn submission_throttle_reserves_serial_slots() {
+        let start = Instant::now();
+        let mut throttle = SubmissionThrottle::new(start);
+        let interval = Duration::from_millis(1_005);
+        let max_wait = Duration::from_millis(2_000);
+
+        assert_eq!(
+            throttle.reserve(start, interval, max_wait),
+            SubmissionThrottleDecision::Proceed {
+                wait: Duration::ZERO
+            }
+        );
+        assert_eq!(
+            throttle.reserve(start, interval, max_wait),
+            SubmissionThrottleDecision::Proceed { wait: interval }
+        );
+    }
+
+    #[test]
+    fn submission_throttle_drops_when_backlog_exceeds_freshness_budget() {
+        let start = Instant::now();
+        let mut throttle = SubmissionThrottle::new(start);
+        let interval = Duration::from_millis(1_005);
+
+        assert!(matches!(
+            throttle.reserve(start, interval, Duration::from_millis(2_000)),
+            SubmissionThrottleDecision::Proceed { .. }
+        ));
+        assert!(matches!(
+            throttle.reserve(start, interval, Duration::from_millis(2_000)),
+            SubmissionThrottleDecision::Proceed { .. }
+        ));
+        assert_eq!(
+            throttle.reserve(start, interval, Duration::from_millis(1_500)),
+            SubmissionThrottleDecision::Drop {
+                wait: Duration::from_millis(2_010),
+                max_wait: Duration::from_millis(1_500)
+            }
+        );
     }
 }

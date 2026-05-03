@@ -42,7 +42,7 @@ const ConfigPage = lazy(() => import('./pages/ConfigPage'))
 const AlphaPage = lazy(() => import('./pages/AlphaPage'))
 
 const EMPTY_RISK: RiskSummary = {
-  trading_enabled: true,
+  trading_enabled: false,
   circuit_breaker_tripped: false,
   daily_pnl: 0,
   max_daily_loss_pct: 0.05,
@@ -98,9 +98,9 @@ export default function App() {
   const snapshotPortfolio = snapshot?.portfolio
   const portfolio = useMemo<PortfolioSummary | undefined>(() => {
     if (isLive && livePortfolio && !snapshotPortfolio) {
-      const exchangeVerified = livePortfolio.exchange_positions_verified === true
-      const walletNavVerified = livePortfolio.wallet_truth_verified === true
-        || (exchangeVerified && livePortfolio.onchain_cash_verified === true)
+      const walletTruthVerified = livePortfolio.wallet_truth_verified === true
+      const exchangeVerified = walletTruthVerified && livePortfolio.exchange_positions_verified === true
+      const walletNavVerified = walletTruthVerified
       const walletNav = walletNavVerified
         ? (livePortfolio.wallet_nav_usdc ?? livePortfolio.nav_usdc ?? 0)
         : 0
@@ -182,9 +182,9 @@ export default function App() {
       }
     }
 
-    const exchangeVerified = livePortfolio.exchange_positions_verified === true
-    const walletNavVerified = livePortfolio.wallet_truth_verified === true
-      || (exchangeVerified && livePortfolio.onchain_cash_verified === true)
+    const walletTruthVerified = livePortfolio.wallet_truth_verified === true
+    const exchangeVerified = walletTruthVerified && livePortfolio.exchange_positions_verified === true
+    const walletNavVerified = walletTruthVerified
     const walletNav = walletNavVerified
       ? (livePortfolio.wallet_nav_usdc ?? livePortfolio.nav_usdc ?? 0)
       : 0
@@ -230,8 +230,9 @@ export default function App() {
   }, [isLive, livePortfolio, snapshotPortfolio])
   const activity = useMemo(() => snapshot?.recent_activity ?? [], [snapshot?.recent_activity])
   const positions = portfolio?.open_positions ?? []
-  const walletPositionsVerified = isLive && portfolio?.exchange_positions_verified === true
-  const walletNavVerified = walletPositionsVerified && portfolio?.onchain_cash_verified === true
+  const walletTruthVerified = isLive && portfolio?.wallet_truth_verified === true
+  const walletPositionsVerified = walletTruthVerified && portfolio?.exchange_positions_verified === true
+  const walletNavVerified = walletTruthVerified
   const walletPositions = isLive && walletPositionsVerified ? (portfolio?.exchange_positions_preview ?? []) : []
   const walletPositionCount = isLive ? (portfolio?.exchange_positions_count ?? walletPositions.length) : 0
   const walletPositionValue = isLive
@@ -323,6 +324,7 @@ export default function App() {
           tradingPaused={wsPaused}
           nav={nav}
           navLabel={isLive ? 'Wallet NAV' : 'NAV'}
+          navVerified={!isLive || walletNavVerified}
           navDelta={navDelta}
           navDeltaPct={navDeltaPct}
           positionCount={positions.length}
@@ -428,7 +430,7 @@ export default function App() {
                       walletPositionValue={portfolio?.wallet_position_value_usdc ?? walletPositionValue}
                       walletPositionBasis={walletPositionBasis}
                       walletPositions={walletPositionCount}
-                      walletTruthVerified={walletPositionsVerified}
+                      walletTruthVerified={walletTruthVerified}
                       walletNavVerified={walletNavVerified}
                       realityStatus={portfolio?.reality_status}
                     />

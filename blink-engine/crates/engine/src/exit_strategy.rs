@@ -215,6 +215,58 @@ impl Default for ExitConfig {
     }
 }
 
+/// Build a category-specific [`ExitConfig`] patch.
+///
+/// Checks env vars like `EXIT_SPORTS_STOP_LOSS_PCT`,
+/// `EXIT_CRYPTO_MAX_HOLD_SECS`, etc. Falls back to the base config for any
+/// field without an override. Valid category prefixes: SPORTS, POLITICS,
+/// CRYPTO, GEO, OTHER.
+pub fn patched_exit_config_for_category(
+    base: &ExitConfig,
+    market_title: Option<&str>,
+) -> ExitConfig {
+    let (category, _) = crate::paper_portfolio::detect_fee_category(market_title.unwrap_or(""));
+    let prefix = match category {
+        "sports" => "SPORTS",
+        "politics" => "POLITICS",
+        "crypto" => "CRYPTO",
+        "geopolitics" => "GEO",
+        _ => "OTHER",
+    };
+    let mut cfg = base.clone();
+    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_STOP_LOSS_PCT")) {
+        if let Ok(pct) = v.parse::<f64>() {
+            cfg.stop_loss_pct = pct.clamp(1.0, 99.0);
+        }
+    }
+    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_TRAILING_ACTIVATE_PCT")) {
+        if let Ok(pct) = v.parse::<f64>() {
+            cfg.trailing_stop_activate_pct = pct.clamp(1.0, 99.0);
+        }
+    }
+    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_TRAILING_DROP_PCT")) {
+        if let Ok(pct) = v.parse::<f64>() {
+            cfg.trailing_stop_drop_pct = pct.clamp(1.0, 99.0);
+        }
+    }
+    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_MAX_HOLD_SECS")) {
+        if let Ok(s) = v.parse::<u64>() {
+            cfg.max_hold_secs = s;
+        }
+    }
+    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_EVENT_AWARE_SECS")) {
+        if let Ok(s) = v.parse::<u64>() {
+            cfg.event_aware_exit_secs = s;
+        }
+    }
+    if let Ok(v) = std::env::var(format!("EXIT_{prefix}_TIME_STOP_SECS")) {
+        if let Ok(s) = v.parse::<u64>() {
+            cfg.time_stop_secs = s;
+        }
+    }
+    cfg
+}
+
 // ─── Evaluation ──────────────────────────────────────────────────────────────
 
 /// Result of evaluating one position: its index and the exit action to take.
@@ -443,13 +495,14 @@ where
 
         // 7. Market not live (stale data) — close if no fresh order book price
         //    exists AND position has been held long enough.
-        if config.stale_close_secs > 0 && held_secs >= config.stale_close_secs {
-            if !has_live_price(&pos.token_id) {
-                decisions.push(ExitDecision {
-                    position_idx: idx,
-                    action: ExitAction::MarketNotLive { held_secs },
-                });
-            }
+        if config.stale_close_secs > 0
+            && held_secs >= config.stale_close_secs
+            && !has_live_price(&pos.token_id)
+        {
+            decisions.push(ExitDecision {
+                position_idx: idx,
+                action: ExitAction::MarketNotLive { held_secs },
+            });
         }
     }
 
@@ -577,8 +630,10 @@ mod tests {
 
     #[test]
     fn conviction_clamped_to_max() {
-        let mut config = FilterConfig::default();
-        config.max_multiplier = 0.08; // lower cap
+        let config = FilterConfig {
+            max_multiplier: 0.08, // lower cap
+            ..Default::default()
+        };
         let mult = conviction_multiplier(60_000.0, "sports", Some("NFL"), 250_000.0, &config);
         assert!(mult <= config.max_multiplier + f64::EPSILON);
     }
@@ -618,8 +673,10 @@ mod tests {
         // before the -50% stop-loss would trigger.
         let mut pos = make_position(0.50, 0.45, 20.0);
         pos.opened_at_wall = chrono::Local::now() - chrono::Duration::seconds(600);
-        let mut config = ExitConfig::default();
-        config.time_stop_secs = 300;
+        let config = ExitConfig {
+            time_stop_secs: 300,
+            ..Default::default()
+        };
         let decisions = evaluate_exits(&[pos], &config, |_| true, |_| None);
         assert_eq!(decisions.len(), 1);
         assert!(
@@ -634,8 +691,10 @@ mod tests {
         // Profitable position held past time_stop_secs — TimeStop must NOT fire.
         let mut pos = make_position(0.50, 0.55, 20.0);
         pos.opened_at_wall = chrono::Local::now() - chrono::Duration::seconds(600);
-        let mut config = ExitConfig::default();
-        config.time_stop_secs = 300;
+        let config = ExitConfig {
+            time_stop_secs: 300,
+            ..Default::default()
+        };
         let decisions = evaluate_exits(&[pos], &config, |_| true, |_| None);
         assert!(
             decisions.is_empty(),
@@ -687,8 +746,10 @@ mod tests {
     fn exit_time_stop_disabled_when_zero() {
         let mut pos = make_position(0.50, 0.45, 20.0);
         pos.opened_at_wall = chrono::Local::now() - chrono::Duration::seconds(3600);
-        let mut config = ExitConfig::default();
-        config.time_stop_secs = 0;
+        let config = ExitConfig {
+            time_stop_secs: 0,
+            ..Default::default()
+        };
         let decisions = evaluate_exits(&[pos], &config, |_| true, |_| None);
         // -10% drawdown, no time stop, no other trigger → no action
         assert!(decisions.is_empty());

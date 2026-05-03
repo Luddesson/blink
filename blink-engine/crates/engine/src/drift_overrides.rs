@@ -189,7 +189,7 @@ fn parse_bps_inner(raw: Option<&str>) -> Result<BpsOverrides, String> {
         let bps: u16 = value
             .parse()
             .map_err(|_| format!("invalid bps value '{value}' for class '{}'", class.as_str()))?;
-        if bps < BPS_MIN || bps > BPS_MAX {
+        if !(BPS_MIN..=BPS_MAX).contains(&bps) {
             return Err(format!(
                 "bps value {bps} for '{}' out of range [{BPS_MIN}, {BPS_MAX}]",
                 class.as_str()
@@ -216,7 +216,7 @@ fn parse_pct_inner(raw: Option<&str>) -> Result<PctOverrides, String> {
         if !pct.is_finite() {
             return Err(format!("non-finite pct for '{}'", class.as_str()));
         }
-        if pct < PCT_MIN || pct > PCT_MAX {
+        if !(PCT_MIN..=PCT_MAX).contains(&pct) {
             return Err(format!(
                 "pct value {pct} for '{}' out of range [{PCT_MIN}, {PCT_MAX}]",
                 class.as_str()

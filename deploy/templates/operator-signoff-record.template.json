@@ -16,8 +16,41 @@
   "artifacts": {
     "thresholds_schema_path": "blink-engine/tools/examples/decision-thresholds.json",
     "decision_file_path": "blink-engine/logs/eval-cycle/2026-04-19-paper-a/decision.json",
+    "go_live_evidence_dir": "blink-engine/logs/go-live/2026-04-19-paper-a",
+    "go_live_evidence_index": "blink-engine/logs/go-live/2026-04-19-paper-a/evidence-index.json",
+    "preflight_output_path": "blink-engine/logs/go-live/2026-04-19-paper-a/preflight_live.txt",
     "rollback_playbook_path": "deploy/ROLLBACK-PLAYBOOK.md",
     "rollback_helper_path": "deploy/rollback-hetzner.ps1"
+  },
+  "release": {
+    "git_commit": "REQUIRED_FULL_COMMIT_SHA",
+    "build_timestamp_utc": "2026-04-20T00:00:00Z",
+    "binary_path": "/opt/blink/blink-engine/target/release/engine",
+    "release_dirty": false
+  },
+  "canary": {
+    "utc_start": "2026-04-20T00:05:00Z",
+    "max_single_order_usdc": 1.0,
+    "max_session_spend_usdc": 1.0,
+    "max_daily_loss_usdc": 1.0,
+    "negative_risk_policy": "blocked",
+    "starting_inventory_policy": "classified_or_excluded_from_new_trade_metrics",
+    "circuit_breaker_reset_rationale": "operator-approved rationale for this exact reset"
+  },
+  "rollback": {
+    "owner": "rollback-owner-name",
+    "target_state": {
+      "TRADING_ENABLED": "false",
+      "LIVE_TRADING": "false",
+      "PAPER_TRADING": "true",
+      "ALPHA_TRADING_ENABLED": "false"
+    },
+    "preview_verified_under_2_minutes": true
+  },
+  "circuit_breaker": {
+    "reset_rationale": "operator-approved rationale for this exact reset",
+    "post_reset_observation_required_secs": 600,
+    "retrips_within_30m_action": "TRADING_ENABLED=false; collect postmortem evidence; stop canary"
   },
   "pre_run": {
     "rollback_preview_verified": true,

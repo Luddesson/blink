@@ -153,10 +153,7 @@ const TAG_HALF_OPEN: u8 = 2;
 
 impl Breaker {
     pub fn new(cfg: BreakerConfig) -> Self {
-        let win_ms = cfg
-            .error_rate_window_ms
-            .max(cfg.latency_window_ms)
-            .max(1);
+        let win_ms = cfg.error_rate_window_ms.max(cfg.latency_window_ms).max(1);
         let window = SlidingCounter::new((win_ms as u64) * 1_000_000);
         Self {
             cfg,
@@ -199,7 +196,9 @@ impl Breaker {
             BreakerState::Closed => Admission::Ok,
             BreakerState::Open { until_ns, reason } => {
                 if now_ns >= until_ns {
-                    let claimed = Arc::new(BreakerState::HalfOpen { probe_allowed: false });
+                    let claimed = Arc::new(BreakerState::HalfOpen {
+                        probe_allowed: false,
+                    });
                     let prev = self.state.compare_and_swap(&g, claimed);
                     if Arc::ptr_eq(&prev, &g) {
                         self.fast_tag.store(TAG_HALF_OPEN, Ordering::Release);
@@ -211,8 +210,12 @@ impl Breaker {
                     Admission::Reject(reason)
                 }
             }
-            BreakerState::HalfOpen { probe_allowed: true } => {
-                let claimed = Arc::new(BreakerState::HalfOpen { probe_allowed: false });
+            BreakerState::HalfOpen {
+                probe_allowed: true,
+            } => {
+                let claimed = Arc::new(BreakerState::HalfOpen {
+                    probe_allowed: false,
+                });
                 let prev = self.state.compare_and_swap(&g, claimed);
                 if Arc::ptr_eq(&prev, &g) {
                     Admission::Ok
@@ -220,9 +223,9 @@ impl Breaker {
                     Admission::Reject(open_placeholder())
                 }
             }
-            BreakerState::HalfOpen { probe_allowed: false } => {
-                Admission::Reject(open_placeholder())
-            }
+            BreakerState::HalfOpen {
+                probe_allowed: false,
+            } => Admission::Reject(open_placeholder()),
         };
         match v {
             Admission::Ok => self.stats.admits.fetch_add(1, Ordering::Relaxed),
@@ -362,7 +365,10 @@ mod tests {
             );
         }
         match **b.state() {
-            BreakerState::Open { reason: BreakerTrip::ErrorRate { .. }, .. } => {}
+            BreakerState::Open {
+                reason: BreakerTrip::ErrorRate { .. },
+                ..
+            } => {}
             s => panic!("expected Open(ErrorRate), got {:?}", s),
         }
     }

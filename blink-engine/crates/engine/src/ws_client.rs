@@ -108,6 +108,10 @@ fn jittered(d: Duration) -> Duration {
 /// - Emits detected RN1 signals via `signal_tx`.
 /// - Optionally records every order event to ClickHouse via `tick_tx`.
 /// - Never returns under normal operation; propagates only unrecoverable errors.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public WS runner receives independent runtime handles from main"
+)]
 pub async fn run_ws(
     config: Arc<Config>,
     book_store: Arc<OrderBookStore>,
@@ -268,6 +272,10 @@ pub async fn run_ws(
 /// Establishes a single WebSocket connection and pumps messages until the
 /// stream ends or an error occurs.
 #[instrument(skip_all, fields(ws_url = %config.ws_url))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "connection lifecycle keeps borrowed runtime handles explicit"
+)]
 async fn connect_and_run(
     config: &Config,
     book_store: &Arc<OrderBookStore>,
@@ -466,6 +474,7 @@ async fn connect_and_run(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use crate::order_book::OrderBookStore;
@@ -565,6 +574,10 @@ mod tests {
 ///
 /// Unknown `event_type` values are silently ignored (logged at `debug`).
 /// Order events are forwarded to `tick_tx` when present (ClickHouse recording).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "hot-path dispatcher avoids allocating a context object per message"
+)]
 fn handle_message(
     msg: Message,
     book_store: &Arc<OrderBookStore>,

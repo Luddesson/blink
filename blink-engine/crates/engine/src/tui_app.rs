@@ -306,6 +306,10 @@ fn theme_env_default() -> bool {
 
 /// Entry point — blocks the calling thread until the user presses `q` / `Q`
 /// or the `shutdown` flag is set.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "TUI entrypoint wires long-lived runtime handles from main without owning them"
+)]
 pub fn run_tui(
     portfolio: Arc<tokio::sync::Mutex<PaperPortfolio>>,
     risk_status: Arc<Mutex<String>>,
@@ -377,6 +381,10 @@ pub fn run_tui(
     result
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "terminal loop keeps runtime handles explicit to avoid a broad mutable context object"
+)]
 fn tui_loop(
     term: &mut Terminal<CrosstermBackend<io::Stdout>>,
     portfolio: Arc<tokio::sync::Mutex<PaperPortfolio>>,
@@ -425,8 +433,8 @@ fn tui_loop(
         // ── Poll keyboard (non-blocking) ──────────────────────────────────
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    if handle_key(
+                if key.kind == KeyEventKind::Press
+                    && handle_key(
                         key.code,
                         key.modifiers,
                         &mut state,
@@ -439,9 +447,9 @@ fn tui_loop(
                         &market_subscriptions,
                         &ws_force_reconnect,
                         &experiment_switches,
-                    ) {
-                        break;
-                    }
+                    )
+                {
+                    break;
                 }
             }
         }
@@ -475,7 +483,7 @@ fn tui_loop(
                     .unwrap_or_else(|| "n/a".to_string());
                 let ct = rn1.last_content_type.unwrap_or_else(|| "n/a".to_string());
                 let err = rn1.last_error.unwrap_or_else(|| "unknown".to_string());
-                let preview = rn1.last_body_preview.unwrap_or_else(|| "".to_string());
+                let preview = rn1.last_body_preview.unwrap_or_default();
                 Some(format!(
                     "rn1: ERR#{} status={} ct={} err={} preview={}",
                     rn1.consecutive_errors, status, ct, err, preview
@@ -667,6 +675,10 @@ fn tui_loop(
 // ─── Keyboard handling ───────────────────────────────────────────────────────
 
 /// Returns `true` if the TUI should exit.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "keyboard handler needs access to independent runtime handles for hotkeys"
+)]
 fn handle_key(
     code: KeyCode,
     modifiers: KeyModifiers,
@@ -1124,6 +1136,10 @@ fn snapshot_portfolio(
 
 // ─── Render ──────────────────────────────────────────────────────────────────
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "render functions receive immutable snapshots and handles for independent panels"
+)]
 fn render(
     f: &mut Frame,
     snap: &PortfolioSnapshot,
@@ -1247,6 +1263,10 @@ fn render(
     render_fill_window_overlay(f, area, fill_window);
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "modern renderer mirrors the classic renderer context for theme parity"
+)]
 fn render_modern(
     f: &mut Frame,
     snap: &PortfolioSnapshot,
@@ -1567,6 +1587,10 @@ fn render_tab_bar(f: &mut Frame, area: Rect, active: usize, modern_theme: bool) 
 
 // ── Header ───────────────────────────────────────────────────────────────────
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "header displays a compact cross-section of live runtime status"
+)]
 fn render_header(
     f: &mut Frame,
     area: Rect,
@@ -1690,6 +1714,10 @@ fn render_header(
 
 // ── Dashboard tab (Tab 1) ────────────────────────────────────────────────────
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "dashboard tab renders several independent read-only data panels"
+)]
 fn render_dashboard(
     f: &mut Frame,
     area: Rect,
@@ -2337,7 +2365,7 @@ fn render_fill_latency_histogram(f: &mut Frame, area: Rect, samples: &[u64]) {
         return;
     }
 
-    let bin_count = inner.height.max(1).min(5) as usize;
+    let bin_count = inner.height.clamp(1, 5) as usize;
     let min = *samples.iter().min().unwrap();
     let max = *samples.iter().max().unwrap();
     let span = max.saturating_sub(min).max(1);
@@ -2856,7 +2884,7 @@ fn render_history_tab(
         score_layout[0],
     );
     let mut tags: Vec<(String, usize)> = tag_counts.into_iter().collect();
-    tags.sort_by(|a, b| b.1.cmp(&a.1));
+    tags.sort_by_key(|tag| std::cmp::Reverse(tag.1));
     let right_lines: Vec<Line> = if tags.is_empty() {
         vec![Line::from("  No score tags yet")]
     } else {
@@ -3708,7 +3736,7 @@ fn render_rejection_trend_overlay(
         .iter()
         .map(|(k, v)| (k, v.iter().map(|p| p.count).sum()))
         .collect();
-    top.sort_by(|a, b| b.1.cmp(&a.1));
+    top.sort_by_key(|trend| std::cmp::Reverse(trend.1));
     let lines: Vec<Line> = if top.is_empty() {
         vec![Line::from(" no 24h data")]
     } else {

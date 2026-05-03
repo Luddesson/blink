@@ -261,7 +261,7 @@ fn risk_token_bucket_rate_limit_holds_under_burst() {
     let rejects_observed = rejects.load(Ordering::Relaxed) as u64;
 
     // Integer upper bound: burst + ⌈(ops_per_sec × elapsed_ms) / 1_000⌉ × 3 / 2 + 1.
-    let refilled = (OPS_PER_SEC * elapsed_ms + 999) / 1_000;
+    let refilled = (OPS_PER_SEC * elapsed_ms).div_ceil(1_000);
     let upper_bound = BURST + (refilled * 3) / 2 + 1;
 
     assert!(
@@ -343,7 +343,7 @@ fn pretrade_gate_throughput() {
         } else {
             OrderSide::Sell
         };
-        let price = 498 + ((s >> 5) % 10) as u64;
+        let price = 498 + ((s >> 5) % 10);
 
         let t0 = Instant::now();
         let decision = gate.check(token, side, price, stale_ms, 10_000u16, false);

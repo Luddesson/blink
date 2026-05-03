@@ -67,10 +67,22 @@ impl SlidingCounter {
         let bucket_ns = (window_ns / N_BUCKETS as u64).max(1);
         Self {
             buckets: [
-                Bucket::new(), Bucket::new(), Bucket::new(), Bucket::new(),
-                Bucket::new(), Bucket::new(), Bucket::new(), Bucket::new(),
-                Bucket::new(), Bucket::new(), Bucket::new(), Bucket::new(),
-                Bucket::new(), Bucket::new(), Bucket::new(), Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
+                Bucket::new(),
             ],
             bucket_ns,
         }

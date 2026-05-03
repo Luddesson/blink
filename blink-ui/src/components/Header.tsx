@@ -15,6 +15,7 @@ interface HeaderProps {
   tradingPaused: boolean
   nav?: number
   navLabel?: string
+  navVerified?: boolean
   navDelta?: number
   navDeltaPct?: number
   positionCount?: number
@@ -29,6 +30,7 @@ export default function Header({
   tradingPaused,
   nav,
   navLabel = 'NAV',
+  navVerified = true,
   navDelta,
   navDeltaPct,
   positionCount,
@@ -67,7 +69,7 @@ export default function Header({
   }
 
   const rejections = metrics?.signals_rejected_last_60s ?? 0
-  const hasDelta = navDelta !== undefined && navDelta !== 0
+  const hasDelta = navVerified && navDelta !== undefined && navDelta !== 0
   const deltaPositive = (navDelta ?? 0) >= 0
   const seTimeCompact = seTime.slice(0, 5)
   const truthCheckedTime = truthCheckedAtMs
@@ -158,11 +160,17 @@ export default function Header({
               <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-muted)]">
                 {navLabel}
               </span>
-              <PriceFlash
-                value={nav}
-                format={(v) => `$${v.toFixed(2)}`}
-                className="text-lg font-bold tabular font-mono text-[color:var(--color-text-primary)]"
-              />
+              {navVerified ? (
+                <PriceFlash
+                  value={nav}
+                  format={(v) => `$${v.toFixed(2)}`}
+                  className="text-lg font-bold tabular font-mono text-[color:var(--color-text-primary)]"
+                />
+              ) : (
+                <span className="text-sm font-bold uppercase tracking-[0.08em] text-amber-300">
+                  unverified
+                </span>
+              )}
               <AnimatePresence>
                 {hasDelta && (
                   <motion.span

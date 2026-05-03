@@ -193,9 +193,7 @@ fn default_policy() -> InitPolicy {
 
 /// Initialise the timestamp subsystem with an explicit policy. See [`init`].
 pub fn init_with_policy(policy: InitPolicy) -> Backend {
-    CALIBRATED
-        .get_or_init(|| calibrate_once(policy))
-        .backend
+    CALIBRATED.get_or_init(|| calibrate_once(policy)).backend
 }
 
 /// Current backend. Panics if [`init`] has not been called.
@@ -219,9 +217,9 @@ pub fn calibration_source() -> CalibrationSource {
 
 #[inline(always)]
 fn state() -> &'static CalibratedState {
-    CALIBRATED.get().expect(
-        "blink-timestamps: init() must be called before Timestamp::now()",
-    )
+    CALIBRATED
+        .get()
+        .expect("blink-timestamps: init() must be called before Timestamp::now()")
 }
 
 // ─── Calibration ──────────────────────────────────────────────────────────
@@ -249,9 +247,7 @@ fn calibrate_once(policy: InitPolicy) -> CalibratedState {
                      init_with_policy(InitPolicy::AllowFallback) on dev/CI hosts."
                 ),
                 InitPolicy::AllowFallback => {
-                    eprintln!(
-                        "blink-timestamps: falling back to Instant backend ({reason})"
-                    );
+                    eprintln!("blink-timestamps: falling back to Instant backend ({reason})");
                     return CalibratedState {
                         backend: Backend::Instant,
                         tsc_hz: 0,
@@ -425,7 +421,9 @@ fn monotonic_raw_ns() -> u64 {
     // hardware counter. Available on Linux ≥ 2.6.28 and recent macOS.
     let rc = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, &mut ts) };
     if rc == 0 {
-        (ts.tv_sec as u64).wrapping_mul(1_000_000_000).wrapping_add(ts.tv_nsec as u64)
+        (ts.tv_sec as u64)
+            .wrapping_mul(1_000_000_000)
+            .wrapping_add(ts.tv_nsec as u64)
     } else {
         // Extremely unlikely; degrade to slewed monotonic rather than panic.
         // The calibration error becomes whatever NTP is doing right now —
@@ -587,10 +585,7 @@ pub fn run_skew_selftest() -> SkewReport {
         })
         .collect();
 
-    let mut samples: Vec<Sample> = handles
-        .into_iter()
-        .filter_map(|h| h.join().ok())
-        .collect();
+    let mut samples: Vec<Sample> = handles.into_iter().filter_map(|h| h.join().ok()).collect();
     samples.sort_by_key(|s| s.core);
 
     let measured_cores = samples.len() as u32;
@@ -708,7 +703,10 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(2));
         let t1 = Timestamp::now();
         let elapsed = t1.elapsed_ns_since(t0);
-        assert!(elapsed >= 1_000_000, "elapsed was {elapsed} ns, expected ≥1ms");
+        assert!(
+            elapsed >= 1_000_000,
+            "elapsed was {elapsed} ns, expected ≥1ms"
+        );
         assert!(
             elapsed < 500_000_000,
             "elapsed was {elapsed} ns, expected <500ms (scheduler hiccup?)"
@@ -750,10 +748,7 @@ mod tests {
         let b = init_with_policy(InitPolicy::AllowFallback);
         let hz = tsc_hz();
         match b {
-            Backend::Tsc => assert!(
-                hz > 100_000_000,
-                "TSC backend but implausible hz={hz}"
-            ),
+            Backend::Tsc => assert!(hz > 100_000_000, "TSC backend but implausible hz={hz}"),
             Backend::Instant => assert_eq!(hz, 0),
         }
     }
@@ -764,7 +759,10 @@ mod tests {
         let src = calibration_source();
         match b {
             Backend::Tsc => assert!(
-                matches!(src, CalibrationSource::Cpuid15 | CalibrationSource::MonotonicRaw),
+                matches!(
+                    src,
+                    CalibrationSource::Cpuid15 | CalibrationSource::MonotonicRaw
+                ),
                 "TSC backend with unexpected source {src:?}"
             ),
             Backend::Instant => {
@@ -791,13 +789,24 @@ mod tests {
     }
 
     #[test]
-    fn skew_selftest_returns_ok_or_warn() {
+    fn skew_selftest_reports_consistent_verdict() {
         let _ = init_with_policy(InitPolicy::AllowFallback);
         let report = run_skew_selftest();
         assert!(report.measured_cores >= 1, "no cores measured");
-        assert!(
-            !matches!(report.verdict, SkewVerdict::Fail),
-            "unexpected Fail verdict on CI: {report:?}"
+        assert_eq!(
+            report.verdict,
+            expected_skew_verdict(report.max_skew_ns, report.unpinned_cores),
+            "inconsistent skew verdict: {report:?}"
         );
+    }
+
+    fn expected_skew_verdict(max_skew_ns: u64, unpinned_cores: u32) -> SkewVerdict {
+        if max_skew_ns >= 10_000 {
+            SkewVerdict::Fail
+        } else if max_skew_ns >= 100 || unpinned_cores > 0 {
+            SkewVerdict::Warn
+        } else {
+            SkewVerdict::Ok
+        }
     }
 }

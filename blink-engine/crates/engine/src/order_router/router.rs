@@ -257,10 +257,24 @@ impl OrderRouter {
                 }
 
                 if let Err(e) = worker_txs[rr].send(intent).await {
+                    let intent = e.0;
                     error!(
                         worker = rr,
-                        "OrderRouter dispatcher: worker channel closed — intent dropped: {e}"
+                        intent_id = intent.intent_id,
+                        "OrderRouter dispatcher: worker channel closed — intent dropped"
                     );
+                    if let Some(mut entry) = s_disp.get_mut(&intent.intent_id) {
+                        entry.transition(OrderState::Rejected);
+                    }
+                    hot_metrics::counters()
+                        .pending_orders_count
+                        .fetch_sub(1, Ordering::Relaxed);
+                    hot_metrics::counters()
+                        .submits_rejected
+                        .fetch_add(1, Ordering::Relaxed);
+                    if let Some(ref g) = gate_for_dispatch {
+                        g.on_order_terminal(&intent.market_id, intent.size_u64);
+                    }
                 }
                 rr = (rr + 1) % SUBMIT_WORKERS;
             }
@@ -396,18 +410,18 @@ fn gc_sweep(store: &PendingOrderStore, ring: &Mutex<VecDeque<TerminalRingEntry>>
 
     // Phase 1: drop anything past retention.
     for (intent_id, state, terminal_at) in terminals.iter() {
-        if now.duration_since(*terminal_at) > TERMINAL_RETENTION {
-            if store.remove(intent_id).is_some() {
-                push_ring(
-                    ring,
-                    TerminalRingEntry {
-                        intent_id: *intent_id,
-                        state: state.clone(),
-                        terminal_at: *terminal_at,
-                    },
-                );
-                evicted += 1;
-            }
+        if now.duration_since(*terminal_at) > TERMINAL_RETENTION
+            && store.remove(intent_id).is_some()
+        {
+            push_ring(
+                ring,
+                TerminalRingEntry {
+                    intent_id: *intent_id,
+                    state: state.clone(),
+                    terminal_at: *terminal_at,
+                },
+            );
+            evicted += 1;
         }
     }
 
@@ -475,9 +489,7 @@ async fn submit_one(
             hot_metrics::counters()
                 .submits_rejected
                 .fetch_add(1, Ordering::Relaxed);
-            if let Some(g) = gate {
-                g.on_order_terminal(&intent.market_id, intent.size_u64);
-            }
+            release_risk_if_terminal(gate, &intent, &OrderState::Rejected);
             return;
         }
     };
@@ -495,9 +507,6 @@ async fn submit_one(
                 entry.order_id = order_id;
                 entry.transition(OrderState::Acked);
             }
-            if let Some(g) = gate {
-                g.on_order_terminal(&intent.market_id, intent.size_u64);
-            }
         }
         Ok(crate::order_executor::SubmitOutcome::Success(resp)) => {
             warn!(
@@ -511,9 +520,7 @@ async fn submit_one(
             hot_metrics::counters()
                 .submits_rejected
                 .fetch_add(1, Ordering::Relaxed);
-            if let Some(g) = gate {
-                g.on_order_terminal(&intent.market_id, intent.size_u64);
-            }
+            release_risk_if_terminal(gate, &intent, &OrderState::Rejected);
         }
         Ok(crate::order_executor::SubmitOutcome::Unknown) => {
             warn!(
@@ -530,9 +537,6 @@ async fn submit_one(
             hot_metrics::counters()
                 .router_retries_total
                 .fetch_add(1, Ordering::Relaxed);
-            if let Some(g) = gate {
-                g.on_order_terminal(&intent.market_id, intent.size_u64);
-            }
         }
         Err(e) => {
             warn!(
@@ -546,9 +550,19 @@ async fn submit_one(
             hot_metrics::counters()
                 .submits_rejected
                 .fetch_add(1, Ordering::Relaxed);
-            if let Some(g) = gate {
-                g.on_order_terminal(&intent.market_id, intent.size_u64);
-            }
+            release_risk_if_terminal(gate, &intent, &OrderState::Rejected);
+        }
+    }
+}
+
+fn release_risk_if_terminal(
+    gate: Option<&Arc<StreamRiskGate>>,
+    intent: &OrderIntent,
+    state: &OrderState,
+) {
+    if state.is_terminal() {
+        if let Some(g) = gate {
+            g.on_order_terminal(&intent.market_id, intent.size_u64);
         }
     }
 }

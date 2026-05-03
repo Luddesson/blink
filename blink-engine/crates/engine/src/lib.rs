@@ -23,6 +23,9 @@
 //! | [`latency_tracker`] | Rolling-window latency stats (min/max/avg/p99 in µs) |
 //! | [`tick_recorder`] | ClickHouse batch writer for tick-level order events (activated via `CLICKHOUSE_URL`) |
 //! | [`clickhouse_logger`] | Extended ClickHouse data warehouse — order book snapshots, RN1 signals, trade executions, system metrics |
+//! | [`quant_data`] | Read-only adapters from warehouse tables into offline replay events |
+//! | [`quant_report`] | Offline replay reporting for $100 signal-taker simulations |
+//! | [`quant_replay`] | Offline deterministic replay, microstructure feature extraction, and fill simulation |
 //! | [`gas_oracle`] | Moving-average gas price oracle for Polygon transactions (activated via `ETHERSCAN_API_KEY`) |
 //! | [`tui_app`] | ratatui terminal dashboard (activated via `TUI=true`) |
 //! | [`game_start_watcher`] | Polls CLOB prices to detect in-play market transitions |
@@ -64,6 +67,7 @@ pub mod maker_layering;
 pub mod market_class;
 pub mod market_metadata;
 pub mod mev_router;
+pub mod operator_alerts;
 pub mod order_book;
 pub mod order_executor;
 pub mod order_router;
@@ -72,6 +76,10 @@ pub mod paper_engine;
 pub mod paper_portfolio;
 pub mod postgres_logger;
 pub mod pretrade_gate;
+pub mod quant_data;
+pub mod quant_replay;
+pub mod quant_report;
+pub mod quant_strategy;
 pub mod r2_uploader;
 pub mod risk_manager;
 pub mod rn1_poller;

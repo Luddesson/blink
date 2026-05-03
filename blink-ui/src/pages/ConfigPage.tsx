@@ -16,6 +16,8 @@ export default function ConfigPage({ risk, connected }: Props) {
   const strategy = status?.strategy
   const [submittingStrategy, setSubmittingStrategy] = useState(false)
   const [strategyError, setStrategyError] = useState<string | null>(null)
+  const [resetError, setResetError] = useState<string | null>(null)
+  const [resetInfo, setResetInfo] = useState<string | null>(null)
   const cooldownRemainingMs = Math.max(
     0,
     (strategy?.last_switched_at_ms ?? 0) + (strategy?.cooldown_secs ?? 0) * 1_000 - Date.now(),
@@ -24,10 +26,29 @@ export default function ConfigPage({ risk, connected }: Props) {
   const cooldownRemainingSecs = Math.ceil(cooldownRemainingMs / 1_000)
 
   const handleResetCb = async () => {
+    const operator = window.prompt('Operator identity for reset audit')?.trim()
+    if (!operator) return
+    const rationale = window.prompt('Circuit breaker reset rationale')?.trim()
+    if (!rationale) return
+    const signoffRunId = window.prompt('Signoff run ID')?.trim()
+    if (!signoffRunId) return
+
+    setResetError(null)
+    setResetInfo(null)
     try {
-      await api.resetCircuitBreaker()
+      const result = await api.resetCircuitBreaker({
+        operator,
+        rationale,
+        signoff_run_id: signoffRunId,
+      })
+      setResetInfo(
+        result.order_capable_after_utc
+          ? `Reset audited. Observe heartbeat until ${result.order_capable_after_utc}.`
+          : 'Reset audited.',
+      )
     } catch (e) {
       console.error('Failed to reset circuit breaker:', e)
+      setResetError(e instanceof Error ? e.message : String(e))
     }
   }
 
@@ -84,6 +105,12 @@ export default function ConfigPage({ risk, connected }: Props) {
         <ErrorBoundary label="CircuitBreakerCard">
           <CircuitBreakerCard risk={risk} onReset={handleResetCb} />
         </ErrorBoundary>
+        {(resetError || resetInfo) && (
+          <section className="rounded-lg border border-[color:var(--color-border-primary)] bg-[color:var(--color-surface-elevated)] p-3 text-xs">
+            {resetError && <p className="text-[color:var(--color-bear-300)]">{resetError}</p>}
+            {resetInfo && <p className="text-[color:var(--color-bull-300)]">{resetInfo}</p>}
+          </section>
+        )}
         <section className="rounded-lg border border-[color:var(--color-border-primary)] bg-[color:var(--color-surface-elevated)] p-3 shadow-[0_12px_40px_rgba(0,0,0,0.2)]">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-[color:var(--color-text-primary)]">Strategy Mode</h3>

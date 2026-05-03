@@ -221,6 +221,10 @@ async fn sell(
 
 // ── Limit Order ───────────────────────────────────────────────────────────────
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "CLI command handler receives parsed flags directly from clap"
+)]
 async fn limit_order(
     ctx: CliContext,
     side: &str,

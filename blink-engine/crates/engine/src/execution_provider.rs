@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 /// This is a lightweight scaffold used for wiring custodial provider integrations
 /// without touching any secrets. Implement real providers (Fireblocks, BitGo,
 /// Exchange API) behind this trait in future work.
-
 pub trait ExecutionProvider: Send + Sync {
     /// Human-readable provider name.
     fn name(&self) -> String;

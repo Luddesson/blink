@@ -114,6 +114,30 @@ pub struct RejectionEventRecord {
     pub signal_source: String,
 }
 
+#[derive(Serialize, Debug, Clone)]
+pub struct ShadowDecisionRecord {
+    pub timestamp_ms: u64,
+    pub token_id: String,
+    pub side: String,
+    pub decision: String,
+    pub reason: String,
+    pub quant_decision: String,
+    pub quant_reason: String,
+    pub signal_price: u64,
+    pub signal_size: u64,
+    pub rn1_notional_usd: f64,
+    pub intended_size_usdc: f64,
+    pub score_bps: i64,
+    pub score_grade: String,
+    pub toxicity_bps: i64,
+    pub spread_bps: i64,
+    pub book_age_ms: i64,
+    pub depth_usdc: f64,
+    pub decision_latency_ms: u64,
+    pub signal_source: String,
+    pub strategy_mode: String,
+}
+
 // ─── Envelope ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -127,6 +151,7 @@ pub enum WarehouseEvent {
     Latency(LatencySample),
     EquitySnapshot(EquitySnapshot),
     ClosedTrade(ClosedTradeFull),
+    ShadowDecision(ShadowDecisionRecord),
 }
 
 // ─── PostgresLogger ──────────────────────────────────────────────────────────
@@ -207,11 +232,52 @@ impl PostgresLogger {
             timestamp_ms BIGINT, nav_usdc DOUBLE PRECISION, cash_usdc DOUBLE PRECISION, unrealised_pnl DOUBLE PRECISION, open_positions INT
         )", &[]).await?;
 
+        client
+            .execute(
+                "CREATE TABLE IF NOT EXISTS blink.live_wallet_snapshots (
+            timestamp_ms BIGINT PRIMARY KEY,
+            cash_usdc DOUBLE PRECISION NOT NULL,
+            position_value_usdc DOUBLE PRECISION NOT NULL,
+            position_initial_value_usdc DOUBLE PRECISION NOT NULL,
+            open_pnl_usdc DOUBLE PRECISION NOT NULL,
+            nav_usdc DOUBLE PRECISION NOT NULL,
+            positions_count INT NOT NULL,
+            wallet_truth_verified BOOLEAN NOT NULL DEFAULT TRUE,
+            source TEXT NOT NULL DEFAULT 'onchain_pusd_plus_data_api_positions'
+        )",
+                &[],
+            )
+            .await?;
+
         client.execute("CREATE TABLE IF NOT EXISTS blink.closed_trades_full (
             timestamp_ms BIGINT, token_id TEXT, market_title TEXT, side TEXT, entry_price DOUBLE PRECISION, exit_price DOUBLE PRECISION, shares DOUBLE PRECISION, realized_pnl DOUBLE PRECISION, fees_paid_usdc DOUBLE PRECISION, duration_secs BIGINT, reason TEXT
         )", &[]).await?;
 
-        info!("PostgreSQL warehouse schema ready (9 tables)");
+        client.execute("CREATE TABLE IF NOT EXISTS blink.shadow_decisions (
+            timestamp_ms BIGINT, token_id TEXT, side TEXT, decision TEXT, reason TEXT, quant_decision TEXT, quant_reason TEXT, signal_price BIGINT, signal_size BIGINT,
+            rn1_notional_usd DOUBLE PRECISION, intended_size_usdc DOUBLE PRECISION, score_bps BIGINT, score_grade TEXT,
+            toxicity_bps BIGINT, spread_bps BIGINT, book_age_ms BIGINT, depth_usdc DOUBLE PRECISION,
+            decision_latency_ms BIGINT, signal_source TEXT, strategy_mode TEXT
+        )", &[]).await?;
+        client
+            .execute(
+                "ALTER TABLE blink.shadow_decisions ADD COLUMN IF NOT EXISTS quant_decision TEXT",
+                &[],
+            )
+            .await?;
+        client
+            .execute(
+                "ALTER TABLE blink.shadow_decisions ADD COLUMN IF NOT EXISTS quant_reason TEXT",
+                &[],
+            )
+            .await?;
+
+        client.execute("CREATE INDEX IF NOT EXISTS blink_shadow_decisions_ts_idx ON blink.shadow_decisions (timestamp_ms DESC)", &[]).await?;
+        client.execute("CREATE INDEX IF NOT EXISTS blink_shadow_decisions_token_ts_idx ON blink.shadow_decisions (token_id, timestamp_ms DESC)", &[]).await?;
+        client.execute("CREATE INDEX IF NOT EXISTS blink_shadow_decisions_decision_ts_idx ON blink.shadow_decisions (decision, timestamp_ms DESC)", &[]).await?;
+        client.execute("CREATE INDEX IF NOT EXISTS blink_live_wallet_snapshots_ts_idx ON blink.live_wallet_snapshots (timestamp_ms DESC)", &[]).await?;
+
+        info!("PostgreSQL warehouse schema ready (11 tables)");
         Ok(())
     }
 
@@ -228,6 +294,7 @@ impl PostgresLogger {
         let mut lat_batch = Vec::with_capacity(BATCH_SIZE);
         let mut eq_batch = Vec::with_capacity(BATCH_SIZE);
         let mut ct_batch = Vec::with_capacity(BATCH_SIZE);
+        let mut shadow_batch = Vec::with_capacity(BATCH_SIZE);
 
         let mut last_flush = Instant::now();
 
@@ -243,6 +310,7 @@ impl PostgresLogger {
                     WarehouseEvent::Latency(e) => lat_batch.push(e),
                     WarehouseEvent::EquitySnapshot(e) => eq_batch.push(e),
                     WarehouseEvent::ClosedTrade(e) => ct_batch.push(e),
+                    WarehouseEvent::ShadowDecision(e) => shadow_batch.push(e),
                 }
 
                 if ob_batch.len()
@@ -254,6 +322,7 @@ impl PostgresLogger {
                     + lat_batch.len()
                     + eq_batch.len()
                     + ct_batch.len()
+                    + shadow_batch.len()
                     >= BATCH_SIZE
                 {
                     self.flush_all(
@@ -266,6 +335,7 @@ impl PostgresLogger {
                         &mut lat_batch,
                         &mut eq_batch,
                         &mut ct_batch,
+                        &mut shadow_batch,
                     )
                     .await;
                     last_flush = Instant::now();
@@ -282,6 +352,7 @@ impl PostgresLogger {
                     || !lat_batch.is_empty()
                     || !eq_batch.is_empty()
                     || !ct_batch.is_empty()
+                    || !shadow_batch.is_empty()
                 {
                     self.flush_all(
                         &mut ob_batch,
@@ -293,6 +364,7 @@ impl PostgresLogger {
                         &mut lat_batch,
                         &mut eq_batch,
                         &mut ct_batch,
+                        &mut shadow_batch,
                     )
                     .await;
                 }
@@ -303,6 +375,10 @@ impl PostgresLogger {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "batch buffers stay split by table to avoid allocation while flushing"
+    )]
     async fn flush_all(
         &self,
         ob: &mut Vec<OrderBookSnapshot>,
@@ -314,6 +390,7 @@ impl PostgresLogger {
         lat: &mut Vec<LatencySample>,
         eq: &mut Vec<EquitySnapshot>,
         ct: &mut Vec<ClosedTradeFull>,
+        shadow: &mut Vec<ShadowDecisionRecord>,
     ) {
         if let Ok(client) = self.connect().await {
             for o in ob.drain(..) {
@@ -326,10 +403,10 @@ impl PostgresLogger {
                 let _ = client.execute("INSERT INTO blink.trade_executions (timestamp_ms, token_id, side, price, size, order_id, mode, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", &[&(t.timestamp_ms as i64), &t.token_id, &t.side, &(t.price as i64), &(t.size as i64), &t.order_id, &t.mode, &t.status]).await;
             }
             for m in met.drain(..) {
-                let _ = client.execute("INSERT INTO blink.system_metrics (timestamp_ms, ws_connected, msg_per_sec, latency_min_us, latency_max_us, latency_avg_us, latency_p99_us, open_positions, unrealised_pnl) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)", &[&(m.timestamp_ms as i64), &(m.ws_connected as i32), &(m.msg_per_sec as i64), &(m.latency_min_us as i64), &(m.latency_max_us as i64), &(m.latency_avg_us as i64), &(m.latency_p99_us as i64), &(m.open_positions as i32), &(m.unrealised_pnl as i64)]).await;
+                let _ = client.execute("INSERT INTO blink.system_metrics (timestamp_ms, ws_connected, msg_per_sec, latency_min_us, latency_max_us, latency_avg_us, latency_p99_us, open_positions, unrealised_pnl) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)", &[&(m.timestamp_ms as i64), &(m.ws_connected as i32), &(m.msg_per_sec as i64), &(m.latency_min_us as i64), &(m.latency_max_us as i64), &(m.latency_avg_us as i64), &(m.latency_p99_us as i64), &(m.open_positions as i32), &m.unrealised_pnl]).await;
             }
             for r in risk.drain(..) {
-                let _ = client.execute("INSERT INTO blink.risk_events (timestamp_ms, event_type, severity, details, nav_usdc, daily_pnl_cents, exposure_cents) VALUES ($1, $2, $3, $4, $5, $6, $7)", &[&(r.timestamp_ms as i64), &r.event_type, &r.severity, &r.details, &(r.nav_usdc as i64), &(r.daily_pnl_cents as i64), &(r.exposure_cents as i64)]).await;
+                let _ = client.execute("INSERT INTO blink.risk_events (timestamp_ms, event_type, severity, details, nav_usdc, daily_pnl_cents, exposure_cents) VALUES ($1, $2, $3, $4, $5, $6, $7)", &[&(r.timestamp_ms as i64), &r.event_type, &r.severity, &r.details, &r.nav_usdc, &r.daily_pnl_cents, &r.exposure_cents]).await;
             }
             for r in rej.drain(..) {
                 let _ = client.execute("INSERT INTO blink.rejection_events (timestamp_ms, reason, token_id, side, signal_price, signal_size, signal_source) VALUES ($1, $2, $3, $4, $5, $6, $7)", &[&(r.timestamp_ms as i64), &r.reason, &r.token_id, &r.side, &(r.signal_price as i64), &(r.signal_size as i64), &r.signal_source]).await;
@@ -342,6 +419,9 @@ impl PostgresLogger {
             }
             for c in ct.drain(..) {
                 let _ = client.execute("INSERT INTO blink.closed_trades_full (timestamp_ms, token_id, market_title, side, entry_price, exit_price, shares, realized_pnl, fees_paid_usdc, duration_secs, reason) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)", &[&(c.timestamp_ms as i64), &c.token_id, &c.market_title, &c.side, &c.entry_price, &c.exit_price, &c.shares, &c.realized_pnl, &c.fees_paid_usdc, &(c.duration_secs as i64), &c.reason]).await;
+            }
+            for s in shadow.drain(..) {
+                let _ = client.execute("INSERT INTO blink.shadow_decisions (timestamp_ms, token_id, side, decision, reason, quant_decision, quant_reason, signal_price, signal_size, rn1_notional_usd, intended_size_usdc, score_bps, score_grade, toxicity_bps, spread_bps, book_age_ms, depth_usdc, decision_latency_ms, signal_source, strategy_mode) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)", &[&(s.timestamp_ms as i64), &s.token_id, &s.side, &s.decision, &s.reason, &s.quant_decision, &s.quant_reason, &(s.signal_price as i64), &(s.signal_size as i64), &s.rn1_notional_usd, &s.intended_size_usdc, &s.score_bps, &s.score_grade, &s.toxicity_bps, &s.spread_bps, &s.book_age_ms, &s.depth_usdc, &(s.decision_latency_ms as i64), &s.signal_source, &s.strategy_mode]).await;
             }
         }
     }

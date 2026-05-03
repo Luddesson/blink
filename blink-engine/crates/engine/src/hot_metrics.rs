@@ -15,9 +15,10 @@
 
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use hdrhistogram::Histogram;
+use serde::Serialize;
 use tracing::info;
 
 // ─── HotStage ────────────────────────────────────────────────────────────────
@@ -118,6 +119,21 @@ impl StageHistograms {
             h.value_at_quantile(0.50),
             h.value_at_quantile(0.95),
             h.value_at_quantile(0.99),
+        )
+    }
+
+    #[allow(clippy::modulo_one)]
+    fn snapshot(&self, stage: HotStage) -> HotStageLatencySnapshot {
+        let Ok(h) = self.histograms[stage.index()].lock() else {
+            return HotStageLatencySnapshot::empty(stage.name());
+        };
+        HotStageLatencySnapshot::new(
+            stage.name(),
+            h.len(),
+            h.value_at_quantile(0.50),
+            h.value_at_quantile(0.95),
+            h.value_at_quantile(0.99),
+            h.max(),
         )
     }
 }
@@ -259,6 +275,231 @@ impl HotCounters {
             maker_active_layers: AtomicU64::new(0),
         }
     }
+}
+
+// ─── JSON snapshots ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HotStageLatencySnapshot {
+    pub stage: &'static str,
+    pub samples: u64,
+    pub p50_ns: u64,
+    pub p95_ns: u64,
+    pub p99_ns: u64,
+    pub max_ns: u64,
+    pub p50_us: f64,
+    pub p95_us: f64,
+    pub p99_us: f64,
+    pub max_us: f64,
+    pub p50_ms: f64,
+    pub p95_ms: f64,
+    pub p99_ms: f64,
+    pub max_ms: f64,
+}
+
+impl HotStageLatencySnapshot {
+    fn empty(stage: &'static str) -> Self {
+        Self::new(stage, 0, 0, 0, 0, 0)
+    }
+
+    fn new(
+        stage: &'static str,
+        samples: u64,
+        p50_ns: u64,
+        p95_ns: u64,
+        p99_ns: u64,
+        max_ns: u64,
+    ) -> Self {
+        Self {
+            stage,
+            samples,
+            p50_ns,
+            p95_ns,
+            p99_ns,
+            max_ns,
+            p50_us: ns_to_us(p50_ns),
+            p95_us: ns_to_us(p95_ns),
+            p99_us: ns_to_us(p99_ns),
+            max_us: ns_to_us(max_ns),
+            p50_ms: ns_to_ms(p50_ns),
+            p95_ms: ns_to_ms(p95_ns),
+            p99_ms: ns_to_ms(p99_ns),
+            max_ms: ns_to_ms(max_ns),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HotCountersSnapshot {
+    pub signals_in: u64,
+    pub dedup_hits: u64,
+    pub submits_started: u64,
+    pub submits_ack: u64,
+    pub submits_rejected: u64,
+    pub submit_unknown: u64,
+    pub cancels_started: u64,
+    pub cancels_ack: u64,
+    pub heartbeat_misses: u64,
+    pub reconcile_lag_ms_last: i64,
+    pub partial_fills: u64,
+    pub full_fills: u64,
+    pub ws_reconnects_total: u64,
+    pub ws_gap_ms_last: i64,
+    pub http_submit_inflight: i64,
+    pub tls_handshakes_total: u64,
+    pub dns_lookups_total: u64,
+    pub router_dropped_full: u64,
+    pub router_retries_total: u64,
+    pub router_reconcile_sweeps: u64,
+    pub pending_orders_count: i64,
+    pub ws_dedup_wins: u64,
+    pub rest_dedup_wins: u64,
+    pub gate_proceed: u64,
+    pub gate_skip_stale: u64,
+    pub gate_skip_drift: u64,
+    pub gate_skip_post_only: u64,
+    pub signal_worker_queue_depth_max: u64,
+    pub signal_dispatcher_backlog: u64,
+    pub signal_per_token_workers_active: u64,
+    pub signal_pertoken_overflow_dropped: u64,
+    pub signal_dispatcher_dropped: u64,
+    pub submit_unknown_resolved_acked_total: u64,
+    pub submit_unknown_resolved_rejected_total: u64,
+    pub submit_unknown_lookup_attempts_total: u64,
+    pub cancel_success_total: u64,
+    pub cancel_reject_total: u64,
+    pub fills_delta_size_last: i64,
+    pub partial_fill_ratio_permille: i64,
+    pub router_gc_evicted_total: u64,
+    pub risk_admits_total: u64,
+    pub risk_throttles_total: u64,
+    pub risk_rejects_rate: u64,
+    pub risk_rejects_pending_count: u64,
+    pub risk_rejects_market_notional: u64,
+    pub risk_rejects_account_notional: u64,
+    pub risk_rejects_max_single_order: u64,
+    pub risk_tokens_available: u64,
+    pub risk_cancel_tokens_available: u64,
+    pub risk_per_market_pending_max: u64,
+    pub maker_layers_planned_total: u64,
+    pub maker_layers_placed_total: u64,
+    pub maker_layers_reprice_total: u64,
+    pub maker_layers_stale_evictions_total: u64,
+    pub maker_active_layers: u64,
+}
+
+impl HotCountersSnapshot {
+    fn from_counters(c: &HotCounters) -> Self {
+        Self {
+            signals_in: c.signals_in.load(Ordering::Relaxed),
+            dedup_hits: c.dedup_hits.load(Ordering::Relaxed),
+            submits_started: c.submits_started.load(Ordering::Relaxed),
+            submits_ack: c.submits_ack.load(Ordering::Relaxed),
+            submits_rejected: c.submits_rejected.load(Ordering::Relaxed),
+            submit_unknown: c.submit_unknown.load(Ordering::Relaxed),
+            cancels_started: c.cancels_started.load(Ordering::Relaxed),
+            cancels_ack: c.cancels_ack.load(Ordering::Relaxed),
+            heartbeat_misses: c.heartbeat_misses.load(Ordering::Relaxed),
+            reconcile_lag_ms_last: c.reconcile_lag_ms_last.load(Ordering::Relaxed),
+            partial_fills: c.partial_fills.load(Ordering::Relaxed),
+            full_fills: c.full_fills.load(Ordering::Relaxed),
+            ws_reconnects_total: c.ws_reconnects_total.load(Ordering::Relaxed),
+            ws_gap_ms_last: c.ws_gap_ms_last.load(Ordering::Relaxed),
+            http_submit_inflight: c.http_submit_inflight.load(Ordering::Relaxed),
+            tls_handshakes_total: c.tls_handshakes_total.load(Ordering::Relaxed),
+            dns_lookups_total: c.dns_lookups_total.load(Ordering::Relaxed),
+            router_dropped_full: c.router_dropped_full.load(Ordering::Relaxed),
+            router_retries_total: c.router_retries_total.load(Ordering::Relaxed),
+            router_reconcile_sweeps: c.router_reconcile_sweeps.load(Ordering::Relaxed),
+            pending_orders_count: c.pending_orders_count.load(Ordering::Relaxed),
+            ws_dedup_wins: c.ws_dedup_wins.load(Ordering::Relaxed),
+            rest_dedup_wins: c.rest_dedup_wins.load(Ordering::Relaxed),
+            gate_proceed: c.gate_proceed.load(Ordering::Relaxed),
+            gate_skip_stale: c.gate_skip_stale.load(Ordering::Relaxed),
+            gate_skip_drift: c.gate_skip_drift.load(Ordering::Relaxed),
+            gate_skip_post_only: c.gate_skip_post_only.load(Ordering::Relaxed),
+            signal_worker_queue_depth_max: c.signal_worker_queue_depth_max.load(Ordering::Relaxed),
+            signal_dispatcher_backlog: c.signal_dispatcher_backlog.load(Ordering::Relaxed),
+            signal_per_token_workers_active: c
+                .signal_per_token_workers_active
+                .load(Ordering::Relaxed),
+            signal_pertoken_overflow_dropped: c
+                .signal_pertoken_overflow_dropped
+                .load(Ordering::Relaxed),
+            signal_dispatcher_dropped: c.signal_dispatcher_dropped.load(Ordering::Relaxed),
+            submit_unknown_resolved_acked_total: c
+                .submit_unknown_resolved_acked_total
+                .load(Ordering::Relaxed),
+            submit_unknown_resolved_rejected_total: c
+                .submit_unknown_resolved_rejected_total
+                .load(Ordering::Relaxed),
+            submit_unknown_lookup_attempts_total: c
+                .submit_unknown_lookup_attempts_total
+                .load(Ordering::Relaxed),
+            cancel_success_total: c.cancel_success_total.load(Ordering::Relaxed),
+            cancel_reject_total: c.cancel_reject_total.load(Ordering::Relaxed),
+            fills_delta_size_last: c.fills_delta_size_last.load(Ordering::Relaxed),
+            partial_fill_ratio_permille: c.partial_fill_ratio_permille.load(Ordering::Relaxed),
+            router_gc_evicted_total: c.router_gc_evicted_total.load(Ordering::Relaxed),
+            risk_admits_total: c.risk_admits_total.load(Ordering::Relaxed),
+            risk_throttles_total: c.risk_throttles_total.load(Ordering::Relaxed),
+            risk_rejects_rate: c.risk_rejects_rate.load(Ordering::Relaxed),
+            risk_rejects_pending_count: c.risk_rejects_pending_count.load(Ordering::Relaxed),
+            risk_rejects_market_notional: c.risk_rejects_market_notional.load(Ordering::Relaxed),
+            risk_rejects_account_notional: c.risk_rejects_account_notional.load(Ordering::Relaxed),
+            risk_rejects_max_single_order: c.risk_rejects_max_single_order.load(Ordering::Relaxed),
+            risk_tokens_available: c.risk_tokens_available.load(Ordering::Relaxed),
+            risk_cancel_tokens_available: c.risk_cancel_tokens_available.load(Ordering::Relaxed),
+            risk_per_market_pending_max: c.risk_per_market_pending_max.load(Ordering::Relaxed),
+            maker_layers_planned_total: c.maker_layers_planned_total.load(Ordering::Relaxed),
+            maker_layers_placed_total: c.maker_layers_placed_total.load(Ordering::Relaxed),
+            maker_layers_reprice_total: c.maker_layers_reprice_total.load(Ordering::Relaxed),
+            maker_layers_stale_evictions_total: c
+                .maker_layers_stale_evictions_total
+                .load(Ordering::Relaxed),
+            maker_active_layers: c.maker_active_layers.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HotMetricsSnapshot {
+    pub generated_at_ms: u128,
+    pub stages: Vec<HotStageLatencySnapshot>,
+    pub bottleneck: Option<HotStageLatencySnapshot>,
+    pub counters: HotCountersSnapshot,
+}
+
+/// Returns a JSON-friendly snapshot of hot-path latency and counters.
+pub fn snapshot() -> HotMetricsSnapshot {
+    let m = global();
+    let stages: Vec<_> = HotStage::ALL
+        .iter()
+        .map(|&stage| m.histograms.snapshot(stage))
+        .collect();
+    let bottleneck = stages
+        .iter()
+        .filter(|stage| stage.samples > 0)
+        .max_by_key(|stage| stage.p99_ns)
+        .cloned();
+
+    HotMetricsSnapshot {
+        generated_at_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+        stages,
+        bottleneck,
+        counters: HotCountersSnapshot::from_counters(&m.counters),
+    }
+}
+
+fn ns_to_us(ns: u64) -> f64 {
+    ns as f64 / 1_000.0
+}
+
+fn ns_to_ms(ns: u64) -> f64 {
+    ns as f64 / 1_000_000.0
 }
 
 // ─── Global singleton ─────────────────────────────────────────────────────────
@@ -650,4 +891,56 @@ fn log_snapshot() {
         stages            = %serde_json::to_string(&stages).unwrap_or_default(),
         "hot_metrics_snapshot"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stage_snapshot_reports_samples_and_unit_conversions() {
+        let histograms = StageHistograms::new();
+
+        let empty = histograms.snapshot(HotStage::Submit);
+        assert_eq!(empty.stage, "submit");
+        assert_eq!(empty.samples, 0);
+        assert_eq!(empty.p99_ns, 0);
+        assert_eq!(empty.p99_us, 0.0);
+        assert_eq!(empty.p99_ms, 0.0);
+
+        histograms.record(HotStage::Submit, 1_000);
+        histograms.record(HotStage::Submit, 2_000_000);
+
+        let snap = histograms.snapshot(HotStage::Submit);
+        assert_eq!(snap.stage, "submit");
+        assert_eq!(snap.samples, 2);
+        assert!(snap.p50_ns >= 1_000);
+        assert!(snap.p95_ns >= 1_000);
+        assert!(snap.p99_ns >= 1_000);
+        assert!(snap.max_ns >= 2_000_000);
+        assert!(snap.p99_us > 0.0);
+        assert!(snap.p99_ms > 0.0);
+    }
+
+    #[test]
+    fn global_snapshot_includes_bottleneck_and_counters() {
+        let expected_signals = counters()
+            .signals_in
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        record_stage(HotStage::Risk, 25_000);
+
+        let snap = snapshot();
+        assert!(snap.generated_at_ms > 0);
+        assert!(snap.counters.signals_in >= expected_signals);
+        assert!(snap.bottleneck.is_some());
+
+        let risk = snap
+            .stages
+            .iter()
+            .find(|stage| stage.stage == "risk")
+            .expect("risk stage present");
+        assert!(risk.samples > 0);
+        assert!(risk.p99_ns > 0);
+    }
 }

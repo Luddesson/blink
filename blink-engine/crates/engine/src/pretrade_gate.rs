@@ -66,11 +66,7 @@ impl PretradeGate {
         };
 
         // 3. Drift check — integer arithmetic only
-        let diff = if price_u64 > reference_u64 {
-            price_u64 - reference_u64
-        } else {
-            reference_u64 - price_u64
-        };
+        let diff = price_u64.abs_diff(reference_u64);
         let drift_bps = (diff * 10_000) / reference_u64;
         if drift_bps > max_drift_bps as u64 {
             return GateDecision::SkipDrift {

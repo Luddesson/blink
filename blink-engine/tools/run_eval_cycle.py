@@ -419,7 +419,32 @@ def _derive_funnel(data: dict[str, Any]) -> dict[str, Any]:
     skipped_orders = portfolio.get("skipped_orders")
     aborted_orders = portfolio.get("aborted_orders")
     if not all(isinstance(v, int) for v in [total_signals, filled_orders, skipped_orders, aborted_orders]):
-        return {}
+        confirmed_fills = portfolio.get("confirmed_fills")
+        no_fills = portfolio.get("no_fills")
+        if isinstance(confirmed_fills, int) and isinstance(no_fills, int):
+            resolved_orders = confirmed_fills + no_fills
+            return {
+                "signals": resolved_orders,
+                "accepted": resolved_orders,
+                "fills": confirmed_fills,
+                "aborts": 0,
+                "rejections": 0,
+                "accept_rate_pct": 100.0 if resolved_orders > 0 else 0.0,
+                "fill_from_accept_pct": round((confirmed_fills / resolved_orders) * 100.0, 4)
+                if resolved_orders > 0
+                else 0.0,
+                "source": "live_portfolio_resolved_orders",
+            }
+        return {
+            "signals": 0,
+            "accepted": 0,
+            "fills": 0,
+            "aborts": 0,
+            "rejections": 0,
+            "accept_rate_pct": 0.0,
+            "fill_from_accept_pct": 0.0,
+            "source": "unavailable_zero_fallback",
+        }
 
     accepted_signals = max(total_signals - skipped_orders, 0)
     return {

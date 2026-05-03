@@ -6,8 +6,28 @@ import { ShieldCheck, ShieldOff, Clock } from 'lucide-react'
 export default function FailsafePanel() {
   const { data, error } = usePoll(api.failsafe, 5_000)
   const { data: fillWindow } = usePoll(api.fillWindow, 5_000)
+  const { data: whyNoTrade } = usePoll(api.whyNoTrade, 10_000, data?.available === true)
+  const { data: status } = usePoll(api.status, 5_000, data?.available === true)
 
   const isPaperMode = !data || error
+
+  if (data?.available === false) {
+    return (
+      <div className="card border-amber-900/40">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-xs font-semibold uppercase tracking-widest text-slate-500">
+            Failsafe (Live)
+          </span>
+          <span className="badge badge-danger flex items-center gap-1">
+            <ShieldOff size={10} /> UNAVAILABLE
+          </span>
+        </div>
+        <p className="text-slate-500 text-xs text-center py-3">
+          Failsafe data unavailable
+        </p>
+      </div>
+    )
+  }
 
   if (isPaperMode) {
     // Paper mode — show fill window data instead
@@ -63,10 +83,18 @@ export default function FailsafePanel() {
     stale_orders,
     trigger_count,
     check_count,
+    heartbeat_consecutive_fail_count,
+    heartbeat_last_ok_ms,
   } = data
 
   const rate = confirmation_rate_pct ?? 0
   const totalOrders = check_count
+  const heartbeatAgeSecs = heartbeat_last_ok_ms
+    ? Math.max(0, Math.floor((Date.now() - heartbeat_last_ok_ms) / 1000))
+    : null
+  const heartbeatTone = (heartbeat_consecutive_fail_count ?? 0) > 0 || (heartbeatAgeSecs ?? 0) > 60
+    ? 'text-red-400'
+    : 'text-emerald-400'
 
   const rateColor =
     rate >= 95 ? 'text-emerald-400'
@@ -122,6 +150,35 @@ export default function FailsafePanel() {
           <div className="text-slate-500 mb-0.5">No-fill/Stale</div>
           <div className={`font-mono font-semibold ${(no_fills + stale_orders) > 0 ? 'text-red-400' : 'text-slate-400'}`}>
             {no_fills + stale_orders}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+        <div className="bg-surface-900 rounded p-2">
+          <div className="text-slate-500 mb-0.5">Heartbeat</div>
+          <div className={`font-mono font-semibold ${heartbeatTone}`}>
+            {heartbeatAgeSecs == null ? '—' : `${heartbeatAgeSecs}s`}
+            {(heartbeat_consecutive_fail_count ?? 0) > 0 && ` · fail ${heartbeat_consecutive_fail_count}`}
+          </div>
+        </div>
+        <div className="bg-surface-900 rounded p-2">
+          <div className="text-slate-500 mb-0.5">Neg-risk blocks</div>
+          <div className={`font-mono font-semibold ${(whyNoTrade?.negative_risk_blocked_total ?? 0) > 0 ? 'text-amber-400' : 'text-slate-400'}`}>
+            {whyNoTrade?.negative_risk_blocked_total ?? 0}
+          </div>
+        </div>
+        <div className="bg-surface-900 rounded p-2">
+          <div className="text-slate-500 mb-0.5">Canary spend</div>
+          <div className="font-mono font-semibold text-slate-300">
+            ${fmt(status?.canary?.accepted_spend_usdc ?? 0, 2)}
+            <span className="text-slate-500">/${fmt(status?.canary?.max_session_spend_usdc ?? 0, 2)}</span>
+          </div>
+        </div>
+        <div className="bg-surface-900 rounded p-2">
+          <div className="text-slate-500 mb-0.5">Cap blocks</div>
+          <div className={`font-mono font-semibold ${(whyNoTrade?.canary_cap_blocked_total ?? 0) > 0 ? 'text-amber-400' : 'text-slate-400'}`}>
+            {whyNoTrade?.canary_cap_blocked_total ?? 0}
           </div>
         </div>
       </div>

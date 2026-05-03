@@ -19,6 +19,7 @@ import type {
   StrategyStatus,
   StatusResponse,
   TwinSnapshot,
+  WhyNoTradeResponse,
 } from '../types'
 import { useEffect, useState } from 'react'
 
@@ -41,14 +42,42 @@ async function get<T>(path: string): Promise<T> {
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const request = (token?: string | null) => fetch(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'x-operator-token': token } : {}),
+    },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(15_000),
   })
+
+  let res = await request(storedOperatorToken())
+  if (res.status === 401) {
+    const token = promptForOperatorToken()
+    if (token) {
+      res = await request(token)
+    }
+  }
+
   if (!res.ok) throw new Error(`HTTP ${res.status} ${path}`)
   return res.json() as Promise<T>
+}
+
+const OPERATOR_TOKEN_STORAGE_KEY = 'blink.operatorToken'
+
+function storedOperatorToken(): string | null {
+  if (typeof window === 'undefined') return null
+  return window.localStorage.getItem(OPERATOR_TOKEN_STORAGE_KEY)
+}
+
+function promptForOperatorToken(): string | null {
+  if (typeof window === 'undefined') return null
+  const token = window.prompt('Operator token required')
+  const trimmed = token?.trim()
+  if (!trimmed) return null
+  window.localStorage.setItem(OPERATOR_TOKEN_STORAGE_KEY, trimmed)
+  return trimmed
 }
 
 export function getPolymarketUrl(tokenId: string): string {
@@ -184,6 +213,7 @@ export const api = {
   latency: () => get<LatencyResponse>('/api/latency'),
   failsafe: () => get<FailsafeSnapshot>('/api/failsafe'),
   fillWindow: () => get<FillWindowResponse>('/api/fill-window'),
+  whyNoTrade: () => get<WhyNoTradeResponse>('/api/live/why-no-trade?since_hours=24&limit=20'),
   metrics: () => get<MetricsResponse>('/api/metrics'),
   livePortfolio: () => get<LivePortfolio>('/api/live/portfolio'),
   pause: (paused: boolean) => post<{ trading_paused: boolean }>('/api/pause', { paused }),
@@ -191,7 +221,15 @@ export const api = {
     post<StrategyStatus>('/api/strategy', { mode, reason }),
   rollbackStrategy: (reason = 'blink-ui-rollback') =>
     post<StrategyStatus>('/api/strategy/rollback', { reason }),
-  resetCircuitBreaker: () => post<{ ok: boolean }>('/api/risk/reset_circuit_breaker', {}),
+  resetCircuitBreaker: (body: {
+    operator: string
+    rationale: string
+    signoff_run_id?: string
+    signoff_path?: string
+  }) => post<{ ok: boolean; order_capable_after_utc?: string; audit_path?: string | null }>(
+    '/api/risk/reset_circuit_breaker',
+    body,
+  ),
   sellPosition: (id: number, fraction = 1.0) =>
     post<{ ok: boolean; realized_pnl: number }>(`/api/positions/${id}/sell`, { fraction }),
   activity: () => get<{ entries: import('../types').ActivityEntry[] }>('/api/activity'),

@@ -240,7 +240,7 @@ async fn discover(
         let vol24 = m["volume24hr"]
             .as_f64()
             .or_else(|| m["volume"].as_f64())
-            .map(|v| format_usd(v))
+            .map(format_usd)
             .unwrap_or_else(|| "—".to_string());
         let liq = m["liquidity"]
             .as_f64()

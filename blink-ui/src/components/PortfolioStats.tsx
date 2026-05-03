@@ -63,9 +63,10 @@ export default function PortfolioStats({ portfolio }: Props) {
   const exchangePositionCount = portfolio.exchange_positions_count ?? 0
   const blinkNav = portfolio.blink_nav_usdc ?? (exchangePositionCount > 0 ? nav - exchangePositionValue : nav)
   const realityStatus = portfolio.reality_status
-  const walletPositionsVerified = isLive && portfolio.exchange_positions_verified === true
-  const walletNavVerified = walletPositionsVerified && portfolio.onchain_cash_verified === true
-  const cashVerified = !isLive || portfolio.onchain_cash_verified === true
+  const walletTruthVerified = !isLive || portfolio.wallet_truth_verified === true
+  const walletPositionsVerified = isLive && walletTruthVerified && portfolio.exchange_positions_verified === true
+  const walletNavVerified = walletTruthVerified
+  const cashVerified = !isLive || (walletTruthVerified && portfolio.onchain_cash_verified === true)
   const walletOpenPnl = walletPositionsVerified
     ? (portfolio.wallet_open_pnl_usdc ?? portfolio.wallet_unrealized_pnl_usdc ?? unrealized)
     : 0
@@ -115,7 +116,11 @@ export default function PortfolioStats({ portfolio }: Props) {
               value={walletNavVerified ? `$${fmt(walletNav)}` : 'unverified'}
               color={walletNavVerified ? 'text-amber-300' : 'text-amber-400'}
             />
-            <StatRow label="Blink NAV" value={`$${fmt(blinkNav)}`} />
+            <StatRow
+              label="Blink NAV"
+              value={walletTruthVerified ? `$${fmt(blinkNav)}` : 'unverified'}
+              color={walletTruthVerified ? undefined : 'text-amber-400'}
+            />
           </>
         ) : (
           <>

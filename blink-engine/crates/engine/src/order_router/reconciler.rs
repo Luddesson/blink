@@ -8,14 +8,15 @@ use tracing::{info, warn};
 
 use crate::hot_metrics;
 use crate::order_executor::OrderExecutor;
+use crate::risk_manager::StreamRiskGate;
 
-use super::fill_hook::RouterFillHook;
+use super::fill_hook::{RouterFillEvent, RouterFillHook};
 use super::router::{PendingOrderStore, RouterCounters};
 use super::state::OrderState;
 
 const RECONCILE_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Stale threshold for `Created`/`Submitting` states (not SubmitUnknown).
+/// Watchdog threshold for `Created`/`Submitting` states.
 const CREATED_STALE_THRESHOLD: Duration = Duration::from_secs(300);
 
 /// Maximum lookup attempts before declaring a SubmitUnknown order Rejected.
@@ -38,12 +39,20 @@ pub fn spawn_reconciler(
     counters: Arc<RouterCounters>,
     executor: Arc<OrderExecutor>,
     fill_hook: Option<Arc<dyn RouterFillHook>>,
+    risk_gate: Option<Arc<StreamRiskGate>>,
 ) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(RECONCILE_INTERVAL);
         loop {
             ticker.tick().await;
-            sweep(&store, &counters, &executor, fill_hook.as_deref()).await;
+            sweep(
+                &store,
+                &counters,
+                &executor,
+                fill_hook.as_deref(),
+                risk_gate.as_ref(),
+            )
+            .await;
         }
     });
 }
@@ -53,6 +62,7 @@ async fn sweep(
     counters: &RouterCounters,
     executor: &OrderExecutor,
     fill_hook: Option<&dyn RouterFillHook>,
+    risk_gate: Option<&Arc<StreamRiskGate>>,
 ) {
     counters.reconcile_sweeps.fetch_add(1, Ordering::Relaxed);
     hot_metrics::counters()
@@ -84,23 +94,27 @@ async fn sweep(
                 };
                 match executor.get_order_status(&order_id).await {
                     Ok(status) => {
-                        // Parse fill amounts from string decimals into milliUSDC u64.
-                        let size_matched_u64: u64 = status
-                            .size_matched
-                            .as_deref()
-                            .and_then(|s| s.parse::<f64>().ok())
-                            .map(|f| (f * 1_000.0) as u64)
-                            .unwrap_or(0);
-                        let fill_price_u64: u64 = 0; // price not in OrderStatus; use 0 sentinel
-
                         let new_state = map_exchange_status(&status.status);
                         if let Some(ns) = new_state {
                             if let Some(mut entry) = store.get_mut(&intent_id) {
+                                let size_matched_u64 = matched_notional_u64(
+                                    status.size_matched.as_deref(),
+                                    entry.entry_price,
+                                );
+                                let fill_price_u64 = price_to_u64(entry.entry_price);
                                 match ns {
                                     OrderState::Filled => {
                                         let delta = entry
                                             .apply_fill_update(size_matched_u64, fill_price_u64);
-                                        update_fill_metrics(delta, true, fill_hook);
+                                        update_fill_metrics(
+                                            fill_event_from_entry(
+                                                &entry,
+                                                delta,
+                                                fill_price_u64,
+                                                true,
+                                            ),
+                                            fill_hook,
+                                        );
                                         hot_metrics::counters()
                                             .full_fills
                                             .fetch_add(1, Ordering::Relaxed);
@@ -108,12 +122,25 @@ async fn sweep(
                                             .pending_orders_count
                                             .fetch_sub(1, Ordering::Relaxed);
                                         entry.transition(ns);
+                                        release_risk_gate(
+                                            risk_gate,
+                                            &entry.market_id,
+                                            entry.size_u64,
+                                        );
                                     }
                                     OrderState::PartialFilled => {
                                         let delta = entry
                                             .apply_fill_update(size_matched_u64, fill_price_u64);
                                         if delta > 0 {
-                                            update_fill_metrics(delta, false, fill_hook);
+                                            update_fill_metrics(
+                                                fill_event_from_entry(
+                                                    &entry,
+                                                    delta,
+                                                    fill_price_u64,
+                                                    false,
+                                                ),
+                                                fill_hook,
+                                            );
                                             hot_metrics::counters()
                                                 .partial_fills
                                                 .fetch_add(1, Ordering::Relaxed);
@@ -125,6 +152,11 @@ async fn sweep(
                                             .pending_orders_count
                                             .fetch_sub(1, Ordering::Relaxed);
                                         entry.transition(ns);
+                                        release_risk_gate(
+                                            risk_gate,
+                                            &entry.market_id,
+                                            entry.size_u64,
+                                        );
                                     }
                                     other => {
                                         entry.transition(other);
@@ -164,6 +196,7 @@ async fn sweep(
                                 .fetch_sub(1, Ordering::Relaxed);
                             if let Some(mut entry) = store.get_mut(&intent_id) {
                                 entry.transition(OrderState::Cancelled);
+                                release_risk_gate(risk_gate, &entry.market_id, entry.size_u64);
                             }
                         } else if upper == "LIVE" || upper == "MATCHED" {
                             // Still live — cancel not yet processed; stay Cancelling.
@@ -171,6 +204,24 @@ async fn sweep(
                             // Filled before cancel landed — update state.
                             let is_full = upper == "FILLED";
                             if let Some(mut entry) = store.get_mut(&intent_id) {
+                                let size_matched_u64 = matched_notional_u64(
+                                    status.size_matched.as_deref(),
+                                    entry.entry_price,
+                                );
+                                let fill_price_u64 = price_to_u64(entry.entry_price);
+                                let delta =
+                                    entry.apply_fill_update(size_matched_u64, fill_price_u64);
+                                if delta > 0 {
+                                    update_fill_metrics(
+                                        fill_event_from_entry(
+                                            &entry,
+                                            delta,
+                                            fill_price_u64,
+                                            is_full,
+                                        ),
+                                        fill_hook,
+                                    );
+                                }
                                 if is_full {
                                     hot_metrics::counters()
                                         .full_fills
@@ -179,6 +230,7 @@ async fn sweep(
                                         .pending_orders_count
                                         .fetch_sub(1, Ordering::Relaxed);
                                     entry.transition(OrderState::Filled);
+                                    release_risk_gate(risk_gate, &entry.market_id, entry.size_u64);
                                 } else {
                                     hot_metrics::counters()
                                         .partial_fills
@@ -235,6 +287,7 @@ async fn sweep(
                     );
                     if let Some(mut entry) = store.get_mut(&intent_id) {
                         entry.transition(OrderState::Rejected);
+                        release_risk_gate(risk_gate, &entry.market_id, entry.size_u64);
                         hot_metrics::counters()
                             .submit_unknown_resolved_rejected_total
                             .fetch_add(1, Ordering::Relaxed);
@@ -280,7 +333,31 @@ async fn sweep(
                                         .fetch_add(1, Ordering::Relaxed);
                                 }
                                 "MATCHED" | "FILLED" => {
+                                    let fill_price = found
+                                        .price
+                                        .as_deref()
+                                        .and_then(|p| p.parse::<f64>().ok())
+                                        .unwrap_or(entry.entry_price);
+                                    let fill_price_u64 = price_to_u64(fill_price);
+                                    let size_matched_u64 = matched_notional_u64(
+                                        found.size_matched.as_deref(),
+                                        fill_price,
+                                    );
+                                    let delta =
+                                        entry.apply_fill_update(size_matched_u64, fill_price_u64);
+                                    if delta > 0 {
+                                        update_fill_metrics(
+                                            fill_event_from_entry(
+                                                &entry,
+                                                delta,
+                                                fill_price_u64,
+                                                true,
+                                            ),
+                                            fill_hook,
+                                        );
+                                    }
                                     entry.transition(OrderState::Filled);
+                                    release_risk_gate(risk_gate, &entry.market_id, entry.size_u64);
                                     hot_metrics::counters()
                                         .full_fills
                                         .fetch_add(1, Ordering::Relaxed);
@@ -292,6 +369,29 @@ async fn sweep(
                                         .fetch_add(1, Ordering::Relaxed);
                                 }
                                 "PARTIALLY_FILLED" => {
+                                    let fill_price = found
+                                        .price
+                                        .as_deref()
+                                        .and_then(|p| p.parse::<f64>().ok())
+                                        .unwrap_or(entry.entry_price);
+                                    let fill_price_u64 = price_to_u64(fill_price);
+                                    let size_matched_u64 = matched_notional_u64(
+                                        found.size_matched.as_deref(),
+                                        fill_price,
+                                    );
+                                    let delta =
+                                        entry.apply_fill_update(size_matched_u64, fill_price_u64);
+                                    if delta > 0 {
+                                        update_fill_metrics(
+                                            fill_event_from_entry(
+                                                &entry,
+                                                delta,
+                                                fill_price_u64,
+                                                false,
+                                            ),
+                                            fill_hook,
+                                        );
+                                    }
                                     entry.transition(OrderState::PartialFilled);
                                     hot_metrics::counters()
                                         .submit_unknown_resolved_acked_total
@@ -299,6 +399,7 @@ async fn sweep(
                                 }
                                 "CANCELLED" | "CANCELED" => {
                                     entry.transition(OrderState::Cancelled);
+                                    release_risk_gate(risk_gate, &entry.market_id, entry.size_u64);
                                     hot_metrics::counters()
                                         .pending_orders_count
                                         .fetch_sub(1, Ordering::Relaxed);
@@ -343,17 +444,16 @@ async fn sweep(
 
             OrderState::Created | OrderState::Submitting => {
                 if age >= CREATED_STALE_THRESHOLD {
-                    warn!(
-                        intent_id,
-                        age_secs = age.as_secs(),
-                        "Reconciler: order stuck in {:?} — marking Stale",
-                        state
-                    );
                     if let Some(mut entry) = store.get_mut(&intent_id) {
-                        entry.transition(OrderState::Stale);
-                        hot_metrics::counters()
-                            .pending_orders_count
-                            .fetch_sub(1, Ordering::Relaxed);
+                        if entry.last_updated.elapsed() >= CREATED_STALE_THRESHOLD {
+                            warn!(
+                                intent_id,
+                                age_secs = age.as_secs(),
+                                "Reconciler: order stuck in {:?}; keeping pending risk until venue terminal truth",
+                                state
+                            );
+                            entry.last_updated = std::time::Instant::now();
+                        }
                     }
                 }
             }
@@ -370,33 +470,62 @@ async fn sweep(
         .store(sweep_start.elapsed().as_millis() as i64, Ordering::Relaxed);
 }
 
+fn release_risk_gate(gate: Option<&Arc<StreamRiskGate>>, market_id: &str, size_u64: u64) {
+    if let Some(g) = gate {
+        g.on_order_terminal(market_id, size_u64);
+    }
+}
+
+fn price_to_u64(price: f64) -> u64 {
+    (price.max(0.0) * 1_000.0).round() as u64
+}
+
+fn matched_notional_u64(size_matched: Option<&str>, fill_price: f64) -> u64 {
+    size_matched
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|shares| (shares * fill_price.max(0.0) * 1_000.0).round() as u64)
+        .unwrap_or(0)
+}
+
+fn fill_event_from_entry(
+    entry: &super::state::PendingOrder,
+    delta_u64: u64,
+    fill_price_u64: u64,
+    is_full: bool,
+) -> RouterFillEvent {
+    RouterFillEvent {
+        intent_id: entry.intent_id,
+        order_id: entry.order_id.clone(),
+        token_id: entry.token_id.clone(),
+        side: entry.side,
+        delta_size_u64: delta_u64,
+        cumulative_size_u64: entry.filled_size_u64,
+        remaining_size_u64: entry.remaining_size_u64,
+        fill_price_u64,
+        is_full,
+    }
+}
+
 /// Update fill metrics and notify the fill hook.
-fn update_fill_metrics(delta_u64: u64, is_full: bool, hook: Option<&dyn RouterFillHook>) {
+fn update_fill_metrics(event: RouterFillEvent, hook: Option<&dyn RouterFillHook>) {
     hot_metrics::counters()
         .fills_delta_size_last
-        .store(delta_u64 as i64, Ordering::Relaxed);
+        .store(event.delta_size_u64 as i64, Ordering::Relaxed);
 
     let full = hot_metrics::counters().full_fills.load(Ordering::Relaxed);
     let partial = hot_metrics::counters()
         .partial_fills
         .load(Ordering::Relaxed);
     let total = full + partial;
-    if total > 0 {
+    if let Some(ratio) = (full * 1_000).checked_div(total) {
         // full-fill ratio in per-mille (integer math).
-        let ratio = (full * 1_000) / total;
         hot_metrics::counters()
             .partial_fill_ratio_permille
             .store(ratio as i64, Ordering::Relaxed);
     }
 
     if let Some(h) = hook {
-        if is_full {
-            // intent_id not available at this level — hook is notified by reconciler caller
-            // with intent_id when needed; here we use 0 as sentinel for batch updates.
-            h.on_full_fill(0);
-        } else {
-            h.on_partial_fill(0, delta_u64, 0);
-        }
+        h.on_fill_update(event);
     }
 }
 
@@ -407,5 +536,98 @@ pub fn map_exchange_status(status: &str) -> Option<OrderState> {
         "CANCELLED" | "CANCELED" => Some(OrderState::Cancelled),
         "REJECTED" => Some(OrderState::Rejected),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use crate::types::OrderSide;
+
+    use super::super::fill_hook::{RouterFillEvent, RouterFillHook};
+    use super::super::state::PendingOrder;
+    use super::*;
+
+    struct RecordingFillHook {
+        events: Mutex<Vec<RouterFillEvent>>,
+    }
+
+    impl RecordingFillHook {
+        fn new() -> Self {
+            Self {
+                events: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl RouterFillHook for RecordingFillHook {
+        fn on_fill_update(&self, event: RouterFillEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+
+        fn on_partial_fill(&self, _intent_id: u64, _delta_size_u64: u64, _fill_price_u64: u64) {}
+
+        fn on_full_fill(&self, _intent_id: u64) {}
+    }
+
+    #[test]
+    fn matched_notional_converts_share_fill_to_milli_usdc() {
+        assert_eq!(matched_notional_u64(Some("2.5"), 0.40), 1_000);
+    }
+
+    #[test]
+    fn matched_notional_rounds_to_nearest_milli_usdc() {
+        assert_eq!(matched_notional_u64(Some("1.234"), 0.333), 411);
+    }
+
+    #[test]
+    fn fill_event_from_entry_carries_delta_and_remaining_notional() {
+        let mut entry = PendingOrder::new(
+            42,
+            "market-a".to_string(),
+            "token-a".to_string(),
+            OrderSide::Buy,
+            1.00,
+            1_000,
+            0.40,
+        );
+        let fill_price_u64 = price_to_u64(0.40);
+        let delta = entry.apply_fill_update(600, fill_price_u64);
+
+        let event = fill_event_from_entry(&entry, delta, fill_price_u64, false);
+
+        assert_eq!(event.intent_id, 42);
+        assert_eq!(event.token_id, "token-a");
+        assert_eq!(event.side, OrderSide::Buy);
+        assert_eq!(event.delta_size_u64, 600);
+        assert_eq!(event.cumulative_size_u64, 600);
+        assert_eq!(event.remaining_size_u64, 400);
+        assert_eq!(event.fill_price_u64, 400);
+        assert!(!event.is_full);
+    }
+
+    #[test]
+    fn update_fill_metrics_dispatches_structured_hook_event() {
+        let hook = RecordingFillHook::new();
+        let event = RouterFillEvent {
+            intent_id: 7,
+            order_id: Some("ord-7".to_string()),
+            token_id: "token-7".to_string(),
+            side: OrderSide::Buy,
+            delta_size_u64: 250,
+            cumulative_size_u64: 250,
+            remaining_size_u64: 750,
+            fill_price_u64: 500,
+            is_full: false,
+        };
+
+        update_fill_metrics(event, Some(&hook));
+
+        let events = hook.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].intent_id, 7);
+        assert_eq!(events[0].delta_size_u64, 250);
+        assert_eq!(events[0].remaining_size_u64, 750);
     }
 }

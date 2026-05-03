@@ -299,35 +299,33 @@ async fn main() -> Result<()> {
         };
 
     // ── ClickHouse tick recorder (optional — activated by POSTGRES_URL) ─
-    let tick_tx: Option<crossbeam_channel::Sender<TickRecord>> =
-        match std::env::var("POSTGRES_URL").ok().filter(|s| !s.is_empty()) {
-            Some(url) => {
-                let (tx, rx) = crossbeam_channel::bounded::<TickRecord>(10_000);
-                let recorder = TickRecorder::new(&url);
-                let act = activity.clone();
-                tokio::spawn(async move {
-                    match recorder.ensure_schema().await {
-                        Ok(()) => log_push(
-                            &act,
-                            EntryKind::Engine,
-                            format!("ClickHouse connected: {url}"),
-                        ),
-                        Err(e) => log_push(
-                            &act,
-                            EntryKind::Warn,
-                            format!("ClickHouse schema error: {e}"),
-                        ),
-                    }
-                    recorder.run(rx).await;
-                });
-                info!("Postgres tick recording enabled");
-                Some(tx)
-            }
-            None => {
-                info!("POSTGRES_URL not set — tick recording disabled");
-                None
-            }
-        };
+    let tick_tx: Option<crossbeam_channel::Sender<TickRecord>> = match std::env::var("POSTGRES_URL")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        Some(url) => {
+            let (tx, rx) = crossbeam_channel::bounded::<TickRecord>(10_000);
+            let recorder = TickRecorder::new(&url);
+            let act = activity.clone();
+            tokio::spawn(async move {
+                match recorder.ensure_schema().await {
+                    Ok(()) => log_push(&act, EntryKind::Engine, "ClickHouse connected".to_string()),
+                    Err(e) => log_push(
+                        &act,
+                        EntryKind::Warn,
+                        format!("ClickHouse schema error: {e}"),
+                    ),
+                }
+                recorder.run(rx).await;
+            });
+            info!("Postgres tick recording enabled");
+            Some(tx)
+        }
+        None => {
+            info!("POSTGRES_URL not set — tick recording disabled");
+            None
+        }
+    };
 
     // ── Postgres data warehouse (optional — activated by POSTGRES_URL) ─
     let warehouse_tx: Option<crossbeam_channel::Sender<WarehouseEvent>> =
@@ -336,13 +334,12 @@ async fn main() -> Result<()> {
                 let (tx, rx) = crossbeam_channel::bounded::<WarehouseEvent>(10_000);
                 let logger = PostgresLogger::new(url);
                 let act = activity.clone();
-                let u = url.clone();
                 tokio::spawn(async move {
                     match logger.ensure_schema().await {
                         Ok(()) => log_push(
                             &act,
                             EntryKind::Engine,
-                            format!("ClickHouse warehouse connected: {u}"),
+                            "ClickHouse warehouse connected".to_string(),
                         ),
                         Err(e) => log_push(
                             &act,
@@ -363,7 +360,6 @@ async fn main() -> Result<()> {
 
     // ── Postgres command listener (optional — activated by POSTGRES_URL) ───
     if let Ok(url) = std::env::var("POSTGRES_URL")
-        .map(|s| s)
         .map(|s| if s.is_empty() { Err("empty") } else { Ok(s) })
         .unwrap_or(Err("missing"))
     {
@@ -702,15 +698,13 @@ async fn main() -> Result<()> {
                             p.positions.iter().map(|pos| pos.token_id.clone()).collect()
                         };
                         for token_id in &token_ids {
-                            match clob_for_marks.get_midpoint(token_id).await {
-                                Ok(mid_str) => {
-                                    if let Ok(price) = mid_str.parse::<f64>() {
-                                        let mut p = portfolio_for_marks.lock().await;
-                                        p.update_price(token_id, price);
-                                    }
+                            if let Ok(mid_str) = clob_for_marks.get_midpoint(token_id).await {
+                                if let Ok(price) = mid_str.parse::<f64>() {
+                                    let mut p = portfolio_for_marks.lock().await;
+                                    p.update_price(token_id, price);
                                 }
-                                Err(_) => {} // Silently skip — WS/order-book still primary
                             }
+                            // Silently skip failures; WS/order-book remains primary.
                         }
                         tokio::time::sleep(Duration::from_secs(3)).await;
                     }
@@ -825,7 +819,7 @@ async fn main() -> Result<()> {
                     match result {
                         Ok(()) => {
                             consecutive_ok += 1;
-                            if consecutive_ok == 1 || consecutive_ok % 30 == 0 {
+                            if consecutive_ok == 1 || consecutive_ok.is_multiple_of(30) {
                                 tracing::info!(tick = consecutive_ok, "tick_mark_prices heartbeat");
                             }
                         }
@@ -1032,6 +1026,7 @@ async fn main() -> Result<()> {
             }
         })
     } else if live_mode {
+        ensure_no_startup_halt_flags()?;
         let live_preflight = if env_flag("LIVE_STARTUP_PREFLIGHT") {
             Some(run_preflight_live(&config).await?)
         } else {
@@ -1052,6 +1047,7 @@ async fn main() -> Result<()> {
             Arc::clone(&strategy_controller),
             execution_profile,
             live_starting_cash,
+            warehouse_tx.clone(),
         )?);
         if let Some(cash) = live_starting_cash {
             tracing::info!(
@@ -1076,6 +1072,7 @@ async fn main() -> Result<()> {
 
         Arc::clone(&live).spawn_reconciliation_worker();
         Arc::clone(&live).spawn_wallet_truth_worker();
+        Arc::clone(&live).spawn_exit_strategy_auditor();
         live.spawn_router_workers().await;
 
         // Spawn heartbeat — keeps the Polymarket session alive every 8s.
@@ -1096,16 +1093,38 @@ async fn main() -> Result<()> {
                     let err = hb_metrics
                         .fail_count
                         .load(std::sync::atomic::Ordering::Relaxed);
+                    let consecutive_fail = hb_metrics
+                        .consecutive_fails
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    let last_ok_ms = hb_metrics
+                        .last_ok_ms
+                        .load(std::sync::atomic::Ordering::Relaxed);
                     {
                         let mut m = l.failsafe_metrics.lock_or_recover();
                         m.heartbeat_ok_count = ok;
                         m.heartbeat_fail_count = err;
+                        m.heartbeat_consecutive_fail_count = consecutive_fail;
+                        m.heartbeat_last_ok_ms = last_ok_ms;
                     }
-                    if err > 0 {
+                    if consecutive_fail > 0 {
                         tracing::warn!(
                             heartbeat_ok = ok,
                             heartbeat_fail = err,
+                            heartbeat_consecutive_fail = consecutive_fail,
+                            heartbeat_last_ok_ms = last_ok_ms,
                             "Heartbeat failures detected"
+                        );
+                        engine::operator_alerts::emit_operator_alert(
+                            "heartbeat_consecutive_failures",
+                            "critical",
+                            "heartbeat_consecutive_failures",
+                            "Live heartbeat has consecutive failures",
+                            serde_json::json!({
+                                "heartbeat_ok": ok,
+                                "heartbeat_fail": err,
+                                "heartbeat_consecutive_fail": consecutive_fail,
+                                "heartbeat_last_ok_ms": last_ok_ms,
+                            }),
                         );
                     }
                 }
@@ -1134,6 +1153,8 @@ async fn main() -> Result<()> {
                         confirmation_rate_pct = fs.confirmation_rate_pct,
                         heartbeat_ok = fs.heartbeat_ok_count,
                         heartbeat_fail = fs.heartbeat_fail_count,
+                        heartbeat_consecutive_fail = fs.heartbeat_consecutive_fail_count,
+                        heartbeat_last_ok_ms = fs.heartbeat_last_ok_ms,
                         "Live SLO heartbeat"
                     );
                 }
@@ -1542,7 +1563,12 @@ async fn main() -> Result<()> {
             .ok()
             .and_then(|v| v.parse::<u16>().ok())
             .unwrap_or(3030);
-        let web_bind = format!("0.0.0.0:{web_ui_port}");
+        let web_bind =
+            std::env::var("WEB_UI_BIND").unwrap_or_else(|_| format!("127.0.0.1:{web_ui_port}"));
+        anyhow::ensure!(
+            web_bind_is_loopback(&web_bind) || web_operator_token_configured(),
+            "WEB_UI_BIND={web_bind} exposes operator POST APIs; set WEB_OPERATOR_TOKEN or bind to 127.0.0.1"
+        );
         let (broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(64);
 
         let risk_handle = paper_for_persist
@@ -1972,6 +1998,88 @@ fn env_f64_or(key: &str, default: f64) -> f64 {
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(default)
+}
+
+fn web_operator_token_configured() -> bool {
+    std::env::var("WEB_OPERATOR_TOKEN")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn web_bind_is_loopback(bind: &str) -> bool {
+    let bind = bind.trim();
+    if let Ok(addr) = bind.parse::<std::net::SocketAddr>() {
+        return addr.ip().is_loopback();
+    }
+    if let Ok(ip) = bind.parse::<std::net::IpAddr>() {
+        return ip.is_loopback();
+    }
+
+    let host = bind
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(bind)
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+
+    host.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+const STARTUP_HALT_FLAGS: [&str; 3] = [
+    "logs/EMERGENCY_STOP.flag",
+    "logs/CANARY_HALTED.flag",
+    "logs\\EMERGENCY_STOP.flag",
+];
+
+fn ensure_no_startup_halt_flags() -> Result<()> {
+    let present = find_startup_halt_flags(&STARTUP_HALT_FLAGS);
+
+    anyhow::ensure!(
+        present.is_empty(),
+        "Refusing LIVE_TRADING startup: persistent halt flag(s) present: {}. Clear explicitly before restart.",
+        present.join(", ")
+    );
+    Ok(())
+}
+
+fn find_startup_halt_flags<'a>(paths: &'a [&'a str]) -> Vec<&'a str> {
+    paths
+        .iter()
+        .copied()
+        .filter(|path| std::path::Path::new(path).exists())
+        .collect()
+}
+
+#[cfg(test)]
+mod web_bind_tests {
+    use super::{find_startup_halt_flags, web_bind_is_loopback};
+
+    #[test]
+    fn web_bind_loopback_detection_accepts_local_addresses() {
+        assert!(web_bind_is_loopback("127.0.0.1:3030"));
+        assert!(web_bind_is_loopback("localhost:3030"));
+        assert!(web_bind_is_loopback("[::1]:3030"));
+    }
+
+    #[test]
+    fn web_bind_loopback_detection_rejects_wildcard_addresses() {
+        assert!(!web_bind_is_loopback("0.0.0.0:3030"));
+        assert!(!web_bind_is_loopback("[::]:3030"));
+        assert!(!web_bind_is_loopback("127.example.com:3030"));
+    }
+
+    #[test]
+    fn startup_halt_flag_finder_ignores_missing_paths() {
+        let missing = "__blink_missing_halt_flag_for_unit_test__";
+        assert!(find_startup_halt_flags(&[missing]).is_empty());
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]

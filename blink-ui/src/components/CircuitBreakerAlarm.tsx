@@ -22,9 +22,20 @@ export default function CircuitBreakerAlarm({ risk, onDismiss, onReset }: Props)
     : 'Trading halted'
 
   async function handleReset() {
+    const operator = window.prompt('Operator identity for reset audit')?.trim()
+    if (!operator) return
+    const rationale = window.prompt('Circuit breaker reset rationale')?.trim()
+    if (!rationale) return
+    const signoffRunId = window.prompt('Signoff run ID')?.trim()
+    if (!signoffRunId) return
+
     setResetting(true)
     try {
-      await api.resetCircuitBreaker()
+      await api.resetCircuitBreaker({
+        operator,
+        rationale,
+        signoff_run_id: signoffRunId,
+      })
       setDismissed(true)
       onReset?.()
     } catch {
@@ -60,7 +71,7 @@ export default function CircuitBreakerAlarm({ risk, onDismiss, onReset }: Props)
           className="flex items-center gap-2 px-5 py-2.5 bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white rounded-lg text-sm font-semibold"
         >
           <RefreshCw size={15} className={resetting ? 'animate-spin' : ''} />
-          {resetting ? 'Resetting…' : 'Reset & Resume Trading'}
+          {resetting ? 'Resetting…' : 'Audit Reset'}
         </button>
       </div>
     </div>

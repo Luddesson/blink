@@ -75,6 +75,26 @@ pub struct OrderStatus {
     pub size_matched: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct TradeList {
+    #[serde(default)]
+    data: Vec<TradeEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TradeEntry {
+    #[serde(default)]
+    taker_order_id: String,
+    #[serde(default)]
+    maker_order_id: Option<String>,
+    #[serde(default)]
+    maker_orders: Vec<serde_json::Value>,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    size: String,
+}
+
 /// Entry returned from `GET /orders` list endpoint.
 ///
 /// Used for SubmitUnknown recovery — fields match the Polymarket CLOB v2 schema.
@@ -107,6 +127,7 @@ pub struct OrderExecutor {
     client: Client,
     base_url: String,
     auth_address: String,
+    maker_address: String,
     api_key: String,
     /// Base64-encoded secret; decoded to raw bytes before HMAC use.
     api_secret: String,
@@ -193,6 +214,7 @@ impl OrderExecutor {
             client,
             base_url: config.clob_host.clone(),
             auth_address,
+            maker_address: config.funder_address.clone(),
             api_key: config.api_key.clone(),
             api_secret: config.api_secret.clone(),
             passphrase: config.api_passphrase.clone(),
@@ -705,7 +727,7 @@ impl OrderExecutor {
     /// Fetches the current status of an order.  Primary path is
     /// `GET /order/{order_id}`. FAK/taker orders can disappear from the order
     /// endpoint after matching, so a 404 falls back to authenticated
-    /// `GET /trades` and scans for `taker_order_id == order_id`.
+    /// `GET /trades` and scans trade references for the order hash.
     #[instrument(skip(self), fields(order_id))]
     pub async fn get_order_status(&self, order_id: &str) -> Result<OrderStatus> {
         let path = format!("/order/{order_id}");
@@ -744,31 +766,18 @@ impl OrderExecutor {
     }
 
     async fn get_trade_status_for_order(&self, order_id: &str) -> Result<Option<OrderStatus>> {
-        #[derive(Debug, Deserialize)]
-        struct TradeList {
-            #[serde(default)]
-            data: Vec<TradeEntry>,
-        }
-
-        #[derive(Debug, Deserialize)]
-        struct TradeEntry {
-            #[serde(default)]
-            taker_order_id: String,
-            #[serde(default)]
-            status: String,
-            #[serde(default)]
-            size: String,
-        }
-
-        let path = "/trades";
-        let url = format!("{}{}", self.base_url, path);
+        let auth_path = "/trades";
+        let request_path = format!("{auth_path}?maker_address={}", self.maker_address);
+        let url = format!("{}{}", self.base_url, request_path);
+        // Polymarket's official clients sign the endpoint path only; query
+        // parameters are present on the URL but excluded from the L2 HMAC path.
         let headers = build_auth_headers(
             &self.api_key,
             &self.api_secret,
             &self.passphrase,
             &self.auth_address,
             "GET",
-            path,
+            auth_path,
             "",
         )?;
 
@@ -784,11 +793,11 @@ impl OrderExecutor {
             anyhow::bail!("GET /trades returned {status}: {text}");
         }
 
-        let trades: TradeList = serde_json::from_str(&text).unwrap_or(TradeList { data: vec![] });
+        let trades = parse_trade_list(&text);
         let Some(trade) = trades
             .data
             .into_iter()
-            .find(|t| t.taker_order_id.eq_ignore_ascii_case(order_id))
+            .find(|t| trade_references_order(t, order_id))
         else {
             return Ok(None);
         };
@@ -805,16 +814,62 @@ impl OrderExecutor {
             maker_amount: None,
             taker_amount: None,
             remaining_amount: None,
-            size_matched: if trade.size.is_empty() {
-                None
-            } else {
-                Some(trade.size)
-            },
+            size_matched: trade_size_to_decimal_shares(&trade.size),
         }))
     }
 }
 
+fn trade_references_order(trade: &TradeEntry, order_id: &str) -> bool {
+    trade.taker_order_id.eq_ignore_ascii_case(order_id)
+        || trade
+            .maker_order_id
+            .as_deref()
+            .is_some_and(|id| id.eq_ignore_ascii_case(order_id))
+        || trade.maker_orders.iter().any(|maker| {
+            maker
+                .get("order_id")
+                .or_else(|| maker.get("orderId"))
+                .or_else(|| maker.get("id"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|id| id.eq_ignore_ascii_case(order_id))
+        })
+}
+
+fn trade_size_to_decimal_shares(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(base_units) = trimmed.parse::<u64>() {
+        let whole = base_units / 1_000_000;
+        let frac = base_units % 1_000_000;
+        if frac == 0 {
+            return Some(whole.to_string());
+        }
+        let mut frac_str = format!("{frac:06}");
+        while frac_str.ends_with('0') {
+            frac_str.pop();
+        }
+        return Some(format!("{whole}.{frac_str}"));
+    }
+
+    Some(trimmed.to_string())
+}
+
 // ─── HMAC-SHA256 auth headers ────────────────────────────────────────────────
+
+/// Parses a Polymarket trade-list response that may be a bare JSON array or
+/// wrapped in `{"data": [...]}`.
+fn parse_trade_list(text: &str) -> TradeList {
+    if text.trim_start().starts_with('[') {
+        TradeList {
+            data: serde_json::from_str(text).unwrap_or_default(),
+        }
+    } else {
+        serde_json::from_str(text).unwrap_or(TradeList { data: vec![] })
+    }
+}
 
 /// Parses a Polymarket order-list response that may be a bare JSON array or
 /// wrapped in `{"data": [...]}`.
@@ -1064,6 +1119,75 @@ mod tests {
     fn time_in_force_default_is_gtc() {
         use crate::types::TimeInForce;
         assert_eq!(TimeInForce::default(), TimeInForce::Gtc);
+    }
+
+    #[test]
+    fn trade_references_order_matches_taker_order_id() {
+        let trade = TradeEntry {
+            taker_order_id: "0xabc".to_string(),
+            maker_order_id: None,
+            maker_orders: vec![],
+            status: String::new(),
+            size: String::new(),
+        };
+
+        assert!(trade_references_order(&trade, "0xABC"));
+        assert!(!trade_references_order(&trade, "0xdef"));
+    }
+
+    #[test]
+    fn trade_references_order_matches_maker_order_id() {
+        let trade = TradeEntry {
+            taker_order_id: String::new(),
+            maker_order_id: Some("0xabc".to_string()),
+            maker_orders: vec![],
+            status: String::new(),
+            size: String::new(),
+        };
+
+        assert!(trade_references_order(&trade, "0xABC"));
+    }
+
+    #[test]
+    fn trade_references_order_matches_maker_orders_array() {
+        let trade = TradeEntry {
+            taker_order_id: String::new(),
+            maker_order_id: None,
+            maker_orders: vec![serde_json::json!({
+                "orderId": "0xabc",
+            })],
+            status: String::new(),
+            size: String::new(),
+        };
+
+        assert!(trade_references_order(&trade, "0xABC"));
+    }
+
+    #[test]
+    fn trade_size_to_decimal_shares_converts_fixed_6_decimal_units() {
+        assert_eq!(
+            trade_size_to_decimal_shares("1500000").as_deref(),
+            Some("1.5")
+        );
+        assert_eq!(
+            trade_size_to_decimal_shares("2000000").as_deref(),
+            Some("2")
+        );
+        assert_eq!(trade_size_to_decimal_shares("").as_deref(), None);
+        assert_eq!(
+            trade_size_to_decimal_shares("1.25").as_deref(),
+            Some("1.25")
+        );
+    }
+
+    #[test]
+    fn parse_trade_list_accepts_array_and_data_envelope() {
+        let array = r#"[{"taker_order_id":"0xabc","status":"CONFIRMED","size":"1000000"}]"#;
+        let envelope =
+            r#"{"data":[{"maker_order_id":"0xdef","status":"CONFIRMED","size":"2000000"}]}"#;
+
+        assert_eq!(parse_trade_list(array).data.len(), 1);
+        assert_eq!(parse_trade_list(envelope).data.len(), 1);
     }
 
     /// Verifies that the transient-error detection in submit_order correctly

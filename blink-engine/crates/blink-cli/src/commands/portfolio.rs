@@ -187,8 +187,8 @@ async fn show_balances(ctx: CliContext) -> Result<()> {
                 .as_f64()
                 .map(|v| format!("${:.4}", v)),
         ),
-        ("Fill rate", data["fill_rate_pct"].as_f64().map(|v| pct(v))),
-        ("Win rate", data["win_rate_pct"].as_f64().map(|v| pct(v))),
+        ("Fill rate", data["fill_rate_pct"].as_f64().map(pct)),
+        ("Win rate", data["win_rate_pct"].as_f64().map(pct)),
         (
             "Avg slippage (bps)",
             data["avg_slippage_bps"]

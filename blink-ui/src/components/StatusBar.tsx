@@ -12,6 +12,7 @@ export default function StatusBar() {
   const uptime = status ? fmtDuration(uptimeSecs) : '—'
   const wsOk = status?.ws_connected ?? false
   const bpOk = !!(bullpen?.enabled && (bullpen?.consecutive_failures ?? 0) < 3)
+  const commit = status?.git_commit?.slice(0, 7) ?? status?.build?.git_commit?.slice(0, 7)
 
   return (
     <footer className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-[color:var(--color-border-subtle)] bg-[color:oklch(0.14_0.013_260/0.7)] px-3 py-1.5 text-[10px] tabular text-[color:var(--color-text-muted)] backdrop-blur-md sm:px-4">
@@ -20,6 +21,9 @@ export default function StatusBar() {
       <span className="hidden text-[color:var(--color-text-dim)] sm:inline">│</span>
       <span>msgs <span className="text-[color:var(--color-text-secondary)] font-mono">{status?.messages_total?.toLocaleString() ?? '—'}</span></span>
       <span>uptime <span className="text-[color:var(--color-text-secondary)] font-mono">{uptime}</span></span>
+      <span>release <span className={status?.release_dirty || status?.build?.release_dirty ? 'text-[color:var(--color-bear-300)] font-mono' : 'text-[color:var(--color-text-secondary)] font-mono'}>
+        {commit ?? 'unknown'}{status?.release_dirty || status?.build?.release_dirty ? '*dirty' : ''}
+      </span></span>
       <span>strategy <span className="text-[color:var(--color-text-secondary)] font-mono">{status?.strategy?.current_mode ?? 'n/a'}</span></span>
       <span className="flex w-full items-center gap-3 text-[color:var(--color-text-dim)] sm:ml-auto sm:w-auto">
         <span className="hidden items-center gap-1.5 sm:flex">

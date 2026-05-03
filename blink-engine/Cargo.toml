@@ -5,6 +5,9 @@ members = [
     "crates/tee-vault",
     "crates/bpf-probes",
     "crates/blink-cli",
+    "crates/blink-breakers",
+    "crates/blink-types",
+    "crates/blink-timestamps",
 ]
 resolver = "2"
 

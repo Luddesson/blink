@@ -26,14 +26,16 @@ export default function PerformancePage({ portfolio, positions = [] }: Props) {
 
   const nav = portfolio?.nav_usdc ?? 0
   const startNav = 100
-  const walletTruthVerified = isLive && portfolio?.exchange_positions_verified === true
-  const walletOpenPnl = walletTruthVerified
+  const walletStatsVerified = isLive
+    && portfolio?.wallet_truth_verified === true
+    && portfolio?.exchange_positions_verified === true
+  const walletOpenPnl = walletStatsVerified
     ? (portfolio?.wallet_open_pnl_usdc ?? portfolio?.wallet_unrealized_pnl_usdc ?? portfolio?.unrealized_pnl_usdc ?? 0)
     : 0
-  const walletPositionValue = walletTruthVerified
+  const walletPositionValue = walletStatsVerified
     ? (portfolio?.wallet_position_value_usdc ?? portfolio?.exchange_position_value_usdc ?? 0)
     : 0
-  const walletPositionBasis = walletTruthVerified
+  const walletPositionBasis = walletStatsVerified
     ? (portfolio?.wallet_position_initial_value_usdc ?? portfolio?.invested_usdc ?? 0)
     : 0
   const totalPnl = isLive ? walletOpenPnl : nav - startNav
@@ -116,11 +118,11 @@ export default function PerformancePage({ portfolio, positions = [] }: Props) {
           <div className="bg-surface-900 rounded-lg px-3 py-2">
             <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">{isLive ? 'Wallet P&L' : 'Total P&L'}</div>
             <div className={`font-mono font-bold text-lg ${pnlClass(totalPnl)}`}>
-              {walletTruthVerified || !isLive ? fmtPnl(totalPnl) : 'unverified'}
+              {walletStatsVerified || !isLive ? fmtPnl(totalPnl) : 'unverified'}
             </div>
             <div className="text-[10px] text-slate-600 mt-0.5">
               {isLive ? (
-                <>source: {walletTruthVerified ? 'wallet truth' : 'unverified'}</>
+                <>source: {walletStatsVerified ? 'wallet truth' : 'unverified'}</>
               ) : (
                 <>
                   R: <span className={pnlClass(realizedPnl)}>{fmtPnl(realizedPnl)}</span>
@@ -133,7 +135,7 @@ export default function PerformancePage({ portfolio, positions = [] }: Props) {
             <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">{isLive ? 'Wallet Truth' : 'Win Rate'}</div>
             <div className={`font-mono font-bold text-lg ${
               isLive
-                ? walletTruthVerified ? 'text-emerald-400' : 'text-amber-400'
+                ? walletStatsVerified ? 'text-emerald-400' : 'text-amber-400'
                 : winRate >= 55 ? 'text-emerald-400' : winRate >= 45 ? 'text-amber-400' : 'text-red-400'
             }`}>
               {isLive ? (portfolio?.reality_status ?? 'unverified') : `${fmt(winRate, 1)}%`}
@@ -143,11 +145,11 @@ export default function PerformancePage({ portfolio, positions = [] }: Props) {
           <div className="bg-surface-900 rounded-lg px-3 py-2">
             <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">{isLive ? 'Position Value' : 'Fees Paid'}</div>
             <div className={`font-mono font-bold text-lg ${isLive ? 'text-amber-300' : 'text-rose-400'}`}>
-              {isLive && !walletTruthVerified ? 'unverified' : `$${fmt(isLive ? walletPositionValue : feesPaid, 4)}`}
+              {isLive && !walletStatsVerified ? 'unverified' : `$${fmt(isLive ? walletPositionValue : feesPaid, 4)}`}
             </div>
             <div className="text-[10px] text-slate-600 mt-0.5">
               {isLive
-                ? walletTruthVerified ? `basis $${fmt(walletPositionBasis, 4)}` : 'source: unverified'
+                ? walletStatsVerified ? `basis $${fmt(walletPositionBasis, 4)}` : 'source: unverified'
                 : totalPnl !== 0 ? `${fmt(Math.abs(feesPaid / (Math.abs(totalPnl) + feesPaid)) * 100, 1)}% drag` : '--'}
             </div>
           </div>

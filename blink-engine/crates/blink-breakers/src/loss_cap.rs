@@ -63,12 +63,30 @@ impl LossCapBreaker {
         Self {
             cfg,
             buckets: [
-                HourBucket::new(), HourBucket::new(), HourBucket::new(), HourBucket::new(),
-                HourBucket::new(), HourBucket::new(), HourBucket::new(), HourBucket::new(),
-                HourBucket::new(), HourBucket::new(), HourBucket::new(), HourBucket::new(),
-                HourBucket::new(), HourBucket::new(), HourBucket::new(), HourBucket::new(),
-                HourBucket::new(), HourBucket::new(), HourBucket::new(), HourBucket::new(),
-                HourBucket::new(), HourBucket::new(), HourBucket::new(), HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
+                HourBucket::new(),
             ],
             state: ArcSwap::from_pointee(BreakerState::Closed),
             fast_tag: core::sync::atomic::AtomicU8::new(0),
@@ -140,7 +158,9 @@ impl LossCapBreaker {
             BreakerState::Closed => Admission::Ok,
             BreakerState::Open { until_ns, reason } => {
                 if now_ns >= until_ns {
-                    let claimed = Arc::new(BreakerState::HalfOpen { probe_allowed: false });
+                    let claimed = Arc::new(BreakerState::HalfOpen {
+                        probe_allowed: false,
+                    });
                     let prev = self.state.compare_and_swap(&g, claimed);
                     if Arc::ptr_eq(&prev, &g) {
                         Admission::Ok
@@ -151,8 +171,12 @@ impl LossCapBreaker {
                     Admission::Reject(reason)
                 }
             }
-            BreakerState::HalfOpen { probe_allowed: true } => {
-                let claimed = Arc::new(BreakerState::HalfOpen { probe_allowed: false });
+            BreakerState::HalfOpen {
+                probe_allowed: true,
+            } => {
+                let claimed = Arc::new(BreakerState::HalfOpen {
+                    probe_allowed: false,
+                });
                 let prev = self.state.compare_and_swap(&g, claimed);
                 if Arc::ptr_eq(&prev, &g) {
                     Admission::Ok
@@ -160,9 +184,9 @@ impl LossCapBreaker {
                     Admission::Reject(BreakerTrip::LossCap { pnl_u_usdc: 0 })
                 }
             }
-            BreakerState::HalfOpen { probe_allowed: false } => {
-                Admission::Reject(BreakerTrip::LossCap { pnl_u_usdc: 0 })
-            }
+            BreakerState::HalfOpen {
+                probe_allowed: false,
+            } => Admission::Reject(BreakerTrip::LossCap { pnl_u_usdc: 0 }),
         }
     }
 
@@ -211,7 +235,10 @@ mod tests {
         assert!(matches!(**b.state(), BreakerState::Closed));
         b.on_fill_pnl(-600, now);
         match **b.state() {
-            BreakerState::Open { reason: BreakerTrip::LossCap { pnl_u_usdc }, .. } => {
+            BreakerState::Open {
+                reason: BreakerTrip::LossCap { pnl_u_usdc },
+                ..
+            } => {
                 assert!(pnl_u_usdc < -1_000);
             }
             s => panic!("expected Open(LossCap), got {:?}", s),
@@ -229,8 +256,8 @@ mod tests {
         assert!(matches!(**b.state(), BreakerState::Open { .. }));
 
         let later = now + 20 * 1_000_000; // > cool_off
-        // A positive PnL delta inside the same hour bucket pulls the sum
-        // back above -cap; recovery step happens.
+                                          // A positive PnL delta inside the same hour bucket pulls the sum
+                                          // back above -cap; recovery step happens.
         b.on_fill_pnl(1_500, later);
         let s = **b.state();
         match s {

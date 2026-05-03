@@ -88,6 +88,25 @@ fn dynamic_sizing_enabled() -> bool {
         .unwrap_or(true)
 }
 
+fn slot_aware_sizing_enabled() -> bool {
+    std::env::var("BLINK_SLOT_AWARE_SIZING")
+        .ok()
+        .map(|v| {
+            !matches!(
+                v.to_ascii_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            )
+        })
+        .unwrap_or(true)
+}
+
+fn max_concurrent_positions_from_env() -> Option<usize> {
+    std::env::var("MAX_CONCURRENT_POSITIONS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&v| v > 0)
+}
+
 fn capital_sizing_tier(nav_usdc: f64) -> (f64, f64, f64) {
     let nav = nav_usdc.max(0.0);
     if nav < 10.0 {
@@ -106,6 +125,28 @@ fn capital_sizing_tier(nav_usdc: f64) -> (f64, f64, f64) {
     } else {
         (0.010, 0.0025, 5_000.0)
     }
+}
+
+fn slot_aware_order_cap_usdc(
+    available_cash: f64,
+    open_positions: usize,
+    min_floor_usdc: f64,
+    hard_max_order_usdc: f64,
+) -> Option<f64> {
+    if !slot_aware_sizing_enabled() {
+        return Some(hard_max_order_usdc);
+    }
+
+    let Some(max_positions) = max_concurrent_positions_from_env() else {
+        return Some(hard_max_order_usdc);
+    };
+    if open_positions >= max_positions {
+        return None;
+    }
+
+    let remaining_slots = (max_positions - open_positions).max(1) as f64;
+    let per_slot_budget = (available_cash / remaining_slots).max(min_floor_usdc);
+    Some(per_slot_budget.min(hard_max_order_usdc))
 }
 
 /// Detect Polymarket fee category from market title.
@@ -309,7 +350,16 @@ impl PaperPosition {
     /// Unrealized P&L as a percentage of cost basis.
     #[inline]
     pub fn unrealized_pnl_pct(&self) -> f64 {
-        self.unrealized_pnl() / self.usdc_spent * 100.0
+        let basis = if self.usdc_spent.is_finite() && self.usdc_spent.abs() > f64::EPSILON {
+            self.usdc_spent.abs()
+        } else {
+            (self.shares * self.entry_price).abs()
+        };
+        if basis > f64::EPSILON {
+            self.unrealized_pnl() / basis * 100.0
+        } else {
+            0.0
+        }
     }
 
     #[inline]
@@ -696,9 +746,15 @@ impl PaperPortfolio {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0);
         let available_cash = (self.cash_usdc - nav * cash_reserve_pct).max(0.0);
+        let order_cap_usdc = slot_aware_order_cap_usdc(
+            available_cash,
+            self.positions.len(),
+            min_floor_usdc,
+            max_order_usdc,
+        )?;
         let size = raw
             .max(min_floor_usdc)
-            .min(max_order_usdc)
+            .min(order_cap_usdc)
             .min(cap_nav)
             .min(available_cash);
         if size < min_trade_usdc {
@@ -739,6 +795,10 @@ impl PaperPortfolio {
         )
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "position metadata is persisted as separate fields and callers already pass this shape"
+    )]
     pub fn open_position_with_meta(
         &mut self,
         token_id: String,
@@ -1087,6 +1147,152 @@ impl PaperPortfolio {
         false
     }
 
+    /// Close an exact number of shares at an exchange-confirmed fill price.
+    ///
+    /// This is used by live reconciliation. Unlike paper exits, it does not
+    /// apply simulated exit slippage because the caller already has the venue
+    /// fill price.
+    pub fn close_position_shares_at_price(
+        &mut self,
+        idx: usize,
+        close_shares: f64,
+        exit_price: f64,
+        reason: String,
+    ) -> bool {
+        if idx >= self.positions.len() {
+            return false;
+        }
+        let position_shares = self.positions[idx].shares;
+        if position_shares <= 0.0 || close_shares <= 0.0 {
+            return false;
+        }
+
+        let close_shares = close_shares.min(position_shares);
+        let fraction = (close_shares / position_shares).clamp(0.0, 1.0);
+        let exit_price = exit_price.clamp(0.001, 0.999);
+
+        if fraction >= 0.999_999 || position_shares - close_shares <= 0.01 {
+            let pos = self.positions.remove(idx);
+            let pnl = match pos.side {
+                OrderSide::Buy => (exit_price - pos.entry_price) * pos.shares,
+                OrderSide::Sell => (pos.entry_price - exit_price) * pos.shares,
+            };
+            let exit_fee = polymarket_taker_fee_with_rate(pos.shares, exit_price, pos.fee_rate);
+            let entry_fee_portion = pos.entry_fee_paid_usdc;
+            self.total_fees_paid_usdc += exit_fee;
+            self.cash_usdc += pos.usdc_spent + pnl - exit_fee;
+            self.closed_trades.push(ClosedTrade {
+                token_id: pos.token_id.clone(),
+                market_title: pos.market_title.clone(),
+                side: pos.side,
+                entry_price: pos.entry_price,
+                exit_price,
+                shares: pos.shares,
+                realized_pnl: pnl,
+                fees_paid_usdc: entry_fee_portion + exit_fee,
+                reason,
+                opened_at_wall: pos.opened_at_wall,
+                closed_at_wall: chrono::Local::now(),
+                duration_secs: pos.opened_at.elapsed().as_secs(),
+                scorecard: ExecutionScorecard {
+                    slippage_bps: pos.entry_slippage_bps,
+                    queue_delay_ms: pos.queue_delay_ms,
+                    outcome_tags: vec![
+                        if pnl > 0.0 {
+                            "profit".to_string()
+                        } else if pnl < 0.0 {
+                            "loss".to_string()
+                        } else {
+                            "breakeven".to_string()
+                        },
+                        format!("variant:{}", pos.experiment_variant),
+                    ],
+                },
+                event_start_time: pos.event_start_time,
+                event_end_time: pos.event_end_time,
+                signal_source: pos.signal_source.clone(),
+                analysis_id: pos.analysis_id.clone(),
+            });
+            return true;
+        }
+
+        let pos = &mut self.positions[idx];
+        let close_usdc_spent = pos.usdc_spent * fraction;
+        let pnl = match pos.side {
+            OrderSide::Buy => (exit_price - pos.entry_price) * close_shares,
+            OrderSide::Sell => (pos.entry_price - exit_price) * close_shares,
+        };
+        let exit_fee = polymarket_taker_fee_with_rate(close_shares, exit_price, pos.fee_rate);
+        let entry_fee_portion = pos.entry_fee_paid_usdc * fraction;
+        self.total_fees_paid_usdc += exit_fee;
+        self.cash_usdc += close_usdc_spent + pnl - exit_fee;
+        self.closed_trades.push(ClosedTrade {
+            token_id: pos.token_id.clone(),
+            market_title: pos.market_title.clone(),
+            side: pos.side,
+            entry_price: pos.entry_price,
+            exit_price,
+            shares: close_shares,
+            realized_pnl: pnl,
+            fees_paid_usdc: entry_fee_portion + exit_fee,
+            reason,
+            opened_at_wall: pos.opened_at_wall,
+            closed_at_wall: chrono::Local::now(),
+            duration_secs: pos.opened_at.elapsed().as_secs(),
+            scorecard: ExecutionScorecard {
+                slippage_bps: pos.entry_slippage_bps,
+                queue_delay_ms: pos.queue_delay_ms,
+                outcome_tags: vec![
+                    if pnl > 0.0 {
+                        "profit".to_string()
+                    } else if pnl < 0.0 {
+                        "loss".to_string()
+                    } else {
+                        "breakeven".to_string()
+                    },
+                    format!("variant:{}", pos.experiment_variant),
+                ],
+            },
+            event_start_time: pos.event_start_time,
+            event_end_time: pos.event_end_time,
+            signal_source: pos.signal_source.clone(),
+            analysis_id: pos.analysis_id.clone(),
+        });
+
+        pos.shares -= close_shares;
+        pos.usdc_spent -= close_usdc_spent;
+        pos.entry_fee_paid_usdc -= entry_fee_portion;
+        false
+    }
+
+    pub fn close_token_shares_at_price(
+        &mut self,
+        token_id: &str,
+        mut close_shares: f64,
+        exit_price: f64,
+        reason: String,
+    ) -> usize {
+        let mut actions = 0usize;
+        while close_shares > 0.000_001 {
+            let Some(idx) = self
+                .positions
+                .iter()
+                .position(|pos| pos.token_id == token_id && pos.side == OrderSide::Buy)
+            else {
+                break;
+            };
+            let shares = self.positions[idx].shares.min(close_shares);
+            let removed =
+                self.close_position_shares_at_price(idx, shares, exit_price, reason.clone());
+            actions += 1;
+            close_shares -= shares;
+            if !removed {
+                break;
+            }
+        }
+        actions
+    }
+
     /// Returns the maximum drawdown as a percentage (0.0 – 100.0).
     ///
     /// Computed from the equity curve samples: max peak-to-trough decline.
@@ -1152,7 +1358,7 @@ impl PaperPortfolio {
             std::fs::create_dir_all(parent)?;
         }
         let json = serde_json::to_string_pretty(&persisted)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         // Atomic write: write to .tmp then rename to prevent corruption on hard kill
         let tmp_path = format!("{path}.tmp");
         std::fs::write(&tmp_path, &json)?;
@@ -1162,8 +1368,8 @@ impl PaperPortfolio {
 
     pub fn load_from_path(path: &str) -> std::io::Result<Self> {
         let data = std::fs::read_to_string(path)?;
-        let persisted: PersistedPaperPortfolio = serde_json::from_str(&data)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let persisted: PersistedPaperPortfolio =
+            serde_json::from_str(&data).map_err(|e| std::io::Error::other(e.to_string()))?;
         Ok(Self::from(persisted))
     }
 }
@@ -1387,6 +1593,32 @@ impl Default for PaperPortfolio {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn clear_sizing_env() {
+        for key in [
+            "BLINK_DYNAMIC_SIZING",
+            "BLINK_SLOT_AWARE_SIZING",
+            "MAX_CONCURRENT_POSITIONS",
+            "PAPER_SIZE_MULTIPLIER",
+            "PAPER_MAX_POSITION_PCT",
+            "PAPER_MIN_TRADE_USDC",
+            "PAPER_MIN_ORDER_FLOOR_USDC",
+            "PAPER_MAX_ORDER_USDC",
+            "CASH_RESERVE_PCT",
+        ] {
+            std::env::remove_var(key);
+        }
+    }
 
     #[test]
     fn starting_nav_equals_balance() {
@@ -1396,21 +1628,91 @@ mod tests {
 
     #[test]
     fn size_capped_at_max_order() {
+        let _guard = env_lock();
+        clear_sizing_env();
         let p = PaperPortfolio::new(); // NAV = 100
                                        // RN1 trades $20,000 → 10% = $2,000, capped by 8% NAV risk tier.
         let size = p.calculate_size_usdc(20_000.0).unwrap();
         assert!((size - 8.0).abs() < 1e-9, "size={size} expected cap=8");
+        clear_sizing_env();
     }
 
     #[test]
     fn size_below_minimum_returns_none() {
+        let _guard = env_lock();
+        clear_sizing_env();
         let p = PaperPortfolio::new();
         // 5% of $200 NAV = $10, capped at $5 max, which meets the floor, so should size.
         assert!(p.calculate_size_usdc(100.0).is_some());
+        clear_sizing_env();
+    }
+
+    #[test]
+    fn slot_aware_sizing_spreads_cash_across_remaining_position_slots() {
+        let _guard = env_lock();
+        clear_sizing_env();
+        std::env::set_var("MAX_CONCURRENT_POSITIONS", "25");
+        std::env::set_var("PAPER_SIZE_MULTIPLIER", "1.0");
+        std::env::set_var("PAPER_MAX_POSITION_PCT", "1.0");
+        std::env::set_var("PAPER_MIN_TRADE_USDC", "1.0");
+        std::env::set_var("PAPER_MIN_ORDER_FLOOR_USDC", "1.0");
+        std::env::set_var("PAPER_MAX_ORDER_USDC", "10.0");
+
+        let p = PaperPortfolio::new();
+        let size = p.calculate_size_usdc(20_000.0).unwrap();
+
+        assert!(
+            (size - 4.0).abs() < 1e-9,
+            "size={size} expected per-slot bankroll cap=4"
+        );
+        clear_sizing_env();
+    }
+
+    #[test]
+    fn slot_aware_sizing_keeps_hard_one_dollar_canary_cap() {
+        let _guard = env_lock();
+        clear_sizing_env();
+        std::env::set_var("MAX_CONCURRENT_POSITIONS", "25");
+        std::env::set_var("PAPER_SIZE_MULTIPLIER", "1.0");
+        std::env::set_var("PAPER_MAX_POSITION_PCT", "1.0");
+        std::env::set_var("PAPER_MIN_TRADE_USDC", "1.0");
+        std::env::set_var("PAPER_MIN_ORDER_FLOOR_USDC", "1.0");
+        std::env::set_var("PAPER_MAX_ORDER_USDC", "1.0");
+
+        let p = PaperPortfolio::new();
+        let size = p.calculate_size_usdc(20_000.0).unwrap();
+
+        assert!(
+            (size - 1.0).abs() < 1e-9,
+            "size={size} expected hard canary cap=1"
+        );
+        clear_sizing_env();
+    }
+
+    #[test]
+    fn slot_aware_sizing_returns_none_when_position_cap_is_full() {
+        let _guard = env_lock();
+        clear_sizing_env();
+        std::env::set_var("PAPER_REALISM_MODE", "false");
+        std::env::set_var("MAX_CONCURRENT_POSITIONS", "2");
+        std::env::set_var("PAPER_SIZE_MULTIPLIER", "1.0");
+        std::env::set_var("PAPER_MAX_POSITION_PCT", "1.0");
+        std::env::set_var("PAPER_MIN_TRADE_USDC", "1.0");
+        std::env::set_var("PAPER_MIN_ORDER_FLOOR_USDC", "1.0");
+        std::env::set_var("PAPER_MAX_ORDER_USDC", "10.0");
+
+        let mut p = PaperPortfolio::new();
+        p.open_position("tok-a".into(), OrderSide::Buy, 0.50, 1.0, "o1".into());
+        p.open_position("tok-b".into(), OrderSide::Buy, 0.50, 1.0, "o2".into());
+
+        assert!(p.calculate_size_usdc(20_000.0).is_none());
+        clear_sizing_env();
+        std::env::remove_var("PAPER_REALISM_MODE");
     }
 
     #[test]
     fn nav_decreases_after_open() {
+        let _guard = env_lock();
         // Disable realism for deterministic test math
         std::env::set_var("PAPER_REALISM_MODE", "false");
         let mut p = PaperPortfolio::new();
@@ -1434,12 +1736,43 @@ mod tests {
 
     #[test]
     fn unrealized_pnl_buy() {
+        let _guard = env_lock();
         std::env::set_var("PAPER_REALISM_MODE", "false");
         let mut p = PaperPortfolio::new();
         p.open_position("tok".into(), OrderSide::Buy, 0.50, 10.0, "o1".into());
         p.update_price("tok", 0.60);
         // shares = 10 / 0.50 = 20 → PnL = (0.60 - 0.50) × 20 = 2.0
         assert!((p.unrealized_pnl() - 2.0).abs() < 1e-9);
+        std::env::remove_var("PAPER_REALISM_MODE");
+    }
+
+    #[test]
+    fn unrealized_pnl_pct_falls_back_to_entry_cost_when_usdc_spent_is_zero() {
+        let _guard = env_lock();
+        std::env::set_var("PAPER_REALISM_MODE", "false");
+        let mut p = PaperPortfolio::new();
+        p.open_position("tok".into(), OrderSide::Buy, 0.50, 10.0, "o1".into());
+        p.update_price("tok", 0.60);
+        p.positions[0].usdc_spent = 0.0;
+
+        assert!((p.positions[0].unrealized_pnl_pct() - 20.0).abs() < 1e-9);
+        std::env::remove_var("PAPER_REALISM_MODE");
+    }
+
+    #[test]
+    fn close_position_shares_at_price_uses_exchange_fill_price() {
+        let _guard = env_lock();
+        std::env::set_var("PAPER_REALISM_MODE", "false");
+        let mut p = PaperPortfolio::new();
+        p.open_position("tok".into(), OrderSide::Buy, 0.50, 10.0, "o1".into());
+
+        let removed = p.close_position_shares_at_price(0, 5.0, 0.60, "live_exit".into());
+
+        assert!(!removed);
+        assert_eq!(p.positions.len(), 1);
+        assert_eq!(p.closed_trades.len(), 1);
+        assert!((p.closed_trades[0].exit_price - 0.60).abs() < 1e-9);
+        assert!((p.positions[0].shares - 15.0).abs() < 1e-9);
         std::env::remove_var("PAPER_REALISM_MODE");
     }
 

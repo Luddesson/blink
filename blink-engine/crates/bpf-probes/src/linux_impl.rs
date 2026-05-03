@@ -14,14 +14,14 @@
 
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use tokio::task::JoinHandle;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use aya::maps::RingBuf;
 use aya::programs::TracePoint;
-use aya::Bpf;
-use aya_log::BpfLogger;
+use aya::Ebpf;
+use aya_log::EbpfLogger;
 
 use crate::stats::{KernelSnapshot, RttStats, SchedStats, SyscallHistogram, SyscallStats};
 
@@ -68,7 +68,7 @@ const SYS_EPOLL_WAIT: u64 = 232;
 /// `Arc<Mutex<...>>` handles that the TUI can snapshot without blocking.
 pub struct BpfTelemetry {
     #[allow(dead_code)]
-    bpf: Bpf,
+    bpf: Ebpf,
     rtt_stats: Arc<Mutex<RttAccumulator>>,
     sched_stats: Arc<Mutex<SchedAccumulator>>,
     syscall_stats: Arc<Mutex<SyscallAccumulator>>,
@@ -251,7 +251,7 @@ impl BpfTelemetry {
         let mut bpf = Self::load_bpf_programs()?;
 
         // Initialize BPF logging (optional — gracefully degrades).
-        if let Err(e) = BpfLogger::init(&mut bpf) {
+        if let Err(e) = EbpfLogger::init(&mut bpf) {
             warn!("BPF logger init failed (non-fatal): {e}");
         }
 
@@ -323,15 +323,15 @@ impl BpfTelemetry {
     }
 
     /// Load the combined BPF object file.
-    fn load_bpf_programs() -> Result<Bpf> {
+    fn load_bpf_programs() -> Result<Ebpf> {
         // Try loading individual BPF programs and merge, or load a combined object.
         let tcp_rtt_path = bpf_obj_path("tcp_rtt");
-        let bpf = Bpf::load_file(&tcp_rtt_path)
+        let bpf = Ebpf::load_file(&tcp_rtt_path)
             .with_context(|| format!("Failed to load BPF object: {tcp_rtt_path}"))?;
         Ok(bpf)
     }
 
-    fn attach_tcp_rtt(bpf: &mut Bpf) -> Result<()> {
+    fn attach_tcp_rtt(bpf: &mut Ebpf) -> Result<()> {
         let prog: &mut TracePoint = bpf
             .program_mut("tcp_rtt_probe")
             .ok_or_else(|| anyhow::anyhow!("BPF program 'tcp_rtt_probe' not found"))?
@@ -343,7 +343,7 @@ impl BpfTelemetry {
         Ok(())
     }
 
-    fn attach_sched(bpf: &mut Bpf, _pid: u32) -> Result<()> {
+    fn attach_sched(bpf: &mut Ebpf, _pid: u32) -> Result<()> {
         // sched_wakeup probe
         let wakeup: &mut TracePoint = bpf
             .program_mut("sched_wakeup_probe")
@@ -363,7 +363,7 @@ impl BpfTelemetry {
         Ok(())
     }
 
-    fn attach_syscall(bpf: &mut Bpf, _pid: u32) -> Result<()> {
+    fn attach_syscall(bpf: &mut Ebpf, _pid: u32) -> Result<()> {
         let enter: &mut TracePoint = bpf
             .program_mut("sys_enter_probe")
             .ok_or_else(|| anyhow::anyhow!("BPF program 'sys_enter_probe' not found"))?
@@ -382,11 +382,11 @@ impl BpfTelemetry {
     }
 
     fn spawn_rtt_poller(
-        bpf: &mut Bpf,
+        bpf: &mut Ebpf,
         stats: Arc<Mutex<RttAccumulator>>,
     ) -> Result<JoinHandle<()>> {
         let ring_buf = RingBuf::try_from(
-            bpf.map_mut("rtt_events")
+            bpf.take_map("rtt_events")
                 .context("Map 'rtt_events' not found")?,
         )?;
 
@@ -406,11 +406,11 @@ impl BpfTelemetry {
     }
 
     fn spawn_sched_poller(
-        bpf: &mut Bpf,
+        bpf: &mut Ebpf,
         stats: Arc<Mutex<SchedAccumulator>>,
     ) -> Result<JoinHandle<()>> {
         let ring_buf = RingBuf::try_from(
-            bpf.map_mut("sched_events")
+            bpf.take_map("sched_events")
                 .context("Map 'sched_events' not found")?,
         )?;
 
@@ -430,11 +430,11 @@ impl BpfTelemetry {
     }
 
     fn spawn_syscall_poller(
-        bpf: &mut Bpf,
+        bpf: &mut Ebpf,
         stats: Arc<Mutex<SyscallAccumulator>>,
     ) -> Result<JoinHandle<()>> {
         let ring_buf = RingBuf::try_from(
-            bpf.map_mut("syscall_events")
+            bpf.take_map("syscall_events")
                 .context("Map 'syscall_events' not found")?,
         )?;
 

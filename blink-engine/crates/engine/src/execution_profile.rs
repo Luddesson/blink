@@ -22,23 +22,18 @@
 use std::fmt;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExecutionProfile {
     /// Classic taker-only, conservative gates. Widest slippage tolerance, slow.
     Passive,
     /// Current aggressive defaults — the historical behaviour. Default.
+    #[default]
     Balanced,
     /// HFT taker: minimal pretrade wait, smaller orders, faster concurrency.
     HftTaker,
     /// HFT maker: layered maker quotes with post-only. Stub defaults here;
     /// full layering is implemented in the maker-layering task.
     HftMaker,
-}
-
-impl Default for ExecutionProfile {
-    fn default() -> Self {
-        ExecutionProfile::Balanced
-    }
 }
 
 /// Resolved knob bundle for a profile.

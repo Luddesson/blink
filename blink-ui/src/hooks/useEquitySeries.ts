@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export type EquityRange = '1h' | '6h' | '24h' | '7d' | '30d'
+export type EquityRange = '30m' | '1h' | '6h' | '24h' | '7d' | '30d'
 
-export const EQUITY_RANGES: EquityRange[] = ['1h', '6h', '24h', '7d', '30d']
+export const EQUITY_RANGES: EquityRange[] = ['30m', '1h', '6h', '24h', '7d', '30d']
 
 /** Canonical window in ms for each range — matches the backend's resolver. */
 export const RANGE_WINDOW_MS: Record<EquityRange, number> = {
+  '30m': 30 * 60 * 1000,
   '1h': 60 * 60 * 1000,
   '6h': 6 * 60 * 60 * 1000,
   '24h': 24 * 60 * 60 * 1000,
@@ -18,6 +19,11 @@ export const RANGE_WINDOW_MS: Record<EquityRange, number> = {
 export interface EquityPoint {
   timestamp_ms: number
   nav_usdc: number
+  wallet_open_pnl_usdc?: number | null
+  wallet_nav_delta_usdc?: number | null
+  wallet_position_value_usdc?: number | null
+  wallet_position_initial_value_usdc?: number | null
+  wallet_positions_count?: number | null
 }
 
 export interface EquitySeriesResponse {
@@ -58,6 +64,17 @@ export interface EquitySeriesState {
   fromCache: boolean
   fetchedAt: number | null
   error: string | null
+  realityStatus?: EquitySeriesResponse['reality_status']
+  realityIssues?: string[]
+  truthCheckedAtMs?: number | null
+  walletTruthVerified?: boolean
+  exchangePositionsVerified?: boolean
+  onchainCashVerified?: boolean
+  walletNavUsdc?: number | null
+  walletPositionValueUsdc?: number | null
+  walletPositionInitialValueUsdc?: number | null
+  walletOpenPnlUsdc?: number | null
+  walletPnlSource?: string
 }
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -68,6 +85,7 @@ export interface EquitySeriesState {
  * because a 7d/30d curve barely moves between consecutive samples.
  */
 const POLL_MS: Record<EquityRange, number> = {
+  '30m': 10_000,
   '1h':  10_000,
   '6h':  30_000,
   '24h': 30_000,
@@ -170,6 +188,17 @@ export function useEquitySeries(initial: EquityRange = '1h'): EquitySeriesState 
     fromCache: !!entry && !loading,
     fetchedAt,
     error,
+    realityStatus: data?.reality_status,
+    realityIssues: data?.reality_issues,
+    truthCheckedAtMs: data?.truth_checked_at_ms,
+    walletTruthVerified: data?.wallet_truth_verified,
+    exchangePositionsVerified: data?.exchange_positions_verified,
+    onchainCashVerified: data?.onchain_cash_verified,
+    walletNavUsdc: data?.wallet_nav_usdc,
+    walletPositionValueUsdc: data?.wallet_position_value_usdc,
+    walletPositionInitialValueUsdc: data?.wallet_position_initial_value_usdc,
+    walletOpenPnlUsdc: data?.wallet_open_pnl_usdc,
+    walletPnlSource: data?.wallet_pnl_source,
   }
 }
 

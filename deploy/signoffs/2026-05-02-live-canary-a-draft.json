@@ -1,0 +1,74 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "2026-05-02-live-canary-a",
+  "recorded_at_utc": "2026-05-02T17:58:11Z",
+  "environment": "hetzner-prod",
+  "status": "DRAFT_UNSIGNED",
+  "signers": {
+    "primary_operator": {
+      "name": "",
+      "signed_at_utc": ""
+    },
+    "secondary_reviewer": {
+      "name": "",
+      "signed_at_utc": ""
+    }
+  },
+  "artifacts": {
+    "evidence_readme_path": "blink-engine/logs/go-live/2026-05-02-live-canary-a/README.md",
+    "preflight_output_path": "blink-engine/logs/go-live/2026-05-02-live-canary-a/preflight_live.txt",
+    "test_output_path": "blink-engine/logs/go-live/2026-05-02-live-canary-a/cargo_test_engine_lib.txt",
+    "risk_snapshot_path": "blink-engine/logs/go-live/2026-05-02-live-canary-a/api_risk_after_tests.json",
+    "failsafe_snapshot_path": "blink-engine/logs/go-live/2026-05-02-live-canary-a/api_failsafe_after_tests.json",
+    "portfolio_snapshot_path": "blink-engine/logs/go-live/2026-05-02-live-canary-a/api_live_portfolio_after_tests.json",
+    "heartbeat_journal_extract_path": "blink-engine/logs/go-live/2026-05-02-live-canary-a/journal_heartbeat_breaker_extract.txt",
+    "rollback_playbook_path": "deploy/ROLLBACK-PLAYBOOK.md",
+    "rollback_helper_path": "deploy/rollback-hetzner.ps1"
+  },
+  "pre_run": {
+    "rollback_preview_verified": false,
+    "target_mode_verified": true,
+    "prior_decision_reviewed": false,
+    "hard_stop_triggered": true,
+    "hard_stop_reasons": [
+      "circuit_breaker_tripped",
+      "missing_primary_operator_signature",
+      "missing_secondary_reviewer_signature",
+      "dirty_worktree",
+      "max_single_order_usdc_exceeds_current_pusd_cash_for_canary",
+      "existing_positions_unclassified"
+    ]
+  },
+  "runtime_summary": {
+    "live_trading": true,
+    "paper_trading": false,
+    "trading_enabled": true,
+    "risk_status": "CIRCUIT_BREAKER",
+    "circuit_breaker_reason": "heartbeat_dead_5consecutive_failures",
+    "heartbeat_recovered": true,
+    "negative_risk_policy": "blocked",
+    "max_single_order_usdc": 2.0,
+    "pusd_cash_usdc": 1.672959,
+    "wallet_truth_status": "matched"
+  },
+  "allowed_next_decisions": [
+    "GO_OBSERVER",
+    "GO_RESET_ONLY",
+    "GO_CANARY_1USD",
+    "ROLLBACK"
+  ],
+  "recommended_next_decision": "GO_RESET_ONLY_OR_GO_CANARY_1USD_AFTER_SIGNOFF",
+  "post_run": {
+    "decision": "TUNE",
+    "decision_dimensions_reviewed": false,
+    "warnings_present": true,
+    "hard_stop_triggered": true,
+    "hard_stop_reasons": [
+      "unsigned_draft_only"
+    ],
+    "rollback_executed": false,
+    "rollback_reference": ""
+  },
+  "promotion_allowed": false,
+  "notes": "Draft only. Do not reset the circuit breaker or run canary until both signers are filled, rollback is previewed, and canary sizing is adjusted or capital is topped up."
+}

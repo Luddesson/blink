@@ -134,14 +134,46 @@ impl PendingOrder {
         }
         let total = self.filled_size_u64 + delta;
         // Volume-weighted average price (integer arithmetic).
-        if total > 0 {
-            self.avg_fill_price_u64 =
-                (self.avg_fill_price_u64 * self.filled_size_u64 + fill_price_u64 * delta) / total;
-        }
+        self.avg_fill_price_u64 =
+            (self.avg_fill_price_u64 * self.filled_size_u64 + fill_price_u64 * delta) / total;
         self.filled_size_u64 = total;
         let size_u64 = (self.size_usdc * 1_000.0) as u64;
         self.remaining_size_u64 = size_u64.saturating_sub(total);
         self.last_fill_ts = Some(Instant::now());
         delta
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OrderState;
+
+    #[test]
+    fn venue_ack_and_submit_unknown_are_not_terminal() {
+        assert!(!OrderState::Acked.is_terminal());
+        assert!(!OrderState::SubmitUnknown.is_terminal());
+    }
+
+    #[test]
+    fn only_final_states_are_terminal() {
+        for state in [
+            OrderState::Created,
+            OrderState::Submitting,
+            OrderState::Acked,
+            OrderState::SubmitUnknown,
+            OrderState::PartialFilled,
+            OrderState::Cancelling,
+        ] {
+            assert!(!state.is_terminal(), "{state:?} must keep pending risk");
+        }
+
+        for state in [
+            OrderState::Filled,
+            OrderState::Cancelled,
+            OrderState::Rejected,
+            OrderState::Stale,
+        ] {
+            assert!(state.is_terminal(), "{state:?} must release pending risk");
+        }
     }
 }

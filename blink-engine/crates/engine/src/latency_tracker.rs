@@ -176,6 +176,12 @@ pub struct MsgCounter {
     window_start: Instant,
 }
 
+impl Default for MsgCounter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MsgCounter {
     pub fn new() -> Self {
         Self {

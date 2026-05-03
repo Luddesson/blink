@@ -186,7 +186,7 @@ impl MetadataFetcher {
             "start_date_iso",
         ]
         .iter()
-        .find_map(|k| market.get(*k)?.as_str().and_then(|s| parse_ts(s)));
+        .find_map(|k| market.get(*k)?.as_str().and_then(&parse_ts));
 
         // endDate (full datetime) preferred over end_date_iso (date-only)
         let event_end_time = [
@@ -197,7 +197,7 @@ impl MetadataFetcher {
             "resolution_date",
         ]
         .iter()
-        .find_map(|k| market.get(*k)?.as_str().and_then(|s| parse_ts(s)));
+        .find_map(|k| market.get(*k)?.as_str().and_then(&parse_ts));
 
         let closed = bool_field(market, &["closed"]).unwrap_or(false);
         let market_neg_risk = bool_field(

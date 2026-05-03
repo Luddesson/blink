@@ -155,7 +155,7 @@ LIVE_TRADING=true cargo run --release -p engine
 
 ### Runtime ports
 
-- `3030` — engine-served dashboard plus REST/WS operator API when `WEB_UI=true`
+- `3030` — engine-served dashboard plus REST/WS operator API when `WEB_UI=true` (binds to `127.0.0.1:3030` by default; non-local `WEB_UI_BIND` requires `WEB_OPERATOR_TOKEN` for POST endpoints)
 - `7878` — JSON-RPC control plane for sidecars/automation (`/rpc`) when agent RPC is enabled
 - `5173` — local Vite dev server from `blink-ui`; use this only during frontend development
 
@@ -243,6 +243,7 @@ Copy `.env.example` to `.env` and fill in all required values.
 | `LIVE_CANARY_START_HOUR_UTC` | Inclusive start hour (`0..23`) |
 | `LIVE_CANARY_END_HOUR_UTC` | Exclusive end hour (`0..23`) |
 | `LIVE_CANARY_MAX_REJECT_STREAK` | Auto-halt after N consecutive submit failures |
+| `LIVE_CANARY_MAX_LOSS_STREAK` | Auto-halt after N consecutive losing fills |
 | `LIVE_CANARY_ALLOWED_MARKETS` | Optional comma-separated allowlist of token IDs |
 
 ### Risk management

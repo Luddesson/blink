@@ -80,6 +80,12 @@ pub struct VirtualClock {
     current_ms: i64,
 }
 
+impl Default for VirtualClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VirtualClock {
     pub fn new() -> Self {
         Self { current_ms: 0 }
@@ -106,8 +112,10 @@ impl VirtualClock {
 #[derive(Debug, Default)]
 pub struct SimulatedOrderBook {
     /// token_id → (bids: price→size, asks: price→size)
-    books: HashMap<String, (BTreeMap<u64, u64>, BTreeMap<u64, u64>)>,
+    books: HashMap<String, BookSides>,
 }
+
+type BookSides = (BTreeMap<u64, u64>, BTreeMap<u64, u64>);
 
 impl SimulatedOrderBook {
     pub fn new() -> Self {
@@ -289,12 +297,12 @@ impl BacktestEngine {
                 let window_end = tick.timestamp + self.config.fill_window_ms as i64;
                 let mut drift_abort = false;
 
-                for j in (i + 1)..tick_count {
-                    if ticks[j].timestamp > window_end {
+                for future_tick in ticks.iter().take(tick_count).skip(i + 1) {
+                    if future_tick.timestamp > window_end {
                         break;
                     }
-                    if ticks[j].token_id == tick.token_id {
-                        let future_price = ticks[j].price as f64 / 1000.0;
+                    if future_tick.token_id == tick.token_id {
+                        let future_price = future_tick.price as f64 / 1000.0;
                         let drift = (future_price - entry_price).abs() / entry_price;
                         if drift > self.config.drift_threshold {
                             drift_abort = true;
@@ -330,10 +338,7 @@ impl BacktestEngine {
 
             // 5. Record equity curve (one point per distinct timestamp).
             let nav = self.portfolio.nav();
-            if equity_curve
-                .last()
-                .map_or(true, |&(ts, _)| ts != tick.timestamp)
-            {
+            if !matches!(equity_curve.last(), Some(&(ts, _)) if ts == tick.timestamp) {
                 equity_curve.push((tick.timestamp, nav));
             }
         }

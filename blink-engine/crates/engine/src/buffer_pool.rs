@@ -33,11 +33,6 @@ impl BufferPool {
         }
     }
 
-    /// Creates a default buffer pool (64 buffers of 8KB each).
-    pub fn default() -> Self {
-        Self::new(DEFAULT_POOL_SIZE, DEFAULT_BUFFER_CAPACITY)
-    }
-
     /// Acquires a buffer from the pool. If the pool is empty, allocates a new one.
     /// The returned `PooledBuffer` automatically returns the buffer on drop.
     pub fn acquire(&self) -> PooledBuffer {
@@ -49,6 +44,12 @@ impl BufferPool {
             buf: Some(buf),
             pool: Arc::clone(&self.pool),
         }
+    }
+}
+
+impl Default for BufferPool {
+    fn default() -> Self {
+        Self::new(DEFAULT_POOL_SIZE, DEFAULT_BUFFER_CAPACITY)
     }
 }
 
@@ -68,20 +69,21 @@ pub struct PooledBuffer {
 }
 
 impl PooledBuffer {
-    /// Get a mutable reference to the underlying buffer.
-    pub fn as_mut(&mut self) -> &mut Vec<u8> {
-        self.buf.as_mut().expect("buffer already consumed")
-    }
-
     /// Clear the buffer and copy data from the source.
     /// Reuses existing capacity if large enough.
     pub fn copy_from(&mut self, src: &[u8]) {
-        let buf = self.as_mut();
+        let buf = <Self as AsMut<Vec<u8>>>::as_mut(self);
         buf.clear();
         if buf.capacity() < src.len() {
             buf.reserve(src.len() - buf.capacity());
         }
         buf.extend_from_slice(src);
+    }
+}
+
+impl AsMut<Vec<u8>> for PooledBuffer {
+    fn as_mut(&mut self) -> &mut Vec<u8> {
+        self.buf.as_mut().expect("buffer already consumed")
     }
 }
 

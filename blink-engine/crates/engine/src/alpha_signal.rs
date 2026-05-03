@@ -104,11 +104,12 @@ impl Default for AlphaRiskConfig {
 impl AlphaRiskConfig {
     /// Loads alpha risk config from environment variables.
     pub fn from_env() -> Self {
-        let mut cfg = Self::default();
-
-        cfg.enabled = std::env::var("ALPHA_TRADING_ENABLED")
-            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(false);
+        let mut cfg = Self {
+            enabled: std::env::var("ALPHA_TRADING_ENABLED")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false),
+            ..Self::default()
+        };
 
         if let Ok(v) = std::env::var("ALPHA_CONFIDENCE_FLOOR") {
             cfg.confidence_floor = v.parse().unwrap_or(cfg.confidence_floor);

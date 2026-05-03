@@ -1,0 +1,79 @@
+{
+  "schema_version": "1.1.0",
+  "run_id": "2026-05-03-live-canary-a",
+  "recorded_at_utc": "2026-05-03T00:00:00Z",
+  "environment": "hetzner-prod",
+  "status": "DRAFT_UNSIGNED",
+  "signers": {
+    "primary_operator": {
+      "name": "",
+      "signed_at_utc": ""
+    },
+    "secondary_reviewer": {
+      "name": "",
+      "signed_at_utc": ""
+    }
+  },
+  "artifacts": {
+    "go_live_evidence_dir": "blink-engine/logs/go-live/2026-05-03-live-canary-a",
+    "go_live_evidence_index": "blink-engine/logs/go-live/2026-05-03-live-canary-a/evidence-index.json",
+    "preflight_output_path": "blink-engine/logs/go-live/2026-05-03-live-canary-a/preflight_live.txt",
+    "rollback_playbook_path": "deploy/ROLLBACK-PLAYBOOK.md",
+    "rollback_helper_path": "deploy/rollback-hetzner.ps1"
+  },
+  "release": {
+    "git_commit": "REQUIRED_FULL_COMMIT_SHA",
+    "build_timestamp_utc": "",
+    "binary_path": "",
+    "release_dirty": true
+  },
+  "canary": {
+    "utc_start": "",
+    "max_single_order_usdc": 1.0,
+    "max_session_spend_usdc": 1.0,
+    "max_daily_loss_usdc": 1.0,
+    "negative_risk_policy": "blocked",
+    "starting_inventory_policy": "unclassified",
+    "circuit_breaker_reset_rationale": ""
+  },
+  "rollback": {
+    "owner": "",
+    "target_state": {
+      "TRADING_ENABLED": "false",
+      "LIVE_TRADING": "false",
+      "PAPER_TRADING": "true",
+      "ALPHA_TRADING_ENABLED": "false"
+    },
+    "preview_verified_under_2_minutes": false
+  },
+  "circuit_breaker": {
+    "reset_rationale": "",
+    "post_reset_observation_required_secs": 600,
+    "retrips_within_30m_action": "TRADING_ENABLED=false; collect postmortem evidence; stop canary"
+  },
+  "pre_run": {
+    "rollback_preview_verified": false,
+    "target_mode_verified": false,
+    "prior_decision_reviewed": false,
+    "hard_stop_triggered": true,
+    "hard_stop_reasons": [
+      "draft_unsigned",
+      "release_not_frozen",
+      "rollback_preview_not_verified",
+      "starting_inventory_unclassified"
+    ]
+  },
+  "post_run": {
+    "decision": "HOLD",
+    "decision_dimensions_reviewed": false,
+    "warnings_present": true,
+    "hard_stop_triggered": true,
+    "hard_stop_reasons": [
+      "unsigned_draft_only"
+    ],
+    "rollback_executed": false,
+    "rollback_reference": ""
+  },
+  "promotion_allowed": false,
+  "notes": "Draft only. API reset validation requires a non-draft signed signoff with promotion_allowed=true, release_dirty=false, reset rationale, rollback preview, and canary max order/session spend <= 1.00."
+}
